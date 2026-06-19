@@ -36,6 +36,19 @@ struct ContentView: View {
             StatusBar()
         }
         .frame(minWidth: 900, minHeight: 600)
+        .sheet(isPresented: conflictSheetBinding) {
+            ConflictResolutionView()
+        }
+    }
+
+    /// Drives the conflict sheet from the presence of pending conflicts (FR11).
+    private var conflictSheetBinding: Binding<Bool> {
+        Binding(
+            get: { !state.conflictsToResolve.isEmpty },
+            set: { presenting in
+                if !presenting { state.conflictsToResolve = [] }
+            }
+        )
     }
 
     private var dropHighlight: some View {

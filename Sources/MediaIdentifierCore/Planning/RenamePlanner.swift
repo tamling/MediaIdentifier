@@ -32,6 +32,15 @@ public struct RenamePlanner {
             for: item.mediaFile,
             primaryDestination: item.primaryDestination
         )
+        // Refresh the on-disk conflict state for the edited destination. Batch
+        // duplicate detection is left to `makePlan`.
+        let primaryPath = updated.primaryDestination.standardizedFileURL.path
+        let sourcePath = updated.mediaFile.url.standardizedFileURL.path
+        if primaryPath != sourcePath, fileManager.fileExists(atPath: updated.primaryDestination.path) {
+            updated.conflict = .existingFile
+        } else if updated.conflict == .existingFile {
+            updated.conflict = nil
+        }
         return updated
     }
 

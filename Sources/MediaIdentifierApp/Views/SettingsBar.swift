@@ -5,6 +5,7 @@ import MediaIdentifierCore
 /// actions (FR7, FR11, FR13, FR19).
 struct SettingsBar: View {
     @EnvironmentObject private var state: AppState
+    @State private var showingMetadataSettings = false
 
     var body: some View {
         HStack(spacing: 16) {
@@ -34,6 +35,20 @@ struct SettingsBar: View {
             OutputModeControl()
 
             Spacer()
+
+            if state.isLookingUp {
+                ProgressView().controlSize(.small)
+            }
+            Button {
+                showingMetadataSettings = true
+            } label: {
+                Label(state.onlineLookupEnabled ? "Online: On" : "Online", systemImage: "globe")
+                    .foregroundStyle(state.onlineLookupEnabled ? Color.accentColor : Color.primary)
+            }
+            .help("TMDb online lookup settings (FR3).")
+            .sheet(isPresented: $showingMetadataSettings) {
+                MetadataSettingsView()
+            }
 
             Button {
                 state.undoLast()

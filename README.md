@@ -88,6 +88,17 @@ official titles; it only ever sends the parsed *title and year text* (never any
 media file) and requires a free TMDb API key. Additional providers (TVDb, IMDb)
 can be added by conforming to the `MetadataProvider` protocol (FR20).
 
+**Enabling it in the app:** click the **Online** button in the toolbar, toggle
+"Look up official titles online" and paste a TMDb API key (key + toggle are
+persisted in `UserDefaults`). When enabled, imports are enriched automatically,
+and "Look Up Now" re-runs the lookup on demand.
+
+### Conflict handling (FR11)
+
+The conflict policy is chosen in the toolbar: **Ask · Skip · Rename · Replace**.
+With **Ask**, pressing Start opens a resolution sheet listing every collision so
+you can decide per file (or apply one choice to all) before anything is moved.
+
 ## Funktionsabdeckung (FR1–FR20)
 
 | FR | Thema | Status | Umsetzung |

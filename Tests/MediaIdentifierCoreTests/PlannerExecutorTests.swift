@@ -114,4 +114,27 @@ final class PlannerExecutorTests: XCTestCase {
         XCTAssertTrue(fm.fileExists(atPath: source.path))     // original untouched
         XCTAssertEqual(try Data(contentsOf: dest), Data("y".utf8)) // destination untouched
     }
+
+    // FR11 — "Ask" policy delegates the decision; here the user picks Rename.
+    func testAskPolicyResolvesPerMove() throws {
+        let source = try touch("Interstellar.2014.1080p.mkv")
+        let destDir = tempDir.appendingPathComponent("Interstellar (2014)")
+        try fm.createDirectory(at: destDir, withIntermediateDirectories: true)
+        try Data("y".utf8).write(to: destDir.appendingPathComponent("Interstellar (2014).mkv"))
+
+        let files = MediaScanner().scan(urls: [source])
+        let plan = RenamePlanner().makePlan(for: files, outputRoot: tempDir)
+        let log = RenameLog(url: tempDir.appendingPathComponent("log.json"))
+        let journal = RenameJournal(url: tempDir.appendingPathComponent("journal.json"))
+
+        let outcome = RenameExecutor(log: log, journal: journal).execute(
+            plan: plan,
+            policy: .ask,
+            askResolution: { _ in .rename }
+        )
+        XCTAssertEqual(outcome.succeeded, 1)
+        // Original is gone and a de-duplicated name was created.
+        XCTAssertFalse(fm.fileExists(atPath: source.path))
+        XCTAssertTrue(fm.fileExists(atPath: destDir.appendingPathComponent("Interstellar (2014) (1).mkv").path))
+    }
 }
