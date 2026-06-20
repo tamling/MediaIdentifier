@@ -85,7 +85,7 @@ struct ConvertView: View {
                     }
                 }
                 .pickerStyle(.menu)
-                note("Mindestens „slow" für bessere Effizienz (kostet nur Encode-Zeit).")
+                note("Mindestens slow-Preset für bessere Effizienz (kostet nur Encode-Zeit).")
             }
 
             Toggle("10-Bit (main10) – weniger Banding", isOn: $state.conversionOptions.tenBit)
