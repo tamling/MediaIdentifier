@@ -91,7 +91,15 @@ official titles; it only ever sends the parsed *title and year text* (never any
 media file) and requires a free TMDb API key. Additional providers (TVDb, IMDb)
 can be added by conforming to the `MetadataProvider` protocol (FR20).
 
-**Enabling it in the app:** click the **Online** button in the toolbar, toggle
+**On-device Apple Intelligence (local):** when running on macOS 26+ with Apple
+Silicon and Apple Intelligence enabled, `AppleIntelligenceProvider` can identify
+titles using the built-in Foundation Models language model — fully on-device, so
+it stays consistent with FR18. It takes priority over TMDb and falls back to the
+heuristic parser when unavailable. Enable it under Einstellungen → "Apple
+Intelligence". (Requires the Foundation Models framework; guarded behind
+`#if canImport(FoundationModels)` so older SDKs still build.)
+
+**Enabling TMDb in the app:** click the **Online** button in the toolbar, toggle
 "Look up official titles online" and paste a TMDb API key (key + toggle are
 persisted in `UserDefaults`). When enabled, imports are enriched automatically,
 and "Look Up Now" re-runs the lookup on demand.

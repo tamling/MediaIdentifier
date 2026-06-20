@@ -52,6 +52,11 @@ final class AppState: ObservableObject {
     }
     @Published var isLookingUp = false
 
+    // On-device Apple Intelligence identification (FR3, local — FR18).
+    @Published var useAppleIntelligence = false {
+        didSet { UserDefaults.standard.set(useAppleIntelligence, forKey: Keys.useAI) }
+    }
+
     // Conversion options (FR16/FR17 scaffold).
     @Published var conversionOptions = ConversionOptions()
 
@@ -99,6 +104,7 @@ final class AppState: ObservableObject {
         static let watchEnabled = "watchEnabled"
         static let watchAuto = "watchAutoRename"
         static let watchPath = "watchFolderPath"
+        static let useAI = "useAppleIntelligence"
     }
 
     /// Original scanned media, kept so the plan can be rebuilt when settings change.
@@ -109,6 +115,7 @@ final class AppState: ObservableObject {
         canUndo = journal.canUndo
         onlineLookupEnabled = UserDefaults.standard.bool(forKey: Keys.onlineLookup)
         tmdbAPIKey = UserDefaults.standard.string(forKey: Keys.tmdbKey) ?? ""
+        useAppleIntelligence = UserDefaults.standard.bool(forKey: Keys.useAI)
         watchAutoRename = UserDefaults.standard.object(forKey: Keys.watchAuto) as? Bool ?? true
         watchFolderPath = UserDefaults.standard.string(forKey: Keys.watchPath) ?? ""
         watchEnabled = UserDefaults.standard.bool(forKey: Keys.watchEnabled)
@@ -189,18 +196,43 @@ final class AppState: ObservableObject {
         }
         didUndo = false
         rebuildPlan()
-        if onlineLookupEnabled && !tmdbAPIKey.isEmpty {
+        // Identification priority: on-device Apple Intelligence (local, FR18) →
+        // TMDb (online) → heuristic parser only.
+        if useAppleIntelligence && appleIntelligenceSupported {
+            runLocalAI()
+        } else if onlineLookupEnabled && !tmdbAPIKey.isEmpty {
             lookUpOnline()
         }
     }
 
-    // MARK: Online metadata (FR3)
+    // MARK: Metadata enrichment (FR3)
+
+    var appleIntelligenceSupported: Bool {
+        #if canImport(FoundationModels)
+        if #available(macOS 26.0, *) { return AppleIntelligenceProvider.isSupported }
+        #endif
+        return false
+    }
 
     func lookUpOnline() {
-        guard !isLookingUp, !tmdbAPIKey.isEmpty, !scannedFiles.isEmpty else { return }
+        guard !tmdbAPIKey.isEmpty else { return }
+        enrich(with: TMDbMetadataProvider(apiKey: tmdbAPIKey))
+    }
+
+    /// Runs identification through the on-device model (FR3, fully local).
+    func runLocalAI() {
+        #if canImport(FoundationModels)
+        if #available(macOS 26.0, *), AppleIntelligenceProvider.isSupported {
+            enrich(with: AppleIntelligenceProvider())
+        }
+        #endif
+    }
+
+    /// Refines every scanned file's parsed title/year using the given provider.
+    private func enrich(with provider: MetadataProvider) {
+        guard !isLookingUp, !scannedFiles.isEmpty else { return }
         isLookingUp = true
 
-        let provider = TMDbMetadataProvider(apiKey: tmdbAPIKey)
         let enricher = MetadataEnricher(provider: provider)
         let files = scannedFiles
 

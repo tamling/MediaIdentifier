@@ -37,6 +37,19 @@ struct MetadataSettingsView: View {
                 .labelsHidden()
             }
 
+            // On-device Apple Intelligence (FR3, local)
+            group("Erkennung – Apple Intelligence (lokal)") {
+                Toggle("Titel mit Apple Intelligence erkennen (on-device)",
+                       isOn: $state.useAppleIntelligence)
+                    .disabled(!state.appleIntelligenceSupported)
+                Text(state.appleIntelligenceSupported
+                     ? "Nutzt das geräteinterne Sprachmodell. Läuft komplett lokal — es werden keine Daten gesendet. Hat Vorrang vor TMDb."
+                     : "Nicht verfügbar: benötigt macOS 26+, Apple Silicon und aktiviertes Apple Intelligence.")
+                    .font(.caption)
+                    .foregroundStyle(Theme.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             // Online metadata (FR3)
             group("Online-Metadaten (TMDb)") {
                 Toggle("Offizielle Titel online nachschlagen", isOn: $state.onlineLookupEnabled)

@@ -60,12 +60,16 @@ private struct TitleBar: View {
         .overlay(Theme.hairline.frame(height: 0.5), alignment: .bottom)
     }
 
+    private var usingLocalAI: Bool { state.useAppleIntelligence && state.appleIntelligenceSupported }
+
     private var badge: some View {
         let color = isOnline ? Theme.movie : Theme.accentGlow
-        let label = isOnline ? "TMDb" : "Lokal"
+        let label = isOnline ? "TMDb" : (usingLocalAI ? "Lokal · KI" : "Lokal")
         let help = isOnline
             ? "Online-Titelsuche aktiv – es werden nur Titel und Jahr an TMDb gesendet, niemals Mediendateien."
-            : "Alle Dateien werden lokal verarbeitet – keine Cloud-Uploads."
+            : (usingLocalAI
+               ? "Erkennung über Apple Intelligence – läuft komplett auf dem Gerät, keine Cloud."
+               : "Alle Dateien werden lokal verarbeitet – keine Cloud-Uploads.")
         return HStack(spacing: 6) {
             Circle().fill(color).frame(width: 6, height: 6).shadow(color: color, radius: 3)
             Text(label).font(.system(size: 11, weight: .semibold)).foregroundStyle(color)
