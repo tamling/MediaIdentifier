@@ -16,7 +16,8 @@ enum KeychainStore {
         SecItemDelete(query as CFDictionary)
         guard !value.isEmpty else { return }
         query[kSecValueData as String] = Data(value.utf8)
-        query[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+        // Device-only: the secret is never synced to iCloud Keychain.
+        query[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         SecItemAdd(query as CFDictionary, nil)
     }
 

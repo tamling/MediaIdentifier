@@ -22,12 +22,8 @@ public struct TMDbMetadataProvider: MetadataProvider {
     /// the HTTP status code (200 = valid v3 key, 401 = invalid). Used by the
     /// app's "Verbindung testen" action so users get clear feedback.
     public func verify() async throws -> Int {
-        var components = URLComponents(
-            url: baseURL.appendingPathComponent("/configuration"),
-            resolvingAgainstBaseURL: false
-        )!
-        components.queryItems = [URLQueryItem(name: "api_key", value: apiKey)]
-        let (_, response) = try await session.data(from: components.url!)
+        let url = try makeURL(path: "/configuration", queryItems: [])
+        let (_, response) = try await session.data(from: url)
         return (response as? HTTPURLResponse)?.statusCode ?? -1
     }
 
@@ -36,7 +32,6 @@ public struct TMDbMetadataProvider: MetadataProvider {
         let isMovie = parsed.kind != .episode
         let path = isMovie ? "/search/movie" : "/search/tv"
 
-        var components = URLComponents(url: baseURL.appendingPathComponent(path), resolvingAgainstBaseURL: false)!
         var query = [
             URLQueryItem(name: "api_key", value: apiKey),
             URLQueryItem(name: "query", value: parsed.title)
@@ -44,9 +39,9 @@ public struct TMDbMetadataProvider: MetadataProvider {
         if let year = parsed.year {
             query.append(URLQueryItem(name: isMovie ? "year" : "first_air_date_year", value: String(year)))
         }
-        components.queryItems = query
+        let url = try makeURL(path: path, queryItems: query)
 
-        let (data, response) = try await session.data(from: components.url!)
+        let (data, response) = try await session.data(from: url)
         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { return nil }
 
         let decoded = try JSONDecoder().decode(SearchResponse.self, from: data)
@@ -62,6 +57,19 @@ public struct TMDbMetadataProvider: MetadataProvider {
             kind: isMovie ? .movie : .episode,
             identifier: first.id.map(String.init)
         )
+    }
+
+    /// Builds a request URL, throwing instead of force-unwrapping.
+    private func makeURL(path: String, queryItems: [URLQueryItem]) throws -> URL {
+        guard var components = URLComponents(
+            url: baseURL.appendingPathComponent(path),
+            resolvingAgainstBaseURL: false
+        ) else {
+            throw URLError(.badURL)
+        }
+        if !queryItems.isEmpty { components.queryItems = queryItems }
+        guard let url = components.url else { throw URLError(.badURL) }
+        return url
     }
 
     // MARK: TMDb response model
