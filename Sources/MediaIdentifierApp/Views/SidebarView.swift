@@ -3,11 +3,13 @@ import SwiftUI
 /// Left navigation rail (Bibliothek / Werkzeuge / Verlauf) plus Einstellungen.
 struct SidebarView: View {
     @EnvironmentObject private var state: AppState
-    @Binding var showingSettings: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            sectionLabel("Bibliothek")
+            sectionLabel("Allgemein")
+            SidebarRow(title: "Übersicht", systemImage: "gauge", section: .overview)
+
+            sectionLabel("Bibliothek").padding(.top, 14)
             SidebarRow(
                 title: "Warteschlange",
                 systemImage: "tray.and.arrow.down.fill",
@@ -32,7 +34,7 @@ struct SidebarView: View {
 
             Spacer()
 
-            Button(action: { showingSettings = true }) {
+            Button(action: { state.showingSettings = true }) {
                 Label("Einstellungen", systemImage: "slider.horizontal.3")
                     .labelStyle(SidebarLabelStyle())
             }

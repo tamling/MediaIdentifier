@@ -5,13 +5,12 @@ import MediaIdentifierCore
 /// Root layout: custom title bar + sidebar + main content (matches the design).
 struct ContentView: View {
     @EnvironmentObject private var state: AppState
-    @State private var showingSettings = false
 
     var body: some View {
         VStack(spacing: 0) {
             TitleBar()
             HStack(spacing: 0) {
-                SidebarView(showingSettings: $showingSettings)
+                SidebarView()
                 Divider().overlay(Theme.hairline)
                 MainArea()
             }
@@ -20,7 +19,7 @@ struct ContentView: View {
         .sheet(isPresented: conflictSheetBinding) {
             ConflictResolutionView()
         }
-        .sheet(isPresented: $showingSettings) {
+        .sheet(isPresented: $state.showingSettings) {
             MetadataSettingsView()
         }
     }
@@ -87,6 +86,8 @@ private struct MainArea: View {
 
     var body: some View {
         switch state.section {
+        case .overview:
+            OverviewView()
         case .queue:
             QueueView(section: .queue, title: "Warteschlange")
         case .movies:

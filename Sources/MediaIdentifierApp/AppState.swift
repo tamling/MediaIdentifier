@@ -13,6 +13,7 @@ enum OutputMode: Equatable {
 /// Sidebar destinations (matches the design: Warteschlange / Filme / Serien /
 /// Konvertieren / Protokoll).
 enum SidebarSection: Hashable {
+    case overview
     case queue
     case movies
     case series
@@ -36,7 +37,8 @@ final class AppState: ObservableObject {
     @Published var items: [RenameItem] = []
 
     // Navigation.
-    @Published var section: SidebarSection = .queue
+    @Published var section: SidebarSection = .overview
+    @Published var showingSettings = false
 
     // Settings.
     @Published var namingOptions: NamingOptions = .default { didSet { rebuildPlan() } }
@@ -243,6 +245,16 @@ final class AppState: ObservableObject {
         #endif
         return false
     }
+
+    /// Whether an FFmpeg binary is present in a common location (FR16).
+    var ffmpegAvailable: Bool {
+        ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/usr/bin/ffmpeg"]
+            .contains { FileManager.default.isExecutableFile(atPath: $0) }
+    }
+
+    var watchActive: Bool { watchEnabled && watchFolderURL != nil }
+    var tmdbConfigured: Bool { onlineLookupEnabled && !tmdbAPIKey.isEmpty }
+    var localDatabaseLoaded: Bool { localDatabaseCount > 0 }
 
     /// Manual TMDb lookup (the Settings "Jetzt nachschlagen" button).
     func lookUpOnline() {
