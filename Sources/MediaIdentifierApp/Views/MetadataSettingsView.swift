@@ -102,7 +102,15 @@ struct MetadataSettingsView: View {
                         }
                     }
                     .disabled(!state.canLookUpOnline || state.isLookingUp)
+                    Button("Verbindung testen") { state.testTMDb() }
+                        .disabled(state.tmdbAPIKey.isEmpty)
                     Spacer()
+                }
+                if let result = state.tmdbTestResult {
+                    Text(result)
+                        .font(.caption)
+                        .foregroundStyle(result.hasPrefix("✓") ? Theme.accentBright : Theme.warn)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
 

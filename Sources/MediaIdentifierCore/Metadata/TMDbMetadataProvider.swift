@@ -16,6 +16,19 @@ public struct TMDbMetadataProvider: MetadataProvider {
         self.session = session
     }
 
+    /// Validates the API key against TMDb's `/configuration` endpoint and returns
+    /// the HTTP status code (200 = valid v3 key, 401 = invalid). Used by the
+    /// app's "Verbindung testen" action so users get clear feedback.
+    public func verify() async throws -> Int {
+        var components = URLComponents(
+            url: baseURL.appendingPathComponent("/configuration"),
+            resolvingAgainstBaseURL: false
+        )!
+        components.queryItems = [URLQueryItem(name: "api_key", value: apiKey)]
+        let (_, response) = try await session.data(from: components.url!)
+        return (response as? HTTPURLResponse)?.statusCode ?? -1
+    }
+
     public func identify(_ parsed: ParsedRelease, at url: URL?) async throws -> MediaMetadata? {
         guard !parsed.title.isEmpty else { return nil }
         let isMovie = parsed.kind != .episode

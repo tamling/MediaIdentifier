@@ -242,6 +242,32 @@ final class AppState: ObservableObject {
         enrich(with: TMDbMetadataProvider(apiKey: tmdbAPIKey))
     }
 
+    /// Checks the TMDb API key and reports clear feedback (FR3).
+    @Published var tmdbTestResult: String?
+    func testTMDb() {
+        guard !tmdbAPIKey.isEmpty else {
+            tmdbTestResult = "Kein API-Schlüssel eingegeben."
+            return
+        }
+        tmdbTestResult = "Teste Verbindung …"
+        let provider = TMDbMetadataProvider(apiKey: tmdbAPIKey)
+        Task { [weak self] in
+            do {
+                let status = try await provider.verify()
+                switch status {
+                case 200:
+                    self?.tmdbTestResult = "✓ Verbunden – Schlüssel gültig."
+                case 401:
+                    self?.tmdbTestResult = "✗ Ungültiger Schlüssel (401). Bitte den v3-API-Key verwenden, nicht den v4-Token."
+                default:
+                    self?.tmdbTestResult = "TMDb antwortete mit Status \(status)."
+                }
+            } catch {
+                self?.tmdbTestResult = "✗ Keine Verbindung: \(error.localizedDescription)"
+            }
+        }
+    }
+
     /// Builds the active provider chain from the enabled identification options.
     private func currentEnrichmentProvider() -> MetadataProvider? {
         var providers: [MetadataProvider] = []
