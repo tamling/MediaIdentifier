@@ -21,7 +21,11 @@ let package = Package(
         .executableTarget(
             name: "MediaIdentifierApp",
             dependencies: ["MediaIdentifierCore"],
-            path: "Sources/MediaIdentifierApp"
+            path: "Sources/MediaIdentifierApp",
+            // The asset catalog (app icon) is consumed by the Xcode/XcodeGen
+            // build, not by SwiftPM; exclude it so `swift build`/`swift test`
+            // don't warn about an unhandled resource.
+            exclude: ["Assets.xcassets"]
         ),
         .testTarget(
             name: "MediaIdentifierCoreTests",

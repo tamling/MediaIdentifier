@@ -39,6 +39,7 @@ targets:
         SWIFT_VERSION: "5.9"
         ARCHS: arm64
         CODE_SIGN_STYLE: Automatic
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         # Hardened Runtime improves the security posture (required for
         # notarisation). App Sandbox stays off because the app renames media
         # anywhere the user points it; enabling it would require security-scoped

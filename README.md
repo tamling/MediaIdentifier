@@ -1,3 +1,5 @@
+<p align="center"><img src="docs/logo.png" width="128" alt="MediaIdentifier"></p>
+
 # MediaIdentifier
 
 A native **macOS (Apple Silicon)** app that analyses downloaded media files and

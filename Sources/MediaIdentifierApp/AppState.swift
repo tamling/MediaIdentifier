@@ -173,8 +173,8 @@ final class AppState: ObservableObject {
         guard watchEnabled, let folder = watchFolderURL else { return }
         watchScanner.reset()
         logActivity("Überwachung gestartet: \(folder.lastPathComponent)")
-        let timer = Timer.scheduledTimer(withTimeInterval: 4, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.pollWatch() }
+        let timer = Timer.scheduledTimer(withTimeInterval: 4, repeats: true) { _ in
+            Task { @MainActor [weak self] in self?.pollWatch() }
         }
         watchTimer = timer
         // Run an immediate first poll so existing files are picked up promptly.
@@ -521,7 +521,7 @@ final class AppState: ObservableObject {
                     resolutions[move.source.standardizedFileURL.path] ?? .skip
                 },
                 progress: { completed, total in
-                    Task { @MainActor in
+                    Task { @MainActor [weak self] in
                         self?.progress = total == 0 ? 1 : Double(completed) / Double(total)
                     }
                 }
