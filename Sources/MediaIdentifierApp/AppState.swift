@@ -10,11 +10,32 @@ enum OutputMode: Equatable {
     case customFolder(URL)
 }
 
+/// Sidebar destinations (matches the design: Warteschlange / Filme / Serien /
+/// Konvertieren / Protokoll).
+enum SidebarSection: Hashable {
+    case queue
+    case movies
+    case series
+    case convert
+    case log
+}
+
+/// Display status for a queued item (matches the design's status pills).
+enum ItemStatus {
+    case ready      // Bereit
+    case conflict   // Konflikt
+    case done       // Umbenannt
+    case skipped    // Übersprungen
+}
+
 /// Central observable view model that wires the Core engine to the UI.
 @MainActor
 final class AppState: ObservableObject {
     // Preview / plan (FR8).
     @Published var items: [RenameItem] = []
+
+    // Navigation.
+    @Published var section: SidebarSection = .queue
 
     // Settings.
     @Published var namingOptions: NamingOptions = .default { didSet { rebuildPlan() } }
@@ -30,17 +51,24 @@ final class AppState: ObservableObject {
     }
     @Published var isLookingUp = false
 
+    // Conversion options (FR16/FR17 scaffold).
+    @Published var conversionOptions = ConversionOptions()
+
     // Interactive conflict resolution (FR11, "Ask"). Non-empty drives a sheet.
     @Published var conflictsToResolve: [RenameItem] = []
 
     // Progress / status (FR19).
     @Published var isProcessing = false
     @Published var progress: Double = 0
-    @Published var statusMessage = "Drop media files or folders to begin."
+    @Published var lastResult: String?
+    @Published var didUndo = false
 
     // Log (FR12, FR19).
     @Published private(set) var logEntries: [RenameLogEntry] = []
     @Published private(set) var canUndo = false
+
+    /// Source paths of items that have been successfully renamed in this session.
+    @Published private var completed: Set<String> = []
 
     private let scanner = MediaScanner()
     private let log = RenameLog()
@@ -57,13 +85,8 @@ final class AppState: ObservableObject {
     init() {
         logEntries = log.entries
         canUndo = journal.canUndo
-        // Restore persisted settings (didSet does not fire during init).
         onlineLookupEnabled = UserDefaults.standard.bool(forKey: Keys.onlineLookup)
         tmdbAPIKey = UserDefaults.standard.string(forKey: Keys.tmdbKey) ?? ""
-    }
-
-    var canLookUpOnline: Bool {
-        onlineLookupEnabled && !tmdbAPIKey.isEmpty && !scannedFiles.isEmpty
     }
 
     private var namer: JellyfinNamer { JellyfinNamer(options: namingOptions) }
@@ -76,20 +99,24 @@ final class AppState: ObservableObject {
         }
     }
 
+    private func sourcePath(_ item: RenameItem) -> String {
+        item.mediaFile.url.standardizedFileURL.path
+    }
+
+    var canLookUpOnline: Bool {
+        onlineLookupEnabled && !tmdbAPIKey.isEmpty && !scannedFiles.isEmpty
+    }
+
     // MARK: Import (FR1, FR10)
 
     func importURLs(_ urls: [URL]) {
         let newFiles = scanner.scan(urls: urls)
-        // Merge, avoiding duplicates by source path.
         var existing = Set(scannedFiles.map { $0.url.standardizedFileURL.path })
         for file in newFiles where existing.insert(file.url.standardizedFileURL.path).inserted {
             scannedFiles.append(file)
         }
+        didUndo = false
         rebuildPlan()
-        statusMessage = scannedFiles.isEmpty
-            ? "No supported media files found."
-            : "\(scannedFiles.count) file(s) ready. Review the preview and press Start."
-
         if onlineLookupEnabled && !tmdbAPIKey.isEmpty {
             lookUpOnline()
         }
@@ -97,12 +124,9 @@ final class AppState: ObservableObject {
 
     // MARK: Online metadata (FR3)
 
-    /// Enriches the parsed releases with official titles/years from TMDb. Only
-    /// the parsed title/year text is sent — never any media file (FR18).
     func lookUpOnline() {
         guard !isLookingUp, !tmdbAPIKey.isEmpty, !scannedFiles.isEmpty else { return }
         isLookingUp = true
-        statusMessage = "Looking up titles on TMDb…"
 
         let provider = TMDbMetadataProvider(apiKey: tmdbAPIKey)
         let enricher = MetadataEnricher(provider: provider)
@@ -116,20 +140,20 @@ final class AppState: ObservableObject {
                 enriched.append(updated)
             }
             guard let self else { return }
-            // Only adopt results for files still present (user may have cleared).
             let stillPresent = Set(self.scannedFiles.map { $0.url })
             self.scannedFiles = enriched.filter { stillPresent.contains($0.url) }
             self.isLookingUp = false
             self.rebuildPlan()
-            self.statusMessage = "Online lookup complete. Review the preview and press Start."
         }
     }
 
     func clear() {
         scannedFiles.removeAll()
         items.removeAll()
+        completed.removeAll()
         progress = 0
-        statusMessage = "Drop media files or folders to begin."
+        lastResult = nil
+        didUndo = false
     }
 
     func removeItem(_ item: RenameItem) {
@@ -137,8 +161,7 @@ final class AppState: ObservableObject {
         items.removeAll { $0.id == item.id }
     }
 
-    /// Recomputes the plan from scanned files, preserving user acceptance/edits
-    /// where possible.
+    /// Recomputes the plan from scanned files, preserving user acceptance where possible.
     private func rebuildPlan() {
         let previousBySource = Dictionary(
             items.map { ($0.mediaFile.url, $0) },
@@ -153,11 +176,84 @@ final class AppState: ObservableObject {
         items = rebuilt
     }
 
+    // MARK: Status & filtering
+
+    func status(for item: RenameItem) -> ItemStatus {
+        if completed.contains(sourcePath(item)) { return .done }
+        if !item.isAccepted { return .skipped }
+        if item.conflict != nil { return .conflict }
+        return .ready
+    }
+
+    func items(in section: SidebarSection) -> [RenameItem] {
+        switch section {
+        case .movies:
+            return items.filter { $0.mediaFile.parsed.kind != .episode }
+        case .series:
+            return items.filter { $0.mediaFile.parsed.kind == .episode }
+        default:
+            return items
+        }
+    }
+
+    var hasFiles: Bool { !items.isEmpty }
+    var readyCount: Int { items.filter { status(for: $0) == .ready }.count }
+    var warnCount: Int { items.filter { status(for: $0) == .conflict }.count }
+    var doneCount: Int { items.filter { status(for: $0) == .done }.count }
+    var movieCount: Int { items(in: .movies).count }
+    var seriesCount: Int { items(in: .series).count }
+
+    private func runnablePlan() -> [RenameItem] {
+        items.filter { $0.isAccepted && !completed.contains(sourcePath($0)) }
+    }
+
+    var approvedActiveCount: Int { runnablePlan().count }
+    var canStart: Bool { approvedActiveCount > 0 && !isProcessing }
+    var showUndo: Bool { (doneCount > 0 || canUndo) && !isProcessing }
+
+    /// Header checkbox state: are all not-yet-done items accepted?
+    var allChecked: Bool {
+        let pending = items.filter { status(for: $0) != .done }
+        return !pending.isEmpty && pending.allSatisfy { $0.isAccepted }
+    }
+
+    var subtitleText: String {
+        guard hasFiles else { return "Bereit zum Import" }
+        return "\(items.count) Dateien analysiert · \(approvedActiveCount) ausgewählt"
+    }
+
+    var statusBarText: String {
+        if let lastResult { return lastResult }
+        if doneCount > 0 {
+            return didUndo
+                ? "\(items.count) Dateien · Umbenennung rückgängig gemacht"
+                : "\(doneCount) umbenannt · protokolliert · rückgängig möglich"
+        }
+        guard hasFiles else { return "Keine Dateien · alles wird lokal verarbeitet" }
+        return "\(readyCount) bereit · \(warnCount) benötigen Prüfung"
+    }
+
+    var startLabel: String {
+        isProcessing ? "Läuft …" : "\(approvedActiveCount) umbenennen"
+    }
+
     // MARK: Editing (FR9)
 
     func setAccepted(_ accepted: Bool, for id: RenameItem.ID) {
         guard let index = items.firstIndex(where: { $0.id == id }) else { return }
         items[index].isAccepted = accepted
+    }
+
+    func toggle(_ id: RenameItem.ID) {
+        guard let index = items.firstIndex(where: { $0.id == id }) else { return }
+        items[index].isAccepted.toggle()
+    }
+
+    func toggleAll() {
+        let target = !allChecked
+        for index in items.indices where status(for: items[index]) != .done {
+            items[index].isAccepted = target
+        }
     }
 
     func updateProposedPath(_ newPath: String, for id: RenameItem.ID) {
@@ -166,17 +262,15 @@ final class AppState: ObservableObject {
         items[index] = planner.reconcile(item: items[index])
     }
 
-    var acceptedCount: Int { items.filter { $0.isAccepted }.count }
-    var conflictCount: Int { items.filter { $0.isAccepted && $0.conflict != nil }.count }
-
     // MARK: Execute (FR7, FR10, FR11, FR12, FR13, FR19)
 
     func start() {
-        guard !isProcessing, acceptedCount > 0 else { return }
+        guard !isProcessing else { return }
+        let runnable = runnablePlan()
+        guard !runnable.isEmpty else { return }
 
-        // With the "Ask" policy, resolve conflicts interactively first (FR11).
         if conflictPolicy == .ask {
-            let conflicting = items.filter { $0.isAccepted && $0.conflict != nil }
+            let conflicting = runnable.filter { $0.conflict != nil }
             if !conflicting.isEmpty {
                 conflictsToResolve = conflicting
                 return
@@ -185,10 +279,7 @@ final class AppState: ObservableObject {
         runExecution(resolutions: [:])
     }
 
-    /// Called by the conflict sheet with a per-item decision (FR11).
     func resolveConflicts(_ resolutions: [RenameItem.ID: ConflictPolicy]) {
-        // Map each affected move (primary + companions) to the chosen policy,
-        // keyed by source path so the executor can look it up per move.
         var bySource: [String: ConflictPolicy] = [:]
         for item in conflictsToResolve {
             let policy = resolutions[item.id] ?? .skip
@@ -202,18 +293,17 @@ final class AppState: ObservableObject {
 
     func cancelConflictResolution() {
         conflictsToResolve = []
-        statusMessage = "Cancelled — resolve the conflicts and try again."
+        lastResult = "Abgebrochen — Konflikte auflösen und erneut starten."
     }
 
     private func runExecution(resolutions: [String: ConflictPolicy]) {
         isProcessing = true
         progress = 0
-        statusMessage = "Renaming…"
+        lastResult = nil
+        didUndo = false
 
-        let plan = items
+        let plan = runnablePlan()
         let policy = conflictPolicy
-        // RenameLog / RenameJournal are thread-safe; build the executor inside the
-        // background task to avoid hopping a non-Sendable value across actors.
         let log = self.log
         let journal = self.journal
 
@@ -236,22 +326,27 @@ final class AppState: ObservableObject {
     }
 
     private func finish(outcome: RenameOutcome) {
-        // Drop the processed files from the pending list, then report the result.
-        scannedFiles.removeAll()
-        items.removeAll()
+        if let tx = outcome.transaction {
+            let moved = Set(tx.moves.map { $0.from.standardizedFileURL.path })
+            for item in items where moved.contains(sourcePath(item)) {
+                completed.insert(sourcePath(item))
+            }
+        }
         isProcessing = false
         progress = 1
         logEntries = log.entries
         canUndo = journal.canUndo
-        statusMessage = "Done: \(outcome.succeeded) renamed, \(outcome.skipped) skipped, \(outcome.failed) failed."
+        lastResult = "Fertig: \(outcome.succeeded) umbenannt, \(outcome.skipped) übersprungen, \(outcome.failed) fehlgeschlagen."
     }
 
     func undoLast() {
         let executor = RenameExecutor(log: log, journal: journal)
         let restored = executor.undoLast()
+        completed.removeAll()
+        didUndo = true
         logEntries = log.entries
         canUndo = journal.canUndo
-        statusMessage = "Undid last batch: \(restored) file(s) restored."
+        lastResult = "Rückgängig gemacht: \(restored) Datei(en) wiederhergestellt."
     }
 
     // MARK: Log

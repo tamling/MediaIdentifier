@@ -1,0 +1,254 @@
+import SwiftUI
+import UniformTypeIdentifiers
+import MediaIdentifierCore
+
+/// The main pane: toolbar, progress strip, drop area / file list, and status bar.
+struct QueueView: View {
+    @EnvironmentObject private var state: AppState
+    let section: SidebarSection
+    let title: String
+
+    @State private var dragging = false
+
+    private var rows: [RenameItem] { state.items(in: section) }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            toolbar
+            if state.isProcessing { ProgressStrip() }
+
+            ZStack {
+                if state.hasFiles {
+                    fileList
+                } else {
+                    EmptyDropView()
+                }
+                if dragging { DropOverlay() }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .onDrop(of: [.fileURL], isTargeted: $dragging, perform: handleDrop)
+
+            statusBar
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Theme.windowBg)
+    }
+
+    // MARK: Toolbar
+
+    private var toolbar: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title).font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(Theme.textPrimary)
+                Text(state.subtitleText).font(.system(size: 11.5))
+                    .foregroundStyle(Theme.textSecondary)
+            }
+            Spacer()
+
+            if state.hasFiles {
+                ToolbarButton(title: "Liste leeren", action: state.clear)
+            }
+            if state.showUndo {
+                ToolbarButton(title: "Rückgängig", systemImage: "arrow.uturn.backward",
+                              action: state.undoLast)
+            }
+            if state.canStart {
+                Button(action: state.start) {
+                    HStack(spacing: 7) {
+                        Image(systemName: "arrow.right").font(.system(size: 12, weight: .bold))
+                        Text(state.startLabel).font(.system(size: 12.5, weight: .bold))
+                    }
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 15).padding(.vertical, 7)
+                    .background(Theme.accent, in: RoundedRectangle(cornerRadius: 8))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8)
+                            .strokeBorder(Color.white.opacity(0.25), lineWidth: 0.5)
+                    )
+                    .shadow(color: Theme.accent.opacity(0.4), radius: 3, y: 1)
+                }
+                .buttonStyle(.plain)
+                .keyboardShortcut(.return, modifiers: [.command])
+            }
+        }
+        .padding(.horizontal, 18)
+        .frame(height: 54)
+        .overlay(Theme.hairline.frame(height: 0.5), alignment: .bottom)
+    }
+
+    // MARK: List
+
+    private var fileList: some View {
+        VStack(spacing: 0) {
+            listHeader
+            ScrollView {
+                LazyVStack(spacing: 4) {
+                    ForEach(rows) { item in
+                        FileRowView(item: item)
+                    }
+                }
+                .padding(.horizontal, 14)
+                .padding(.top, 8)
+                .padding(.bottom, 16)
+            }
+        }
+    }
+
+    private var listHeader: some View {
+        HStack(spacing: 12) {
+            Button(action: state.toggleAll) {
+                HStack(spacing: 8) {
+                    CheckBox(checked: state.allChecked, size: 16)
+                    Text("Alle auswählen")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(Color(hex: 0xA0A0A6))
+                }
+            }
+            .buttonStyle(.plain)
+            Spacer()
+            HStack(spacing: 14) {
+                Text("\(state.readyCount) bereit")
+                    .foregroundStyle(Theme.accentBright)
+                Text("\(state.warnCount) prüfen")
+                    .foregroundStyle(Theme.warn)
+            }
+            .font(.system(size: 11.5, weight: .semibold))
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 11)
+        .overlay(Theme.hairline.frame(height: 0.5), alignment: .bottom)
+    }
+
+    // MARK: Status bar
+
+    private var statusBar: some View {
+        HStack(spacing: 10) {
+            Text(state.statusBarText)
+                .font(.system(size: 11.5, weight: .medium))
+                .foregroundStyle(Theme.mono)
+                .lineLimit(1).truncationMode(.middle)
+            Spacer()
+            HStack(spacing: 5) {
+                Image(systemName: "checkmark.seal").font(.system(size: 10))
+                Text("Jellyfin-Schema").font(.system(size: 11.5))
+            }
+            .foregroundStyle(Theme.mono)
+        }
+        .padding(.horizontal, 18)
+        .frame(height: 30)
+        .background(Color.white.opacity(0.02))
+        .overlay(Theme.hairline.frame(height: 0.5), alignment: .top)
+    }
+
+    // MARK: Drag & drop (FR1)
+
+    private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
+        let group = DispatchGroup()
+        var urls: [URL] = []
+        let lock = NSLock()
+        for provider in providers where provider.canLoadObject(ofClass: URL.self) {
+            group.enter()
+            _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                if let url { lock.lock(); urls.append(url); lock.unlock() }
+                group.leave()
+            }
+        }
+        group.notify(queue: .main) {
+            guard !urls.isEmpty else { return }
+            state.importURLs(urls)
+        }
+        return true
+    }
+}
+
+/// Indeterminate sweeping progress bar shown during renaming.
+private struct ProgressStrip: View {
+    @State private var animate = false
+    var body: some View {
+        GeometryReader { geo in
+            Rectangle().fill(Color.white.opacity(0.06))
+                .overlay(
+                    LinearGradient(
+                        colors: [.clear, Theme.accentGlow, .clear],
+                        startPoint: .leading, endPoint: .trailing
+                    )
+                    .frame(width: geo.size.width * 0.4)
+                    .offset(x: animate ? geo.size.width : -geo.size.width * 0.4)
+                )
+                .clipped()
+        }
+        .frame(height: 3)
+        .onAppear {
+            withAnimation(.linear(duration: 1.1).repeatForever(autoreverses: false)) {
+                animate = true
+            }
+        }
+    }
+}
+
+private struct DropOverlay: View {
+    var body: some View {
+        RoundedRectangle(cornerRadius: 16)
+            .strokeBorder(style: StrokeStyle(lineWidth: 2.5, dash: [9]))
+            .foregroundStyle(Theme.accentBright)
+            .background(Theme.accent.opacity(0.10), in: RoundedRectangle(cornerRadius: 16))
+            .overlay(
+                Text("Zum Hinzufügen loslassen")
+                    .font(.system(size: 18, weight: .bold))
+                    .foregroundStyle(Theme.accentBright)
+            )
+            .padding(10)
+    }
+}
+
+/// Small secondary toolbar button.
+struct ToolbarButton: View {
+    let title: String
+    var systemImage: String? = nil
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 7) {
+                if let systemImage {
+                    Image(systemName: systemImage).font(.system(size: 12, weight: .bold))
+                }
+                Text(title).font(.system(size: 12.5, weight: .semibold))
+            }
+            .foregroundStyle(Theme.textRow)
+            .padding(.horizontal, 13).padding(.vertical, 7)
+            .background(hovering ? Color.white.opacity(0.1) : Theme.chipBg,
+                        in: RoundedRectangle(cornerRadius: 8))
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .strokeBorder(Color.white.opacity(0.08), lineWidth: 0.5)
+            )
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+    }
+}
+
+/// Rounded checkbox matching the design.
+struct CheckBox: View {
+    let checked: Bool
+    var size: CGFloat = 19
+    var body: some View {
+        RoundedRectangle(cornerRadius: size * 0.32)
+            .fill(checked ? Theme.accent : .clear)
+            .overlay(
+                RoundedRectangle(cornerRadius: size * 0.32)
+                    .strokeBorder(checked ? Color.white.opacity(0.2) : Color.white.opacity(0.22),
+                                  lineWidth: checked ? 0.5 : 1.5)
+            )
+            .overlay(
+                Image(systemName: "checkmark")
+                    .font(.system(size: size * 0.55, weight: .heavy))
+                    .foregroundStyle(.white)
+                    .opacity(checked ? 1 : 0)
+            )
+            .frame(width: size, height: size)
+    }
+}

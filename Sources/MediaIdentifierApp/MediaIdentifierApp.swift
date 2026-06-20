@@ -10,14 +10,16 @@ struct MediaIdentifierApp: App {
         WindowGroup {
             ContentView()
                 .environmentObject(state)
-                .frame(minWidth: 900, minHeight: 600)
+                .frame(minWidth: 960, minHeight: 640)
+                .preferredColorScheme(.dark)
         }
+        .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentMinSize)
         .commands {
             CommandGroup(after: .pasteboard) {
-                Button("Undo Last Rename") { state.undoLast() }
+                Button("Umbenennung rückgängig") { state.undoLast() }
                     .keyboardShortcut("z", modifiers: [.command])
-                    .disabled(!state.canUndo)
+                    .disabled(!state.showUndo)
             }
         }
     }

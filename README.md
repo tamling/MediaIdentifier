@@ -68,10 +68,13 @@ Sources/
     Undo/                     RenameJournal (FR13)
     Metadata/                 MetadataProvider (+ offline & TMDb implementations)
     Conversion/               FFmpeg argument builder + converter (FR16/FR17)
-  MediaIdentifierApp/         SwiftUI macOS front-end
+  MediaIdentifierApp/         SwiftUI macOS front-end (dark "Jellyfin Renamer" design)
     AppState.swift            View model wiring Core to the UI
-    ContentView.swift         Drop zone + layout
-    Views/                    PreviewTable, SettingsBar, LogPane, StatusBar
+    Theme.swift               Colour palette + reusable chips/controls
+    ContentView.swift         Title bar + sidebar + main area
+    Views/                    SidebarView, QueueView, FileRowView, EmptyDropView,
+                              ConvertView, LogView, ConflictResolutionView,
+                              MetadataSettingsView
 Tests/
   MediaIdentifierCoreTests/   XCTest suite
 ```

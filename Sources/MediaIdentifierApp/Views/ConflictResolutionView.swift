@@ -45,6 +45,8 @@ struct ConflictResolutionView: View {
             footer
         }
         .frame(width: 520, height: 420)
+        .background(Theme.windowBg)
+        .tint(Theme.accent)
         .onAppear(perform: seedDefaults)
     }
 
