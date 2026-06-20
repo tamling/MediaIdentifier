@@ -29,23 +29,35 @@ fully unit-tested domain core.
 
 The repository is a Swift Package plus an XcodeGen spec.
 
-### Option A — proper `.app` bundle (recommended)
+### Option A — build a `.app` (works with any Xcode)
+
+```bash
+./build_app.sh
+```
+
+This compiles with SwiftPM and assembles `build/MediaIdentifier.app` directly
+(icon included via `sips`/`iconutil`), so it does **not** depend on the Xcode
+project format / Xcode version.
+
+You can also get a ready-built, signed-as-adhoc `.app` from CI: open the latest
+**Build** workflow run on the PR and download the `MediaIdentifier-app` artifact.
+
+### Option B — Xcode project (requires Xcode 16+)
 
 ```bash
 brew install xcodegen      # one-time
-xcodegen generate          # creates MediaIdentifier.xcodeproj
+xcodegen generate          # creates MediaIdentifier.xcodeproj (project format 77)
 open MediaIdentifier.xcodeproj
 # Select the "MediaIdentifier" scheme and Run (⌘R)
 ```
 
-### Option B — open the package directly
+> Older Xcode (≤ 15.x) cannot open the generated project ("future Xcode project
+> file format (77)"). Use Option A or update Xcode.
 
-Open `Package.swift` in Xcode and run the `MediaIdentifierApp` scheme, or from
-the terminal:
+### Option C — open the package directly
 
-```bash
-swift run MediaIdentifierApp
-```
+Open `Package.swift` in Xcode and run the `MediaIdentifierApp` scheme, or
+`swift run MediaIdentifierApp`.
 
 ### Run the tests
 
