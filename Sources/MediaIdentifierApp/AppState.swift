@@ -36,8 +36,9 @@ final class AppState: ObservableObject {
     // Preview / plan (FR8).
     @Published var items: [RenameItem] = []
 
-    // Navigation.
-    @Published var section: SidebarSection = .overview
+    // Navigation. Start on the drag-and-drop queue; Übersicht is available in
+    // the sidebar.
+    @Published var section: SidebarSection = .queue
     @Published var showingSettings = false
 
     // Settings.
