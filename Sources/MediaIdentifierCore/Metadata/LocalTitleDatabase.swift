@@ -22,24 +22,29 @@ public struct LocalTitleDatabase: Sendable {
 
     private let entries: [Entry]
     private let exactIndex: [String: [Int]]   // normalized title -> entry indices
-    private let tokenIndex: [String: [Int]]   // first token -> entry indices (fuzzy blocking)
+    private let blockIndex: [String: [Int]]   // leading-char block -> indices (fuzzy)
 
     public var count: Int { entries.count }
 
     public init(entries: [Entry]) {
         self.entries = entries
         var exact: [String: [Int]] = [:]
-        var token: [String: [Int]] = [:]
+        var blocks: [String: [Int]] = [:]
         for (i, entry) in entries.enumerated() {
             let norm = LocalTitleDatabase.normalize(entry.title)
             guard !norm.isEmpty else { continue }
             exact[norm, default: []].append(i)
-            if let first = norm.split(separator: " ").first {
-                token[String(first), default: []].append(i)
-            }
+            blocks[LocalTitleDatabase.blockKey(norm), default: []].append(i)
         }
         self.exactIndex = exact
-        self.tokenIndex = token
+        self.blockIndex = blocks
+    }
+
+    /// Blocking key for fuzzy candidate gathering: the first few characters of
+    /// the spaceless normalized title. Tolerates typos after the prefix while
+    /// keeping candidate sets small.
+    static func blockKey(_ norm: String) -> String {
+        String(norm.replacingOccurrences(of: " ", with: "").prefix(4))
     }
 
     // MARK: Matching
@@ -55,8 +60,7 @@ public struct LocalTitleDatabase: Sendable {
         if let indices = exactIndex[norm] {
             candidates = indices.map { entries[$0] }
         } else {
-            guard let first = norm.split(separator: " ").first,
-                  let block = tokenIndex[String(first)] else { return nil }
+            guard let block = blockIndex[Self.blockKey(norm)] else { return nil }
             candidates = block.compactMap { index -> Entry? in
                 let entry = entries[index]
                 let similarity = LocalTitleDatabase.similarity(norm, LocalTitleDatabase.normalize(entry.title))

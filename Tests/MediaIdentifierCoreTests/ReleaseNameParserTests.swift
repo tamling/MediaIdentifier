@@ -11,6 +11,7 @@ final class ReleaseNameParserTests: XCTestCase {
         XCTAssertEqual(r.kind, .episode)
         XCTAssertEqual(r.season, 1)
         XCTAssertEqual(r.episode, 1)
+        XCTAssertNil(r.episodeEnd)  // must not swallow the "1080" of ".1080p"
         XCTAssertEqual(r.resolution, "1080p")
         XCTAssertEqual(r.codec, "x264")
         XCTAssertEqual(r.releaseGroup, "GROUP")

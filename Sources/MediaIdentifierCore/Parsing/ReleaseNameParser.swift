@@ -12,8 +12,10 @@ public struct ReleaseNameParser {
     // MARK: Patterns
 
     // S01E02 / s01.e02 / S01E02E03 / S01E02-E03
+    // Note: the optional multi-episode group requires an explicit "E" so it
+    // does not swallow following quality tokens (e.g. the "1080" of ".1080p").
     private static let seasonEpisode = RX(
-        #"[sS](\d{1,2})[\s._-]*[eE](\d{1,3})(?:[\s._-]*[eE]?(\d{1,3}))?"#
+        #"[sS](\d{1,2})[\s._-]*[eE](\d{1,3})(?:[\s._-]*[eE](\d{1,3}))?"#
     )
     // 1x05 / 01x05
     private static let altSeasonEpisode = RX(#"(?<![a-zA-Z0-9])(\d{1,2})x(\d{1,3})(?![a-zA-Z0-9])"#)
