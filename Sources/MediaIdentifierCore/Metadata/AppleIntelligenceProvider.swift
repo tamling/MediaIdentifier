@@ -34,7 +34,7 @@ public struct AppleIntelligenceProvider: MetadataProvider {
         }
     }
 
-    public func identify(_ parsed: ParsedRelease) async throws -> MediaMetadata? {
+    public func identify(_ parsed: ParsedRelease, at url: URL?) async throws -> MediaMetadata? {
         guard case .available = SystemLanguageModel.default.availability else { return nil }
 
         let session = LanguageModelSession(

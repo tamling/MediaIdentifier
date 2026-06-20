@@ -99,6 +99,23 @@ heuristic parser when unavailable. Enable it under Einstellungen → "Apple
 Intelligence". (Requires the Foundation Models framework; guarded behind
 `#if canImport(FoundationModels)` so older SDKs still build.)
 
+**Embedded container tags (local):** `EmbeddedMetadataProvider` reads title/year
+tags stored inside MP4/MOV/M4V files via AVFoundation. (MKV is not read by
+AVFoundation — it falls through to the next provider; ffprobe support is a
+planned follow-up.)
+
+**Local title database (local after one download):** `LocalTitleDatabase` +
+`LocalTitleDatabaseLoader` build an offline index from a downloaded TMDb data
+export (`files.tmdb.org/p/exports/`, the `movie_ids` / `tv_series_ids` NDJSON
+files, plain or `.gz`) — or any JSON array of `{title, year, kind}`. Parsed
+titles are matched offline (exact + fuzzy/Levenshtein, ranked by kind, year and
+popularity). Pick the file under Einstellungen → "Lokale Titel-Datenbank".
+
+The active identification chain is **embedded tags → local DB → Apple
+Intelligence → TMDb**; each step falls through to the next when it has no
+confident match (`CompositeMetadataProvider`). Everything except TMDb is fully
+local (FR18).
+
 **Enabling TMDb in the app:** click the **Online** button in the toolbar, toggle
 "Look up official titles online" and paste a TMDb API key (key + toggle are
 persisted in `UserDefaults`). When enabled, imports are enriched automatically,

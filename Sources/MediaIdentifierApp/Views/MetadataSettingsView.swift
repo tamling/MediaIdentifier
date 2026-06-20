@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import MediaIdentifierCore
 
 /// Einstellungen: naming, conflict handling, output and TMDb online lookup (FR3,
@@ -50,6 +51,36 @@ struct MetadataSettingsView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
+            // Embedded container tags (FR3, local)
+            group("Eingebettete Metadaten (lokal)") {
+                Toggle("Titel/Jahr aus der Datei (MKV/MP4) lesen",
+                       isOn: $state.useEmbeddedMetadata)
+                Text("Liest im Container gespeicherte Tags via AVFoundation. Greift nur, wenn die Datei solche Tags enthält.")
+                    .font(.caption).foregroundStyle(Theme.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            // Local offline title database (FR3)
+            group("Lokale Titel-Datenbank (lokal)") {
+                Toggle("Offline-Datenbank verwenden", isOn: $state.useLocalDatabase)
+                HStack(spacing: 10) {
+                    Image(systemName: "externaldrive").foregroundStyle(Theme.textSecondary)
+                    Text(databaseStatus)
+                        .font(.system(size: 12, design: .monospaced))
+                        .foregroundStyle(state.databaseError == nil ? Theme.textRow : Theme.warn)
+                        .lineLimit(1).truncationMode(.middle)
+                    Spacer()
+                    if state.isLoadingDatabase {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Button("Datei wählen…", action: chooseDatabase)
+                    }
+                }
+                Text("Einmalig den TMDb-Export von files.tmdb.org/p/exports laden (movie_ids / tv_series_ids, .json/.jsonl, auch .gz). Danach erfolgt der Abgleich offline.")
+                    .font(.caption).foregroundStyle(Theme.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             // Online metadata (FR3)
             group("Online-Metadaten (TMDb)") {
                 Toggle("Offizielle Titel online nachschlagen", isOn: $state.onlineLookupEnabled)
@@ -86,6 +117,24 @@ struct MetadataSettingsView: View {
         .frame(width: 440)
         .background(Theme.windowBg)
         .tint(Theme.accent)
+    }
+
+    private var databaseStatus: String {
+        if let error = state.databaseError { return error }
+        if state.isLoadingDatabase { return "Wird geladen …" }
+        if state.localDatabaseCount > 0 { return "\(state.localDatabaseCount) Titel geladen" }
+        return state.localDatabasePath.isEmpty ? "Keine Datei gewählt" : "Nicht geladen"
+    }
+
+    private func chooseDatabase() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Laden"
+        if panel.runModal() == .OK, let url = panel.url {
+            state.setLocalDatabaseFile(url)
+        }
     }
 
     private func group<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {

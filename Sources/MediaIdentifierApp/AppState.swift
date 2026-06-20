@@ -57,6 +57,23 @@ final class AppState: ObservableObject {
         didSet { UserDefaults.standard.set(useAppleIntelligence, forKey: Keys.useAI) }
     }
 
+    // Embedded container tags (FR3, local).
+    @Published var useEmbeddedMetadata = false {
+        didSet { UserDefaults.standard.set(useEmbeddedMetadata, forKey: Keys.useEmbedded) }
+    }
+
+    // Local offline title database (FR3, local after one-time download).
+    @Published var useLocalDatabase = false {
+        didSet { UserDefaults.standard.set(useLocalDatabase, forKey: Keys.useLocalDB) }
+    }
+    @Published var localDatabasePath = "" {
+        didSet { UserDefaults.standard.set(localDatabasePath, forKey: Keys.localDBPath) }
+    }
+    @Published private(set) var localDatabaseCount = 0
+    @Published private(set) var isLoadingDatabase = false
+    @Published var databaseError: String?
+    private var localDatabase: LocalTitleDatabase?
+
     // Conversion options (FR16/FR17 scaffold).
     @Published var conversionOptions = ConversionOptions()
 
@@ -105,6 +122,9 @@ final class AppState: ObservableObject {
         static let watchAuto = "watchAutoRename"
         static let watchPath = "watchFolderPath"
         static let useAI = "useAppleIntelligence"
+        static let useEmbedded = "useEmbeddedMetadata"
+        static let useLocalDB = "useLocalDatabase"
+        static let localDBPath = "localDatabasePath"
     }
 
     /// Original scanned media, kept so the plan can be rebuilt when settings change.
@@ -116,6 +136,10 @@ final class AppState: ObservableObject {
         onlineLookupEnabled = UserDefaults.standard.bool(forKey: Keys.onlineLookup)
         tmdbAPIKey = UserDefaults.standard.string(forKey: Keys.tmdbKey) ?? ""
         useAppleIntelligence = UserDefaults.standard.bool(forKey: Keys.useAI)
+        useEmbeddedMetadata = UserDefaults.standard.bool(forKey: Keys.useEmbedded)
+        useLocalDatabase = UserDefaults.standard.bool(forKey: Keys.useLocalDB)
+        localDatabasePath = UserDefaults.standard.string(forKey: Keys.localDBPath) ?? ""
+        if useLocalDatabase, !localDatabasePath.isEmpty { loadDatabase() }
         watchAutoRename = UserDefaults.standard.object(forKey: Keys.watchAuto) as? Bool ?? true
         watchFolderPath = UserDefaults.standard.string(forKey: Keys.watchPath) ?? ""
         watchEnabled = UserDefaults.standard.bool(forKey: Keys.watchEnabled)
@@ -196,12 +220,10 @@ final class AppState: ObservableObject {
         }
         didUndo = false
         rebuildPlan()
-        // Identification priority: on-device Apple Intelligence (local, FR18) →
-        // TMDb (online) → heuristic parser only.
-        if useAppleIntelligence && appleIntelligenceSupported {
-            runLocalAI()
-        } else if onlineLookupEnabled && !tmdbAPIKey.isEmpty {
-            lookUpOnline()
+        // Run the configured identification chain (embedded tags → local DB →
+        // Apple Intelligence → TMDb). All but TMDb are fully local (FR18).
+        if let provider = currentEnrichmentProvider() {
+            enrich(with: provider)
         }
     }
 
@@ -214,18 +236,60 @@ final class AppState: ObservableObject {
         return false
     }
 
+    /// Manual TMDb lookup (the Settings "Jetzt nachschlagen" button).
     func lookUpOnline() {
         guard !tmdbAPIKey.isEmpty else { return }
         enrich(with: TMDbMetadataProvider(apiKey: tmdbAPIKey))
     }
 
-    /// Runs identification through the on-device model (FR3, fully local).
-    func runLocalAI() {
+    /// Builds the active provider chain from the enabled identification options.
+    private func currentEnrichmentProvider() -> MetadataProvider? {
+        var providers: [MetadataProvider] = []
+        #if canImport(AVFoundation)
+        if useEmbeddedMetadata { providers.append(EmbeddedMetadataProvider()) }
+        #endif
+        if useLocalDatabase, let db = localDatabase {
+            providers.append(LocalDatabaseMetadataProvider(database: db))
+        }
         #if canImport(FoundationModels)
-        if #available(macOS 26.0, *), AppleIntelligenceProvider.isSupported {
-            enrich(with: AppleIntelligenceProvider())
+        if useAppleIntelligence, #available(macOS 26.0, *), AppleIntelligenceProvider.isSupported {
+            providers.append(AppleIntelligenceProvider())
         }
         #endif
+        if onlineLookupEnabled, !tmdbAPIKey.isEmpty {
+            providers.append(TMDbMetadataProvider(apiKey: tmdbAPIKey))
+        }
+        guard !providers.isEmpty else { return nil }
+        return providers.count == 1 ? providers[0] : CompositeMetadataProvider(providers)
+    }
+
+    // MARK: Local title database (FR3)
+
+    func setLocalDatabaseFile(_ url: URL) {
+        localDatabasePath = url.path
+        loadDatabase()
+    }
+
+    func loadDatabase() {
+        guard !localDatabasePath.isEmpty else { return }
+        let url = URL(fileURLWithPath: localDatabasePath)
+        isLoadingDatabase = true
+        databaseError = nil
+        Task.detached(priority: .utility) { [weak self] in
+            do {
+                let db = try LocalTitleDatabaseLoader.load(from: url)
+                await self?.applyDatabase(db, error: nil)
+            } catch {
+                await self?.applyDatabase(nil, error: error.localizedDescription)
+            }
+        }
+    }
+
+    private func applyDatabase(_ db: LocalTitleDatabase?, error: String?) {
+        isLoadingDatabase = false
+        localDatabase = db
+        localDatabaseCount = db?.count ?? 0
+        databaseError = error
     }
 
     /// Refines every scanned file's parsed title/year using the given provider.
@@ -240,7 +304,7 @@ final class AppState: ObservableObject {
             var enriched: [MediaFile] = []
             for file in files {
                 var updated = file
-                updated.parsed = await enricher.enrich(file.parsed)
+                updated.parsed = await enricher.enrich(file.parsed, at: file.url)
                 enriched.append(updated)
             }
             guard let self else { return }

@@ -16,7 +16,7 @@ public struct TMDbMetadataProvider: MetadataProvider {
         self.session = session
     }
 
-    public func identify(_ parsed: ParsedRelease) async throws -> MediaMetadata? {
+    public func identify(_ parsed: ParsedRelease, at url: URL?) async throws -> MediaMetadata? {
         guard !parsed.title.isEmpty else { return nil }
         let isMovie = parsed.kind != .episode
         let path = isMovie ? "/search/movie" : "/search/tv"
