@@ -11,9 +11,11 @@ public struct TMDbMetadataProvider: MetadataProvider {
     private let session: URLSession
     private let baseURL = URL(string: "https://api.themoviedb.org/3")!
 
-    public init(apiKey: String, session: URLSession = .shared) {
+    public init(apiKey: String, session: URLSession? = nil) {
         self.apiKey = apiKey
-        self.session = session
+        // Default to an ephemeral session so the API key (carried in the URL
+        // query, per TMDb v3) is not persisted in the shared URL cache.
+        self.session = session ?? URLSession(configuration: .ephemeral)
     }
 
     /// Validates the API key against TMDb's `/configuration` endpoint and returns

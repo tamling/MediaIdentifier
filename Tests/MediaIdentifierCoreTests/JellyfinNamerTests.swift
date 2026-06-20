@@ -61,4 +61,20 @@ final class JellyfinNamerTests: XCTestCase {
         XCTAssertEqual(JellyfinNamer.sanitize("Title: Subtitle"), "Title Subtitle")
         XCTAssertEqual(JellyfinNamer.sanitize("A/B\\C"), "A B C")
     }
+
+    // Security: a manually edited path must not escape the output root.
+    func testSanitizeRelativePathBlocksTraversal() {
+        XCTAssertEqual(
+            JellyfinNamer.sanitizeRelativePath("../../etc/passwd"),
+            "etc/passwd"
+        )
+        XCTAssertEqual(
+            JellyfinNamer.sanitizeRelativePath("/Movies/Film (2020).mkv"),
+            "Movies/Film (2020).mkv"
+        )
+        XCTAssertEqual(
+            JellyfinNamer.sanitizeRelativePath("Show/../../../Season 01/ep.mkv"),
+            "Show/Season 01/ep.mkv"
+        )
+    }
 }

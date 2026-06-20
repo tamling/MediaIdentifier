@@ -162,6 +162,22 @@ an execution wrapper, ready to be surfaced in the UI. FR20 extension points
 batch processing) build naturally on the `MetadataProvider` and naming
 abstractions.
 
+## Security
+
+A static review informed these hardening measures:
+
+- **No silent data loss:** the "Replace" conflict policy moves the existing file
+  to the Trash (not a hard delete) and records it in the undo journal, so it can
+  be restored (`RenameExecutor.trashExisting`).
+- **Secrets in the Keychain:** the TMDb API key is stored in the Keychain, not
+  UserDefaults (`KeychainStore`); a legacy plaintext value is migrated on launch.
+- **No path traversal:** manually edited destination paths are sanitised so they
+  cannot escape the output root (`JellyfinNamer.sanitizeRelativePath`).
+- **No shell injection:** external tools (FFmpeg, gunzip) are invoked with fixed
+  executables and argument arrays — never a shell string.
+- **Bounded input / no key caching:** the local-database loader caps decoded
+  size; TMDb requests use an ephemeral URL session so the key is not cached.
+
 ## Note on this environment
 
 This project was authored in a Linux container without an Xcode/Swift

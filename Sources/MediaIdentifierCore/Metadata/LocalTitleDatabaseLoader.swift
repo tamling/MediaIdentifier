@@ -89,10 +89,18 @@ public enum LocalTitleDatabaseLoader {
 
     // MARK: Reading (with optional gzip)
 
+    /// Upper bound on uncompressed input to avoid exhausting memory on an
+    /// oversized file or a decompression bomb.
+    private static let maxDecodedBytes = 1_500_000_000  // ~1.5 GB
+
     private static func readData(at url: URL) throws -> Data {
         if url.pathExtension.lowercased() == "gz" {
-            return try gunzip(url)
+            let data = try gunzip(url)
+            guard data.count <= maxDecodedBytes else { throw LoaderError.unreadable }
+            return data
         }
+        let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? 0
+        guard size <= maxDecodedBytes else { throw LoaderError.unreadable }
         guard let data = try? Data(contentsOf: url) else { throw LoaderError.unreadable }
         return data
     }

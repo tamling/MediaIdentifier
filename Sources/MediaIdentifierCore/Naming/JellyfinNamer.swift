@@ -108,6 +108,16 @@ public struct JellyfinNamer {
         return trimmed.isEmpty ? "" : "." + trimmed.lowercased()
     }
 
+    /// Sanitises a user-edited relative path so it cannot escape the output root
+    /// (no `..`, no absolute/leading slash) and every component is a legal file
+    /// name. Empty / `.` / `..` components are dropped.
+    public static func sanitizeRelativePath(_ path: String) -> String {
+        path.split(separator: "/", omittingEmptySubsequences: true)
+            .map { sanitize(String($0)) }
+            .filter { !$0.isEmpty && $0 != "." && $0 != ".." }
+            .joined(separator: "/")
+    }
+
     /// Removes characters that are illegal or problematic in file names on
     /// macOS / SMB shares (`/` and `:` in particular).
     public static func sanitize(_ name: String) -> String {

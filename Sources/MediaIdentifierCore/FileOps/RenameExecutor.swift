@@ -70,7 +70,7 @@ public final class RenameExecutor {
             }()
 
             do {
-                guard let resolved = try resolveDestination(for: move, policy: effectivePolicy) else {
+                guard let resolution = try resolveDestination(for: move, policy: effectivePolicy) else {
                     outcome.skipped += 1
                     log.append(RenameLogEntry(
                         oldName: move.source.lastPathComponent,
@@ -80,14 +80,20 @@ public final class RenameExecutor {
                     continue
                 }
 
-                let createdDirs = try ensureParentDirectory(for: resolved)
-                try fileManager.moveItem(at: move.source, to: resolved)
+                // For "replace", the existing file was moved to the Trash; record
+                // that first so undo can restore it before the main move is undone.
+                if let backup = resolution.backup {
+                    performed.append(backup)
+                }
 
-                performed.append(.init(from: move.source, to: resolved, createdDirectories: createdDirs))
+                let createdDirs = try ensureParentDirectory(for: resolution.destination)
+                try fileManager.moveItem(at: move.source, to: resolution.destination)
+
+                performed.append(.init(from: move.source, to: resolution.destination, createdDirectories: createdDirs))
                 outcome.succeeded += 1
                 log.append(RenameLogEntry(
                     oldName: move.source.lastPathComponent,
-                    newName: resolved.lastPathComponent,
+                    newName: resolution.destination.lastPathComponent,
                     status: .success
                 ))
             } catch {
@@ -147,21 +153,48 @@ public final class RenameExecutor {
 
     // MARK: Helpers
 
+    /// The outcome of resolving a conflict: the destination to move to, plus an
+    /// optional journal entry for a file that was moved to the Trash (so undo can
+    /// restore it).
+    private struct Resolution {
+        let destination: URL
+        let backup: RenameTransaction.Move?
+    }
+
     /// Resolves the final destination honouring the conflict policy. Returns nil
     /// when the move should be skipped.
-    private func resolveDestination(for move: PlannedMove, policy: ConflictPolicy) throws -> URL? {
+    private func resolveDestination(for move: PlannedMove, policy: ConflictPolicy) throws -> Resolution? {
         guard fileManager.fileExists(atPath: move.destination.path) else {
-            return move.destination
+            return Resolution(destination: move.destination, backup: nil)
         }
         switch policy {
         case .skip, .ask:
             return nil
         case .replace:
-            try fileManager.removeItem(at: move.destination)
-            return move.destination
+            // Move the existing file to the Trash instead of deleting it, and
+            // record it so the operation stays reversible (no silent data loss).
+            let backup = try trashExisting(at: move.destination)
+            return Resolution(destination: move.destination, backup: backup)
         case .rename:
-            return uniqueURL(for: move.destination)
+            return Resolution(destination: uniqueURL(for: move.destination), backup: nil)
         }
+    }
+
+    /// Sends `url` to the Trash and returns a journal move (original location →
+    /// trashed location) so undo can put it back. Falls back to a hard delete on
+    /// platforms without a Trash (e.g. Linux CI).
+    private func trashExisting(at url: URL) throws -> RenameTransaction.Move? {
+        #if os(macOS)
+        var resulting: NSURL?
+        try fileManager.trashItem(at: url, resultingItemURL: &resulting)
+        if let trashURL = resulting as URL? {
+            return RenameTransaction.Move(from: url, to: trashURL)
+        }
+        return nil
+        #else
+        try fileManager.removeItem(at: url)
+        return nil
+        #endif
     }
 
     private func uniqueURL(for url: URL) -> URL {

@@ -48,7 +48,7 @@ final class AppState: ObservableObject {
         didSet { UserDefaults.standard.set(onlineLookupEnabled, forKey: Keys.onlineLookup) }
     }
     @Published var tmdbAPIKey = "" {
-        didSet { UserDefaults.standard.set(tmdbAPIKey, forKey: Keys.tmdbKey) }
+        didSet { KeychainStore.set(tmdbAPIKey, for: Keys.tmdbKey) }
     }
     @Published var isLookingUp = false
 
@@ -134,7 +134,15 @@ final class AppState: ObservableObject {
         logEntries = log.entries
         canUndo = journal.canUndo
         onlineLookupEnabled = UserDefaults.standard.bool(forKey: Keys.onlineLookup)
-        tmdbAPIKey = UserDefaults.standard.string(forKey: Keys.tmdbKey) ?? ""
+        // API key lives in the Keychain. Migrate any legacy UserDefaults value.
+        let storedKey = KeychainStore.get(Keys.tmdbKey)
+        if storedKey.isEmpty, let legacy = UserDefaults.standard.string(forKey: Keys.tmdbKey), !legacy.isEmpty {
+            KeychainStore.set(legacy, for: Keys.tmdbKey)
+            UserDefaults.standard.removeObject(forKey: Keys.tmdbKey)
+            tmdbAPIKey = legacy
+        } else {
+            tmdbAPIKey = storedKey
+        }
         useAppleIntelligence = UserDefaults.standard.bool(forKey: Keys.useAI)
         useEmbeddedMetadata = UserDefaults.standard.bool(forKey: Keys.useEmbedded)
         useLocalDatabase = UserDefaults.standard.bool(forKey: Keys.useLocalDB)
@@ -452,7 +460,10 @@ final class AppState: ObservableObject {
 
     func updateProposedPath(_ newPath: String, for id: RenameItem.ID) {
         guard let index = items.firstIndex(where: { $0.id == id }) else { return }
-        items[index].proposedRelativePath = newPath
+        // Prevent a manual edit from escaping the output root (e.g. "../").
+        let safe = JellyfinNamer.sanitizeRelativePath(newPath)
+        guard !safe.isEmpty else { return }
+        items[index].proposedRelativePath = safe
         items[index] = planner.reconcile(item: items[index])
     }
 
