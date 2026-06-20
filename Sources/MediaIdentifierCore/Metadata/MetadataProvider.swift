@@ -50,7 +50,7 @@ public struct MetadataEnricher {
     }
 
     public func enrich(_ parsed: ParsedRelease) async -> ParsedRelease {
-        guard let metadata = try? await provider.identify(parsed), let metadata else {
+        guard let metadata = try? await provider.identify(parsed) else {
             return parsed
         }
         var updated = parsed
