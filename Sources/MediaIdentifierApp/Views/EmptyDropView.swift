@@ -9,41 +9,38 @@ struct EmptyDropView: View {
     private let formats = ["MKV", "MP4", "AVI", "MOV", "M4V", "SRT"]
 
     var body: some View {
-        VStack {
-            Spacer()
-            Button(action: chooseFiles) {
-                VStack(spacing: 0) {
-                    iconBadge
-                    Text("Dateien hierher ziehen")
-                        .font(.system(size: 20, weight: .bold))
-                        .foregroundStyle(Theme.textPrimary)
-                        .padding(.top, 22)
-                    Text("Einzelne Filme, ganze Staffeln oder komplette Ordner.\nRelease-Namen werden automatisch analysiert.")
-                        .font(.system(size: 13.5))
-                        .foregroundStyle(Color(hex: 0x9A9AA0))
-                        .multilineTextAlignment(.center)
-                        .lineSpacing(3)
-                        .padding(.top, 8)
-                    chips.padding(.top, 22)
-                    Text("oder Dateien auswählen →")
-                        .font(.system(size: 12.5, weight: .semibold))
-                        .foregroundStyle(Theme.accentBright)
-                        .padding(.top, 26)
-                }
-                .frame(maxWidth: 560)
-                .padding(.vertical, 54)
-                .padding(.horizontal, 40)
-                .background(Color.white.opacity(0.018), in: RoundedRectangle(cornerRadius: 18))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 18)
-                        .strokeBorder(style: StrokeStyle(lineWidth: 2, dash: [7]))
-                        .foregroundStyle(Color.white.opacity(0.14))
-                )
+        // The dashed drop area fills the whole pane and scales with the window.
+        Button(action: chooseFiles) {
+            VStack(spacing: 0) {
+                Spacer(minLength: 0)
+                iconBadge
+                Text("Dateien hierher ziehen")
+                    .font(.system(size: 20, weight: .bold))
+                    .foregroundStyle(Theme.textPrimary)
+                    .padding(.top, 22)
+                Text("Einzelne Filme, ganze Staffeln oder komplette Ordner.\nRelease-Namen werden automatisch analysiert.")
+                    .font(.system(size: 13.5))
+                    .foregroundStyle(Color(hex: 0x9A9AA0))
+                    .multilineTextAlignment(.center)
+                    .lineSpacing(3)
+                    .padding(.top, 8)
+                chips.padding(.top, 22)
+                Text("oder Dateien auswählen →")
+                    .font(.system(size: 12.5, weight: .semibold))
+                    .foregroundStyle(Theme.accentBright)
+                    .padding(.top, 26)
+                Spacer(minLength: 0)
             }
-            .buttonStyle(.plain)
-            Spacer()
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color.white.opacity(0.018), in: RoundedRectangle(cornerRadius: 18))
+            .overlay(
+                RoundedRectangle(cornerRadius: 18)
+                    .strokeBorder(style: StrokeStyle(lineWidth: 2, dash: [7]))
+                    .foregroundStyle(Color.white.opacity(0.14))
+            )
         }
-        .padding(32)
+        .buttonStyle(.plain)
+        .padding(24)
     }
 
     private var iconBadge: some View {

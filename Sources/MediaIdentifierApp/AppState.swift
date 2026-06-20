@@ -17,6 +17,7 @@ enum SidebarSection: Hashable {
     case movies
     case series
     case convert
+    case watch
     case log
 }
 
@@ -54,6 +55,24 @@ final class AppState: ObservableObject {
     // Conversion options (FR16/FR17 scaffold).
     @Published var conversionOptions = ConversionOptions()
 
+    // Watch folder (FR20). Auto-imports (and optionally auto-renames) finished
+    // downloads dropped into a chosen folder.
+    @Published var watchEnabled = false {
+        didSet {
+            UserDefaults.standard.set(watchEnabled, forKey: Keys.watchEnabled)
+            restartWatch()
+        }
+    }
+    @Published var watchAutoRename = true {
+        didSet { UserDefaults.standard.set(watchAutoRename, forKey: Keys.watchAuto) }
+    }
+    @Published var watchFolderPath = "" {
+        didSet { UserDefaults.standard.set(watchFolderPath, forKey: Keys.watchPath) }
+    }
+    @Published private(set) var watchActivity: [String] = []
+    private let watchScanner = WatchFolderScanner()
+    private var watchTimer: Timer?
+
     // Interactive conflict resolution (FR11, "Ask"). Non-empty drives a sheet.
     @Published var conflictsToResolve: [RenameItem] = []
 
@@ -77,6 +96,9 @@ final class AppState: ObservableObject {
     private enum Keys {
         static let onlineLookup = "onlineLookupEnabled"
         static let tmdbKey = "tmdbAPIKey"
+        static let watchEnabled = "watchEnabled"
+        static let watchAuto = "watchAutoRename"
+        static let watchPath = "watchFolderPath"
     }
 
     /// Original scanned media, kept so the plan can be rebuilt when settings change.
@@ -87,6 +109,56 @@ final class AppState: ObservableObject {
         canUndo = journal.canUndo
         onlineLookupEnabled = UserDefaults.standard.bool(forKey: Keys.onlineLookup)
         tmdbAPIKey = UserDefaults.standard.string(forKey: Keys.tmdbKey) ?? ""
+        watchAutoRename = UserDefaults.standard.object(forKey: Keys.watchAuto) as? Bool ?? true
+        watchFolderPath = UserDefaults.standard.string(forKey: Keys.watchPath) ?? ""
+        watchEnabled = UserDefaults.standard.bool(forKey: Keys.watchEnabled)
+        // didSet does not fire during init, so start the watcher explicitly.
+        restartWatch()
+    }
+
+    // MARK: Watch folder (FR20)
+
+    var watchFolderURL: URL? {
+        watchFolderPath.isEmpty ? nil : URL(fileURLWithPath: watchFolderPath)
+    }
+
+    func setWatchFolder(_ url: URL) {
+        watchFolderPath = url.path
+        watchScanner.reset()
+        restartWatch()
+    }
+
+    private func restartWatch() {
+        watchTimer?.invalidate()
+        watchTimer = nil
+        guard watchEnabled, let folder = watchFolderURL else { return }
+        watchScanner.reset()
+        logActivity("Überwachung gestartet: \(folder.lastPathComponent)")
+        let timer = Timer.scheduledTimer(withTimeInterval: 4, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.pollWatch() }
+        }
+        watchTimer = timer
+        // Run an immediate first poll so existing files are picked up promptly.
+        pollWatch()
+    }
+
+    private func pollWatch() {
+        guard watchEnabled, let folder = watchFolderURL else { return }
+        let found = watchScanner.poll(directory: folder)
+        guard !found.isEmpty else { return }
+        let names = found.map { $0.lastPathComponent }.joined(separator: ", ")
+        logActivity("\(found.count) neue Datei(en) erkannt: \(names)")
+        importURLs(found)
+        if watchAutoRename {
+            logActivity("Automatische Umbenennung gestartet …")
+            runExecution(resolutions: [:])
+        }
+    }
+
+    private func logActivity(_ message: String) {
+        let stamp = DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium)
+        watchActivity.insert("\(stamp)  \(message)", at: 0)
+        if watchActivity.count > 100 { watchActivity.removeLast() }
     }
 
     private var namer: JellyfinNamer { JellyfinNamer(options: namingOptions) }

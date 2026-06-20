@@ -22,6 +22,9 @@ struct SidebarView: View {
             sectionLabel("Werkzeuge").padding(.top, 14)
             SidebarRow(title: "Konvertieren", systemImage: "arrow.triangle.2.circlepath",
                        section: .convert, trailingTag: "FFmpeg")
+            SidebarRow(title: "Watch-Ordner", systemImage: "eye",
+                       section: .watch,
+                       trailingTag: state.watchEnabled ? "AN" : nil)
 
             sectionLabel("Verlauf").padding(.top, 14)
             SidebarRow(title: "Protokoll", systemImage: "clock.arrow.circlepath",
