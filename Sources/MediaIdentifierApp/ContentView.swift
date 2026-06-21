@@ -43,18 +43,20 @@ private struct TitleBar: View {
     private var isOnline: Bool { state.onlineLookupEnabled && !state.tmdbAPIKey.isEmpty }
 
     var body: some View {
-        ZStack {
+        // Everything on a single horizontal line: traffic lights (system, left),
+        // the name, then the status lamps and the mode badge on the right.
+        HStack(spacing: 10) {
+            Color.clear.frame(width: 70)        // room for the traffic lights
             Text("Mediafin")
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(Color(hex: 0xD7D7DA))
-            HStack {
-                Spacer()
-                badge
-            }
-            .padding(.trailing, 12)
+            Spacer()
+            lamps
+            badge
         }
-        .frame(height: 28)          // match the standard title-bar height so the
-        .frame(maxWidth: .infinity) // title sits on one line with the traffic lights
+        .padding(.trailing, 12)
+        .frame(height: 30)
+        .frame(maxWidth: .infinity)
         .background(
             LinearGradient(colors: [Theme.titleBarTop, Theme.titleBarBot], startPoint: .top, endPoint: .bottom)
         )
@@ -66,6 +68,54 @@ private struct TitleBar: View {
 
     private var usingLocalAI: Bool { state.useAppleIntelligence && state.appleIntelligenceSupported }
     private var usingLocalDB: Bool { state.useLocalDatabase && state.localDatabaseCount > 0 }
+
+    // MARK: Status lamps (red/yellow/green at-a-glance, on the same line)
+
+    /// A compact traffic-light style overview of the optional subsystems.
+    private var lamps: some View {
+        HStack(spacing: 7) {
+            lamp(state.ffmpegAvailable ? .ok : .bad,
+                 symbol: "film",
+                 help: state.ffmpegAvailable ? "FFmpeg: ready" : "FFmpeg: not found (Convert → Set up)",
+                 action: { state.section = .convert })
+            lamp(state.jellyfinConfigured ? .ok : .off,
+                 symbol: "play.rectangle.on.rectangle",
+                 help: state.jellyfinConfigured ? "Jellyfin: connected" : "Jellyfin: not configured",
+                 action: { state.openSettings(.server) })
+            lamp(state.watchActive ? .ok : .off,
+                 symbol: "eye",
+                 help: state.watchActive ? "Watch folder: active" : "Watch folder: off",
+                 action: { state.section = .watch })
+            lamp(state.webEnabled ? .ok : .off,
+                 symbol: "globe.badge.chevron.backward",
+                 help: state.webEnabled ? "Status web page: on" : "Status web page: off",
+                 action: { state.openSettings(.server) })
+        }
+    }
+
+    private enum LampState { case ok, warn, bad, off
+        var color: Color {
+            switch self {
+            case .ok: return Theme.accentBright
+            case .warn: return Theme.warn
+            case .bad: return Color(hex: 0xE05A4F)
+            case .off: return Theme.textTertiary
+            }
+        }
+    }
+
+    private func lamp(_ s: LampState, symbol: String, help: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(s.color)
+                .frame(width: 18, height: 18)
+                .background(s.color.opacity(0.14), in: RoundedRectangle(cornerRadius: 5))
+                .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(s.color.opacity(0.35), lineWidth: 0.5))
+        }
+        .buttonStyle(.plain)
+        .help(help)
+    }
 
     private var badge: some View {
         let color = isOnline ? Theme.movie : Theme.accentGlow
