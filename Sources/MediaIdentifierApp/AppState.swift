@@ -91,6 +91,8 @@ final class AppState: ObservableObject {
     }
     private let webServer = StatusWebServer()
     private var webTimer: Timer?
+    /// Whether the most recent run ended with failures (drives /healthz).
+    private var lastRunHadError = false
 
     // Jellyfin library connector (FR20). After a successful rename/move, ask the
     // local Jellyfin server to rescan so the files are exported into the library
@@ -282,7 +284,8 @@ final class AppState: ObservableObject {
             done: doneCount,
             lastResult: lastResult,
             watchActive: watchActive,
-            jellyfinConfigured: jellyfinConfigured
+            jellyfinConfigured: jellyfinConfigured,
+            hasError: lastRunHadError
         ))
     }
 
@@ -463,6 +466,8 @@ final class AppState: ObservableObject {
         convFailed = 0
         convertProgress = 0
         convertStatus = "Konvertiere…"
+        lastRunHadError = false
+        publishStatus()
         processNext()
     }
 
@@ -530,6 +535,8 @@ final class AppState: ObservableObject {
         convertDetail = nil
         convertStatus = (stopped ? "Gestoppt" : "Fertig")
             + ": \(convDone) konvertiert, \(convFailed) fehlgeschlagen."
+        lastRunHadError = convFailed > 0
+        publishStatus()
     }
 
     nonisolated static func conversionOutputURL(for input: URL, options: ConversionOptions) -> URL {
@@ -955,6 +962,8 @@ final class AppState: ObservableObject {
         progress = 0
         lastResult = nil
         didUndo = false
+        lastRunHadError = false
+        publishStatus()
 
         let plan = runnablePlan()
         let policy = conflictPolicy
@@ -989,6 +998,8 @@ final class AppState: ObservableObject {
         logEntries = log.entries
         canUndo = journal.canUndo
         lastResult = "Fertig: \(outcome.succeeded) umbenannt, \(outcome.skipped) übersprungen, \(outcome.failed) fehlgeschlagen."
+        lastRunHadError = outcome.failed > 0
+        publishStatus()
         // Tell Jellyfin to rescan so the renamed files are exported (FR20).
         if outcome.succeeded > 0 { refreshJellyfinIfNeeded() }
     }

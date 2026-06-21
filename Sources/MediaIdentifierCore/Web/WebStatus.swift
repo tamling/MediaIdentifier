@@ -23,6 +23,9 @@ public struct StatusSnapshot: Codable, Sendable, Equatable {
     public var lastResult: String?
     public var watchActive: Bool
     public var jellyfinConfigured: Bool
+    /// True when the most recent run finished with one or more failures, so the
+    /// health endpoint can report an error via its HTTP status code.
+    public var hasError: Bool
 
     public init(
         updated: Date = Date(),
@@ -40,7 +43,8 @@ public struct StatusSnapshot: Codable, Sendable, Equatable {
         done: Int = 0,
         lastResult: String? = nil,
         watchActive: Bool = false,
-        jellyfinConfigured: Bool = false
+        jellyfinConfigured: Bool = false,
+        hasError: Bool = false
     ) {
         self.updated = updated
         self.busy = busy
@@ -58,6 +62,13 @@ public struct StatusSnapshot: Codable, Sendable, Equatable {
         self.lastResult = lastResult
         self.watchActive = watchActive
         self.jellyfinConfigured = jellyfinConfigured
+        self.hasError = hasError
+    }
+
+    /// Percent (0–100) of whichever job is currently active.
+    public var activePercent: Int {
+        let fraction = converting ? convertProgress : renameProgress
+        return max(0, min(100, Int((fraction * 100).rounded())))
     }
 
     public static let empty = StatusSnapshot()
@@ -102,7 +113,9 @@ public enum StatusHTTP {
         case "/api/status", "/api/status/":
             return response(contentType: "application/json", body: json(snapshot))
         case "/healthz":
-            return response(contentType: "text/plain; charset=utf-8", body: Data("ok".utf8))
+            let health = self.health(snapshot)
+            return response(status: health.status, contentType: "text/plain; charset=utf-8",
+                            body: Data(health.body.utf8))
         case "/", "/index.html":
             return response(contentType: "text/html; charset=utf-8", body: Data(html(snapshot).utf8))
         default:
@@ -111,10 +124,26 @@ public enum StatusHTTP {
         }
     }
 
+    /// Maps the snapshot to an HTTP status for a plain reachability monitor:
+    /// - 200 OK    → idle and successful (a run finished at 100 %, or nothing to do)
+    /// - 503       → a job is still running (not yet 100 %)
+    /// - 500       → the last run finished with errors
+    /// So in Uptime Kuma a basic HTTP monitor accepting only 200 goes "down"
+    /// while running or on error and recovers ("up") when a run completes cleanly.
+    public static func health(_ s: StatusSnapshot) -> (status: String, body: String) {
+        if s.hasError {
+            return ("500 Internal Server Error", "error: \(s.lastResult ?? "letzter Lauf fehlgeschlagen")")
+        }
+        if s.busy {
+            return ("503 Service Unavailable", "busy \(s.activePercent)%")
+        }
+        return ("200 OK", "ok")
+    }
+
     /// Minimal read-only dashboard with a 2s auto-refresh.
     public static func html(_ s: StatusSnapshot) -> String {
-        let stateLabel = s.busy ? "Beschäftigt" : "Bereit"
-        let stateColor = s.busy ? "#f0a020" : "#36c98d"
+        let stateLabel = s.hasError ? "Fehler" : (s.busy ? "Beschäftigt (\(s.activePercent) %)" : "Bereit")
+        let stateColor = s.hasError ? "#e05a4f" : (s.busy ? "#f0a020" : "#36c98d")
         func esc(_ value: String) -> String {
             value.replacingOccurrences(of: "&", with: "&amp;")
                 .replacingOccurrences(of: "<", with: "&lt;")

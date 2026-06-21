@@ -239,7 +239,7 @@ struct MetadataSettingsView: View {
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                Text("Stellt eine reine Ansichts-Seite mit dem aktuellen Stand bereit. In Uptime Kuma einen „HTTP(s) – JSON query“-Monitor anlegen, URL …/api/status, Query „busy“, erwarteter Wert „false“ → Kuma meldet, sobald ein Lauf startet (down) und wieder fertig ist (up). Es werden keine Befehle entgegengenommen, keine Tokens angezeigt.")
+                Text("Stellt eine reine Ansichts-Seite mit dem aktuellen Stand bereit. Einfaches Erreichbarkeits-Monitoring: in Uptime Kuma einen normalen HTTP-Monitor auf …/healthz mit akzeptiertem Status 200 anlegen → 200 = fertig (100 %), 503 = läuft noch, 500 = Fehler; Kuma meldet damit Abschluss und Fehler. Alternativ JSON: …/api/status mit Feld „busy“. Es werden keine Befehle entgegengenommen, keine Tokens angezeigt.")
                     .font(.caption).foregroundStyle(Theme.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
