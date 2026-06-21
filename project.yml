@@ -24,6 +24,16 @@ targets:
     platform: macOS
     sources:
       - path: Sources/MediaIdentifierApp
+    info:
+      path: MediaIdentifier-Info.plist
+      properties:
+        LSApplicationCategoryType: public.app-category.utilities
+        NSHumanReadableCopyright: ""
+        # Allow plaintext HTTP only to local/LAN hosts (link-local, .local and
+        # IP literals) so the Jellyfin connector can reach a local server.
+        # Public endpoints such as TMDb still require HTTPS.
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
     dependencies:
       - package: MediaIdentifierCore
         product: MediaIdentifierCore
@@ -33,9 +43,6 @@ targets:
         PRODUCT_NAME: MediaIdentifier
         MARKETING_VERSION: "1.0"
         CURRENT_PROJECT_VERSION: "1"
-        GENERATE_INFOPLIST_FILE: YES
-        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.utilities
-        INFOPLIST_KEY_NSHumanReadableCopyright: ""
         SWIFT_VERSION: "5.9"
         ARCHS: arm64
         CODE_SIGN_STYLE: Automatic

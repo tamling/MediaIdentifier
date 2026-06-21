@@ -70,12 +70,19 @@ public struct ConversionOptions: Codable, Sendable, Equatable {
     ) {
         self.videoCodec = videoCodec
         self.useHardwareAcceleration = useHardwareAcceleration
-        self.quality = quality
+        // Keep RF/CRF within the meaningful range so a stray value can't produce
+        // a malformed encoder argument.
+        self.quality = min(max(quality, 0), 51)
         self.preset = preset
         self.tenBit = tenBit
-        self.targetHeight = targetHeight
+        // Clamp to sane video heights; ignore non-positive/oversized values.
+        if let targetHeight, targetHeight >= 120, targetHeight <= 8192 {
+            self.targetHeight = targetHeight
+        } else {
+            self.targetHeight = nil
+        }
         self.audioMode = audioMode
-        self.audioBitrate = audioBitrate
+        self.audioBitrate = min(max(audioBitrate, 8), 1024)
         self.keepOnlyFirstAudio = keepOnlyFirstAudio
         self.stripSubtitles = stripSubtitles
     }

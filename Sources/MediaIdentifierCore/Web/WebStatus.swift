@@ -98,10 +98,13 @@ public enum StatusHTTP {
 
     /// Builds a complete HTTP/1.1 response (headers + body).
     public static func response(status: String = "200 OK", contentType: String, body: Data) -> Data {
+        // No CORS header: monitors like Uptime Kuma fetch server-side, and the
+        // dashboard is same-origin. Omitting it prevents arbitrary websites from
+        // reading the status via a visitor's browser.
         var header = "HTTP/1.1 \(status)\r\n"
         header += "Content-Type: \(contentType)\r\n"
         header += "Content-Length: \(body.count)\r\n"
-        header += "Access-Control-Allow-Origin: *\r\n"
+        header += "X-Content-Type-Options: nosniff\r\n"
         header += "Cache-Control: no-store\r\n"
         header += "Connection: close\r\n\r\n"
         return Data(header.utf8) + body

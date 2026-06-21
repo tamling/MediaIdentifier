@@ -232,6 +232,8 @@ struct MetadataSettingsView: View {
                         .disabled(!state.webEnabled)
                     Spacer()
                 }
+                Toggle("Nur lokal erreichbar (127.0.0.1)", isOn: $state.webLocalOnly)
+                    .disabled(!state.webEnabled)
                 if state.webEnabled {
                     Text("Geöffnet: \(state.webURL)  ·  JSON: \(state.webURL)api/status")
                         .font(.system(size: 11, design: .monospaced))
@@ -239,7 +241,7 @@ struct MetadataSettingsView: View {
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                Text("Stellt eine reine Ansichts-Seite mit dem aktuellen Stand bereit. Einfaches Erreichbarkeits-Monitoring: in Uptime Kuma einen normalen HTTP-Monitor auf …/healthz mit akzeptiertem Status 200 anlegen → 200 = fertig (100 %), 503 = läuft noch, 500 = Fehler; Kuma meldet damit Abschluss und Fehler. Alternativ JSON: …/api/status mit Feld „busy“. Es werden keine Befehle entgegengenommen, keine Tokens angezeigt.")
+                Text("Stellt eine reine Ansichts-Seite mit dem aktuellen Stand bereit. Einfaches Erreichbarkeits-Monitoring: in Uptime Kuma einen normalen HTTP-Monitor auf …/healthz mit akzeptiertem Status 200 anlegen → 200 = fertig (100 %), 503 = läuft noch, 500 = Fehler; Kuma meldet damit Abschluss und Fehler. Alternativ JSON: …/api/status mit Feld „busy“. „Nur lokal“ einschalten, wenn Kuma auf demselben Mac läuft (sonst im LAN erreichbar). Es werden keine Befehle entgegengenommen, keine Tokens oder vollständigen Pfade angezeigt.")
                     .font(.caption).foregroundStyle(Theme.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
             }

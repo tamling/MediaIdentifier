@@ -24,17 +24,27 @@ final class StatusWebServer: @unchecked Sendable {
     /// Publishes a new snapshot to be served on the next request.
     func update(_ snapshot: StatusSnapshot) { box.set(snapshot) }
 
-    /// Starts listening on `port` (all interfaces, so a monitor on another host
-    /// on the LAN can reach it). Returns false if the port is invalid or in use.
+    /// Starts listening on `port`. When `localOnly` is true the socket is bound
+    /// to 127.0.0.1 (only this Mac can reach it); otherwise it listens on all
+    /// interfaces so a monitor on another LAN host (e.g. Uptime Kuma on a NAS)
+    /// can reach it. Returns false if the port is invalid or in use.
     @discardableResult
-    func start(port: Int) -> Bool {
+    func start(port: Int, localOnly: Bool) -> Bool {
         stop()
         guard (1...65535).contains(port), let nwPort = NWEndpoint.Port(rawValue: UInt16(port)) else {
             return false
         }
         let params = NWParameters.tcp
         params.allowLocalEndpointReuse = true
-        guard let listener = try? NWListener(using: params, on: nwPort) else { return false }
+        let listener: NWListener?
+        if localOnly {
+            // Bind explicitly to loopback so the port is not exposed on the LAN.
+            params.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: nwPort)
+            listener = try? NWListener(using: params)
+        } else {
+            listener = try? NWListener(using: params, on: nwPort)
+        }
+        guard let listener else { return false }
         listener.newConnectionHandler = { [weak self] connection in
             self?.handle(connection)
         }

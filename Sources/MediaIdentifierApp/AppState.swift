@@ -89,6 +89,10 @@ final class AppState: ObservableObject {
     @Published var webPort = 8765 {
         didSet { UserDefaults.standard.set(webPort, forKey: Keys.webPort); restartWebServer() }
     }
+    /// When true, the status server binds to 127.0.0.1 only (not the LAN).
+    @Published var webLocalOnly = false {
+        didSet { UserDefaults.standard.set(webLocalOnly, forKey: Keys.webLocalOnly); restartWebServer() }
+    }
     private let webServer = StatusWebServer()
     private var webTimer: Timer?
     /// Whether the most recent run ended with failures (drives /healthz).
@@ -204,6 +208,7 @@ final class AppState: ObservableObject {
         static let jellyfinKey = "jellyfinAPIKey"
         static let webEnabled = "webEnabled"
         static let webPort = "webPort"
+        static let webLocalOnly = "webLocalOnly"
     }
 
     /// Original scanned media, kept so the plan can be rebuilt when settings change.
@@ -234,6 +239,7 @@ final class AppState: ObservableObject {
         jellyfinServerURL = UserDefaults.standard.string(forKey: Keys.jellyfinServer) ?? ""
         jellyfinAPIKey = KeychainStore.get(Keys.jellyfinKey)
         webPort = UserDefaults.standard.object(forKey: Keys.webPort) as? Int ?? 8765
+        webLocalOnly = UserDefaults.standard.bool(forKey: Keys.webLocalOnly)
         webEnabled = UserDefaults.standard.bool(forKey: Keys.webEnabled)
         if useLocalDatabase, !localDatabasePath.isEmpty { loadDatabase() }
         watchAutoRename = UserDefaults.standard.object(forKey: Keys.watchAuto) as? Bool ?? true
@@ -247,14 +253,17 @@ final class AppState: ObservableObject {
     // MARK: Status web server (FR20)
 
     /// Hostname-based URL shown in Settings (reachable on the LAN via mDNS).
-    var webURL: String { "http://\(ProcessInfo.processInfo.hostName):\(webPort)/" }
+    var webURL: String {
+        let host = webLocalOnly ? "localhost" : ProcessInfo.processInfo.hostName
+        return "http://\(host):\(webPort)/"
+    }
 
     private func restartWebServer() {
         webTimer?.invalidate()
         webTimer = nil
         webServer.stop()
         guard webEnabled else { return }
-        guard webServer.start(port: webPort) else {
+        guard webServer.start(port: webPort, localOnly: webLocalOnly) else {
             lastResult = "Status-Webseite: Port \(webPort) konnte nicht geöffnet werden."
             return
         }
