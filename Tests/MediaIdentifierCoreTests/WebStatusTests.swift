@@ -33,7 +33,7 @@ final class WebStatusTests: XCTestCase {
         let text = String(decoding: response, as: UTF8.self)
         XCTAssertTrue(text.contains("Content-Type: text/html"))
         XCTAssertTrue(text.contains("<!DOCTYPE html>"))
-        XCTAssertTrue(text.contains("Bereit"))
+        XCTAssertTrue(text.contains("Ready"))
     }
 
     func testRouteUnknownIs404() {
