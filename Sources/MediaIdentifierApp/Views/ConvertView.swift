@@ -149,6 +149,15 @@ struct ConvertView: View {
                             .font(.caption).foregroundStyle(Theme.textSecondary)
                     }
                     .padding(.top, 2)
+                    if let estimate = state.convertEstimateText {
+                        HStack(spacing: 6) {
+                            Image(systemName: "internaldrive").font(.system(size: 11))
+                            Text(estimate).font(.system(size: 12, weight: .semibold))
+                            Spacer()
+                        }
+                        .foregroundStyle(Theme.accentBright)
+                        .padding(.top, 2)
+                    }
                 }
             }
         }
@@ -218,6 +227,15 @@ struct ConvertView: View {
                     Text("kleiner").font(.caption2).foregroundStyle(Theme.textTertiary)
                 }
             }
+
+            // Perceptual quality indicator (about how it looks, not the bitrate).
+            HStack(spacing: 8) {
+                Circle().fill(qualityColor(state.convertQuality.rank)).frame(width: 9, height: 9)
+                Text("Bildqualität: \(state.convertQuality.label)")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Theme.textRow)
+                Spacer()
+            }
             note("1080p: 20–22, 4K: 22–26.")
 
             if isSoftware {
@@ -259,6 +277,16 @@ struct ConvertView: View {
 
             Toggle("Nur erste Tonspur behalten", isOn: $state.conversionOptions.keepOnlyFirstAudio)
             Toggle("Untertitelspuren entfernen", isOn: $state.conversionOptions.stripSubtitles)
+        }
+    }
+
+    private func qualityColor(_ rank: Int) -> Color {
+        switch rank {
+        case 4: return Theme.accentBright
+        case 3: return Theme.accent
+        case 2: return Theme.movie
+        case 1: return Theme.warn
+        default: return Color(hex: 0xE05A4F)
         }
     }
 

@@ -1,21 +1,18 @@
 import SwiftUI
 
-/// Left navigation rail (Bibliothek / Werkzeuge / Verlauf) plus Einstellungen.
+/// Left navigation rail. Stable layout (constant row height/weight so items
+/// don't shift on click) with live activity indicators. Settings now lives in
+/// the menu bar (⌘,).
 struct SidebarView: View {
     @EnvironmentObject private var state: AppState
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            sectionLabel("Allgemein")
-            SidebarRow(title: "Übersicht", systemImage: "gauge", section: .overview)
-
-            sectionLabel("Bibliothek").padding(.top, 14)
-            SidebarRow(
-                title: "Warteschlange",
-                systemImage: "tray.and.arrow.down.fill",
-                section: .queue,
-                badge: state.hasFiles ? "\(state.items.count)" : nil
-            )
+            sectionLabel("Bibliothek")
+            SidebarRow(title: "Warteschlange", systemImage: "tray.and.arrow.down.fill",
+                       section: .queue,
+                       badge: state.hasFiles ? "\(state.items.count)" : nil,
+                       active: state.isProcessing)
             SidebarRow(title: "Filme", systemImage: "film",
                        section: .movies, badge: state.movieCount > 0 ? "\(state.movieCount)" : nil)
             SidebarRow(title: "Serien", systemImage: "tv",
@@ -23,10 +20,13 @@ struct SidebarView: View {
 
             sectionLabel("Werkzeuge").padding(.top, 14)
             SidebarRow(title: "Konvertieren", systemImage: "arrow.triangle.2.circlepath",
-                       section: .convert, trailingTag: "FFmpeg")
+                       section: .convert,
+                       trailingTag: state.isConverting ? nil : "FFmpeg",
+                       active: state.isConverting)
             SidebarRow(title: "Watch-Ordner", systemImage: "eye",
                        section: .watch,
-                       trailingTag: state.watchEnabled ? "AN" : nil)
+                       trailingTag: state.watchEnabled ? "AN" : nil,
+                       active: state.watchActive)
 
             sectionLabel("Verlauf").padding(.top, 14)
             SidebarRow(title: "Protokoll", systemImage: "clock.arrow.circlepath",
@@ -34,14 +34,7 @@ struct SidebarView: View {
 
             Spacer()
 
-            Button(action: { state.showingSettings = true }) {
-                Label("Einstellungen", systemImage: "slider.horizontal.3")
-                    .labelStyle(SidebarLabelStyle())
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(Theme.textRow)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 7)
+            SidebarRow(title: "Übersicht", systemImage: "gauge", section: .overview)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 14)
@@ -67,6 +60,7 @@ private struct SidebarRow: View {
     let section: SidebarSection
     var badge: String? = nil
     var trailingTag: String? = nil
+    var active: Bool = false
 
     @State private var hovering = false
 
@@ -79,50 +73,41 @@ private struct SidebarRow: View {
                     .font(.system(size: 14, weight: .medium))
                     .frame(width: 18)
                 Text(title)
-                    .font(.system(size: 13.5, weight: isSelected ? .semibold : .medium))
+                    .font(.system(size: 13.5, weight: .medium))   // constant weight → no reflow
                 Spacer(minLength: 4)
-                if let badge {
+                if active {
+                    ProgressView().controlSize(.small).scaleEffect(0.7)
+                        .frame(width: 14, height: 14)
+                } else if let badge {
                     Text(badge)
                         .font(.system(size: 11.5, weight: .bold))
                         .foregroundStyle(isSelected ? .white : Theme.textSecondary)
-                        .padding(.horizontal, 7)
-                        .padding(.vertical, 1)
-                        .background(
-                            Capsule().fill(isSelected ? Color.white.opacity(0.22) : Theme.chipBg)
-                        )
-                }
-                if let trailingTag {
+                        .padding(.horizontal, 7).padding(.vertical, 1)
+                        .background(Capsule().fill(isSelected ? Color.white.opacity(0.22) : Theme.chipBg))
+                } else if let trailingTag {
                     Text(trailingTag)
                         .font(.system(size: 10, weight: .bold))
                         .foregroundStyle(Theme.textSecondary)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 1)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 6)
-                                .strokeBorder(Color.white.opacity(0.14), lineWidth: 0.5)
-                        )
+                        .padding(.horizontal, 6).padding(.vertical, 1)
+                        .overlay(RoundedRectangle(cornerRadius: 6)
+                            .strokeBorder(Color.white.opacity(0.14), lineWidth: 0.5))
                 }
             }
             .foregroundStyle(isSelected ? .white : Theme.textRow)
             .padding(.horizontal, 10)
-            .padding(.vertical, 7)
+            .frame(height: 34)                       // fixed height → stable layout
+            .frame(maxWidth: .infinity, alignment: .leading)
             .background(
-                RoundedRectangle(cornerRadius: 7)
+                RoundedRectangle(cornerRadius: 8)
                     .fill(isSelected ? Theme.accent : (hovering ? Theme.hover : .clear))
-                    .shadow(color: isSelected ? .black.opacity(0.25) : .clear, radius: 1, y: 1)
             )
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .strokeBorder(Color.white.opacity(hovering && !isSelected ? 0.06 : 0), lineWidth: 1)
+            )
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
-    }
-}
-
-private struct SidebarLabelStyle: LabelStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        HStack(spacing: 10) {
-            configuration.icon.font(.system(size: 14, weight: .medium)).frame(width: 18)
-            configuration.title.font(.system(size: 13.5, weight: .medium))
-            Spacer()
-        }
     }
 }

@@ -16,6 +16,10 @@ struct MediaIdentifierApp: App {
         }
         .windowStyle(.hiddenTitleBar)
         .commands {
+            CommandGroup(replacing: .appSettings) {
+                Button("Einstellungen…") { state.showingSettings = true }
+                    .keyboardShortcut(",", modifiers: [.command])
+            }
             CommandGroup(after: .pasteboard) {
                 Button("Umbenennung rückgängig") { state.undoLast() }
                     .keyboardShortcut("z", modifiers: [.command])

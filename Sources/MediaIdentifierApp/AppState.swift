@@ -113,6 +113,7 @@ final class AppState: ObservableObject {
     private var convDone = 0
     private var convFailed = 0
     private let processBox = ProcessBox()
+    private var convertSizes: [URL: Int64] = [:]
 
     // Watch folder (FR20). Auto-imports (and optionally auto-renames) finished
     // downloads dropped into a chosen folder.
@@ -316,7 +317,39 @@ final class AppState: ObservableObject {
         if let current = currentConvert { seen.insert(current.standardizedFileURL.path) }
         for url in found where seen.insert(url.standardizedFileURL.path).inserted {
             convertFiles.append(url)
+            convertSizes[url] = Self.fileSize(url)
         }
+    }
+
+    private static func fileSize(_ url: URL) -> Int64 {
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+              let size = attrs[.size] as? NSNumber else { return 0 }
+        return size.int64Value
+    }
+
+    // MARK: Conversion estimate (FR16)
+
+    /// Files still to process (current + pending).
+    private var convertRemainingURLs: [URL] { (currentConvert.map { [$0] } ?? []) + convertFiles }
+    var convertRemainingBytes: Int64 {
+        convertRemainingURLs.reduce(0) { $0 + (convertSizes[$1] ?? 0) }
+    }
+    var convertQuality: ConversionEstimator.Quality {
+        ConversionEstimator.quality(options: conversionOptions)
+    }
+    /// Human-readable size estimate, e.g. "≈ 3,2 GB statt 7,1 GB · spart ~55 %".
+    var convertEstimateText: String? {
+        let input = convertRemainingBytes
+        guard input > 0, conversionOptions.videoCodec != .copy else { return nil }
+        let fraction = ConversionEstimator.sizeFraction(options: conversionOptions)
+        let output = Int64(Double(input) * fraction)
+        let saved = input - output
+        let pct = Int((Double(saved) / Double(input) * 100).rounded())
+        let f: (Int64) -> String = { ByteCountFormatter.string(fromByteCount: $0, countStyle: .file) }
+        if saved >= 0 {
+            return "≈ \(f(output)) statt \(f(input)) · spart ~\(pct) %"
+        }
+        return "≈ \(f(output)) statt \(f(input)) · ~+\(-pct) % größer"
     }
 
     func removeConvertFile(_ url: URL) {
