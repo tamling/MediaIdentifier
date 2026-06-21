@@ -34,6 +34,9 @@ public struct ParsedRelease: Equatable, Codable, Sendable {
     public var releaseGroup: String?
     /// Whether the file is a movie or an episode.
     public var kind: MediaKind
+    /// Name of the metadata source that confirmed title/year (e.g. "TMDb"),
+    /// shown as provenance in the UI (FR4). nil when only locally parsed.
+    public var matchSource: String?
 
     public init(
         originalFileName: String,
@@ -46,7 +49,8 @@ public struct ParsedRelease: Equatable, Codable, Sendable {
         source: String? = nil,
         codec: String? = nil,
         releaseGroup: String? = nil,
-        kind: MediaKind = .unknown
+        kind: MediaKind = .unknown,
+        matchSource: String? = nil
     ) {
         self.originalFileName = originalFileName
         self.title = title
@@ -59,6 +63,7 @@ public struct ParsedRelease: Equatable, Codable, Sendable {
         self.codec = codec
         self.releaseGroup = releaseGroup
         self.kind = kind
+        self.matchSource = matchSource
     }
 }
 

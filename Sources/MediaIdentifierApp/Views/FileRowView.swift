@@ -143,6 +143,19 @@ struct FileRowView: View {
                     .lineLimit(1).truncationMode(.middle)
             }
 
+            // Detection provenance (FR4): shows which source confirmed the title.
+            if let source = parsed.matchSource {
+                HStack(spacing: 6) {
+                    Image(systemName: "sparkle.magnifyingglass")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(Theme.accentBright)
+                    Text("Erkannt: \(parsed.title)\(parsed.year.map { " (\($0))" } ?? "") · via \(source)")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Theme.accentBright)
+                        .lineLimit(1).truncationMode(.middle)
+                }
+            }
+
             // Chips.
             HStack(spacing: 6) {
                 Chip(text: isSeries ? "SERIE" : "FILM",

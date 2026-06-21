@@ -38,7 +38,8 @@ public struct FFprobeMetadataProvider: MetadataProvider {
         return MediaMetadata(
             title: title,
             year: year ?? parsed.year,
-            kind: parsed.kind == .unknown ? .movie : parsed.kind
+            kind: parsed.kind == .unknown ? .movie : parsed.kind,
+            source: "Datei-Tags (MKV)"
         )
     }
 

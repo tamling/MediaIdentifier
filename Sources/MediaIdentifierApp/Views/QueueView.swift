@@ -9,6 +9,7 @@ struct QueueView: View {
     let title: String
 
     @State private var dragging = false
+    @FocusState private var searchFocused: Bool
 
     private var rows: [RenameItem] { state.sortedItems(in: section) }
 
@@ -32,6 +33,42 @@ struct QueueView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Theme.windowBg)
+        .background(focusButton)
+    }
+
+    /// Invisible button giving ⌘F to focus the search field (FR19 polish).
+    private var focusButton: some View {
+        Button("") { searchFocused = true }
+            .keyboardShortcut("f", modifiers: .command)
+            .opacity(0)
+            .frame(width: 0, height: 0)
+            .accessibilityHidden(true)
+    }
+
+    private var searchField: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 11)).foregroundStyle(Theme.textTertiary)
+            TextField("Suchen", text: $state.searchText)
+                .textFieldStyle(.plain)
+                .font(.system(size: 12))
+                .frame(width: 150)
+                .focused($searchFocused)
+            if !state.searchText.isEmpty {
+                Button(action: { state.searchText = "" }) {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 11)).foregroundStyle(Theme.textTertiary)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 8).padding(.vertical, 4)
+        .background(Theme.chipBg, in: RoundedRectangle(cornerRadius: 7))
+        .overlay(
+            RoundedRectangle(cornerRadius: 7)
+                .strokeBorder(searchFocused ? Theme.accent.opacity(0.5) : Color.white.opacity(0.08),
+                              lineWidth: 0.5)
+        )
     }
 
     // MARK: Toolbar
@@ -159,6 +196,20 @@ struct QueueView: View {
                 }
             }
             .buttonStyle(.plain)
+
+            searchField
+
+            Button(action: { state.hideCompleted.toggle() }) {
+                HStack(spacing: 5) {
+                    Image(systemName: state.hideCompleted ? "eye.slash" : "eye")
+                    Text("Erledigte")
+                }
+                .font(.system(size: 11.5, weight: .semibold))
+                .foregroundStyle(state.hideCompleted ? Theme.accentBright : Theme.textSecondary)
+            }
+            .buttonStyle(.plain)
+            .help("Bereits umbenannte Einträge aus- oder einblenden")
+
             Spacer()
             Button(action: { state.sortByShow.toggle() }) {
                 HStack(spacing: 5) {

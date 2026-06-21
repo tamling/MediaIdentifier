@@ -58,7 +58,8 @@ public struct TMDbMetadataProvider: MetadataProvider {
             title: title,
             year: year,
             kind: isMovie ? .movie : .episode,
-            identifier: first.id.map(String.init)
+            identifier: first.id.map(String.init),
+            source: "TMDb"
         )
     }
 

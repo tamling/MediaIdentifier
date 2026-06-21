@@ -7,12 +7,16 @@ public struct MediaMetadata: Equatable, Codable, Sendable {
     public var kind: MediaKind
     /// Provider-specific identifier (e.g. TMDb id), when available.
     public var identifier: String?
+    /// Human-readable name of the source that produced this match (e.g. "TMDb",
+    /// "Lokale DB"), used to show provenance in the UI (FR4).
+    public var source: String?
 
-    public init(title: String, year: Int? = nil, kind: MediaKind, identifier: String? = nil) {
+    public init(title: String, year: Int? = nil, kind: MediaKind, identifier: String? = nil, source: String? = nil) {
         self.title = title
         self.year = year
         self.kind = kind
         self.identifier = identifier
+        self.source = source
     }
 }
 
@@ -79,6 +83,7 @@ public struct MetadataEnricher {
         if !metadata.title.isEmpty { updated.title = metadata.title }
         if let year = metadata.year { updated.year = year }
         if updated.kind == .unknown { updated.kind = metadata.kind }
+        if let source = metadata.source { updated.matchSource = source }
         return updated
     }
 }

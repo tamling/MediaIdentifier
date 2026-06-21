@@ -30,7 +30,8 @@ public struct EmbeddedMetadataProvider: MetadataProvider {
         return MediaMetadata(
             title: trimmedTitle,
             year: year ?? parsed.year,
-            kind: parsed.kind == .unknown ? .movie : parsed.kind
+            kind: parsed.kind == .unknown ? .movie : parsed.kind,
+            source: "Datei-Tags"
         )
     }
 

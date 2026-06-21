@@ -44,6 +44,10 @@ final class AppState: ObservableObject {
     @Published var showingSettings = false
     /// Sort the preview by show → season → episode (movies by title).
     @Published var sortByShow = true
+    /// Filter the preview list by file/show name.
+    @Published var searchText = ""
+    /// Hide already-renamed rows so the working set stays focused.
+    @Published var hideCompleted = false
 
     // Settings.
     @Published var namingOptions: NamingOptions = .default { didSet { rebuildPlan() } }
@@ -755,9 +759,21 @@ final class AppState: ObservableObject {
         }
     }
 
-    /// Items for a section, optionally grouped/sorted by show → season → episode.
+    /// Items for a section after applying the search filter and hide-completed
+    /// toggle, optionally grouped/sorted by show → season → episode.
     func sortedItems(in section: SidebarSection) -> [RenameItem] {
-        let list = items(in: section)
+        var list = items(in: section)
+        if hideCompleted {
+            list = list.filter { status(for: $0) != .done }
+        }
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if !query.isEmpty {
+            list = list.filter { item in
+                item.originalFileName.lowercased().contains(query)
+                    || item.mediaFile.parsed.title.lowercased().contains(query)
+                    || item.proposedRelativePath.lowercased().contains(query)
+            }
+        }
         guard sortByShow else { return list }
         return list.sorted { a, b in
             let pa = a.mediaFile.parsed, pb = b.mediaFile.parsed

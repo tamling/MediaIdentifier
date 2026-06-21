@@ -55,7 +55,8 @@ public struct AppleIntelligenceProvider: MetadataProvider {
         return MediaMetadata(
             title: title,
             year: guess.year > 1800 ? guess.year : nil,
-            kind: guess.isSeries ? .episode : .movie
+            kind: guess.isSeries ? .episode : .movie,
+            source: "Apple Intelligence"
         )
     }
 }

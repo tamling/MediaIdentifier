@@ -137,7 +137,8 @@ public struct LocalDatabaseMetadataProvider: MetadataProvider {
         return MediaMetadata(
             title: entry.title,
             year: entry.year ?? parsed.year,
-            kind: entry.kind == .unknown ? parsed.kind : entry.kind
+            kind: entry.kind == .unknown ? parsed.kind : entry.kind,
+            source: "Lokale DB"
         )
     }
 }
