@@ -49,7 +49,7 @@ struct QueueView: View {
         HStack(spacing: 6) {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 11)).foregroundStyle(Theme.textTertiary)
-            TextField("Suchen", text: $state.searchText)
+            TextField("Search", text: $state.searchText)
                 .textFieldStyle(.plain)
                 .font(.system(size: 12))
                 .frame(width: 150)
@@ -83,22 +83,22 @@ struct QueueView: View {
             }
             Spacer()
 
-            ToolbarButton(title: "Aufräumen…", systemImage: "wand.and.stars",
+            ToolbarButton(title: "Organize…", systemImage: "wand.and.stars",
                           action: state.chooseFoldersToOrganize)
             if state.hasFiles && state.hasEnrichmentProvider {
-                ToolbarButton(title: state.isLookingUp ? "Erkenne …" : "Erneut erkennen",
+                ToolbarButton(title: state.isLookingUp ? "Identifying …" : "Re-identify",
                               systemImage: "sparkle.magnifyingglass",
                               action: state.reIdentify)
             }
             if state.hasFiles {
-                ToolbarButton(title: "Liste leeren", action: state.clear)
+                ToolbarButton(title: "Clear list", action: state.clear)
             }
             if state.hasConvertibleResults && !state.isProcessing {
-                ToolbarButton(title: "Konvertieren", systemImage: "arrow.right.circle",
+                ToolbarButton(title: "Convert", systemImage: "arrow.right.circle",
                               action: state.convertCompleted)
             }
             if state.showUndo {
-                ToolbarButton(title: "Rückgängig", systemImage: "arrow.uturn.backward",
+                ToolbarButton(title: "Undo", systemImage: "arrow.uturn.backward",
                               action: state.undoLast)
             }
             if state.canStart {
@@ -185,9 +185,9 @@ struct QueueView: View {
 
     private func header(for item: RenameItem) -> String {
         let p = item.mediaFile.parsed
-        guard p.kind == .episode else { return "Filme" }
-        let title = p.title.isEmpty ? "Unbekannt" : p.title
-        return "\(title) · Staffel \(String(format: "%02d", p.season ?? 1))"
+        guard p.kind == .episode else { return "Movies" }
+        let title = p.title.isEmpty ? "Unknown" : p.title
+        return "\(title) · Season \(String(format: "%02d", p.season ?? 1))"
     }
 
     private var listHeader: some View {
@@ -195,7 +195,7 @@ struct QueueView: View {
             Button(action: state.toggleAll) {
                 HStack(spacing: 8) {
                     CheckBox(checked: state.allChecked, size: 16)
-                    Text("Alle auswählen")
+                    Text("Select all")
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(Color(hex: 0xA0A0A6))
                 }
@@ -207,29 +207,29 @@ struct QueueView: View {
             Button(action: { state.hideCompleted.toggle() }) {
                 HStack(spacing: 5) {
                     Image(systemName: state.hideCompleted ? "eye.slash" : "eye")
-                    Text("Erledigte")
+                    Text("Completed")
                 }
                 .font(.system(size: 11.5, weight: .semibold))
                 .foregroundStyle(state.hideCompleted ? Theme.accentBright : Theme.textSecondary)
             }
             .buttonStyle(.plain)
-            .help("Bereits umbenannte Einträge aus- oder einblenden")
+            .help("Show or hide already renamed entries")
 
             Spacer()
             Button(action: { state.sortByShow.toggle() }) {
                 HStack(spacing: 5) {
                     Image(systemName: "arrow.up.arrow.down")
-                    Text(state.sortByShow ? "Serie/Staffel" : "Reihenfolge")
+                    Text(state.sortByShow ? "Show/Season" : "Order")
                 }
                 .font(.system(size: 11.5, weight: .semibold))
                 .foregroundStyle(state.sortByShow ? Theme.accentBright : Theme.textSecondary)
             }
             .buttonStyle(.plain)
-            .help("Sortierung: nach Serie → Staffel → Episode")
+            .help("Sorting: by show → season → episode")
             HStack(spacing: 14) {
-                Text("\(state.readyCount) bereit")
+                Text("\(state.readyCount) ready")
                     .foregroundStyle(Theme.accentBright)
-                Text("\(state.warnCount) prüfen")
+                Text("\(state.warnCount) review")
                     .foregroundStyle(Theme.warn)
             }
             .font(.system(size: 11.5, weight: .semibold))
@@ -250,7 +250,7 @@ struct QueueView: View {
             Spacer()
             HStack(spacing: 5) {
                 Image(systemName: "checkmark.seal").font(.system(size: 10))
-                Text("Jellyfin-Schema").font(.system(size: 11.5))
+                Text("Jellyfin scheme").font(.system(size: 11.5))
             }
             .foregroundStyle(Theme.mono)
         }
@@ -313,7 +313,7 @@ private struct DropOverlay: View {
             .foregroundStyle(Theme.accentBright)
             .background(Theme.accent.opacity(0.10), in: RoundedRectangle(cornerRadius: 16))
             .overlay(
-                Text("Zum Hinzufügen loslassen")
+                Text("Release to add")
                     .font(.system(size: 18, weight: .bold))
                     .foregroundStyle(Theme.accentBright)
             )

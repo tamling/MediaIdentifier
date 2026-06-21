@@ -8,33 +8,33 @@ struct SidebarView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            sectionLabel("Bibliothek")
-            SidebarRow(title: "Warteschlange", systemImage: "tray.and.arrow.down.fill",
+            sectionLabel("Library")
+            SidebarRow(title: "Queue", systemImage: "tray.and.arrow.down.fill",
                        section: .queue,
                        badge: state.hasFiles ? "\(state.items.count)" : nil,
                        active: state.isProcessing)
-            SidebarRow(title: "Filme", systemImage: "film",
+            SidebarRow(title: "Movies", systemImage: "film",
                        section: .movies, badge: state.movieCount > 0 ? "\(state.movieCount)" : nil)
-            SidebarRow(title: "Serien", systemImage: "tv",
+            SidebarRow(title: "Series", systemImage: "tv",
                        section: .series, badge: state.seriesCount > 0 ? "\(state.seriesCount)" : nil)
 
-            sectionLabel("Werkzeuge").padding(.top, 14)
-            SidebarRow(title: "Konvertieren", systemImage: "arrow.triangle.2.circlepath",
+            sectionLabel("Tools").padding(.top, 14)
+            SidebarRow(title: "Convert", systemImage: "arrow.triangle.2.circlepath",
                        section: .convert,
                        trailingTag: state.isConverting ? nil : "FFmpeg",
                        active: state.isConverting)
-            SidebarRow(title: "Watch-Ordner", systemImage: "eye",
+            SidebarRow(title: "Watch folder", systemImage: "eye",
                        section: .watch,
-                       trailingTag: state.watchEnabled ? "AN" : nil,
+                       trailingTag: state.watchEnabled ? "ON" : nil,
                        active: state.watchActive)
 
-            sectionLabel("Verlauf").padding(.top, 14)
-            SidebarRow(title: "Protokoll", systemImage: "clock.arrow.circlepath",
+            sectionLabel("History").padding(.top, 14)
+            SidebarRow(title: "Log", systemImage: "clock.arrow.circlepath",
                        section: .log, badge: state.logEntries.isEmpty ? nil : "\(state.logEntries.count)")
 
             Spacer()
 
-            SidebarRow(title: "Übersicht", systemImage: "gauge", section: .overview)
+            SidebarRow(title: "Overview", systemImage: "gauge", section: .overview)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 14)

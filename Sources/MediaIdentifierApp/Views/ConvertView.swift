@@ -12,7 +12,7 @@ struct ConvertView: View {
     private var o: ConversionOptions { state.conversionOptions }
 
     private var previewArgs: String {
-        let input = URL(fileURLWithPath: "/Filme/Interstellar (2014).mkv")
+        let input = URL(fileURLWithPath: "/Movies/Interstellar (2014).mkv")
         let output = AppState.conversionOutputURL(for: input, options: o)
         return "ffmpeg " + FFmpegArgumentBuilder.arguments(input: input, output: output, options: o)
             .joined(separator: " ")
@@ -42,7 +42,7 @@ struct ConvertView: View {
                     filesCard
                     videoCard
                     audioCard
-                    card("Befehlsvorschau") {
+                    card("Command preview") {
                         Text(previewArgs)
                             .font(.system(size: 11.5, design: .monospaced))
                             .foregroundStyle(Theme.textRow)
@@ -63,7 +63,7 @@ struct ConvertView: View {
     private var header: some View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 1) {
-                Text("Konvertieren").font(.system(size: 15, weight: .bold))
+                Text("Convert").font(.system(size: 15, weight: .bold))
                     .foregroundStyle(Theme.textPrimary)
                 Text(state.convertStatus ?? "Constant Quality (RF) · FFmpeg · VideoToolbox")
                     .font(.system(size: 11.5)).foregroundStyle(Theme.textSecondary)
@@ -71,13 +71,13 @@ struct ConvertView: View {
             }
             Spacer()
             if !state.ffmpegAvailable {
-                Chip(text: "FFmpeg fehlt", fg: Theme.warn, bg: Theme.warn.opacity(0.14))
+                Chip(text: "FFmpeg missing", fg: Theme.warn, bg: Theme.warn.opacity(0.14))
             }
             if state.isConverting {
                 Button(action: state.stopConversion) {
                     HStack(spacing: 7) {
                         Image(systemName: "stop.fill").font(.system(size: 12, weight: .bold))
-                        Text("Stoppen").font(.system(size: 12.5, weight: .bold))
+                        Text("Stop").font(.system(size: 12.5, weight: .bold))
                     }
                     .foregroundStyle(.white)
                     .padding(.horizontal, 15).padding(.vertical, 7)
@@ -88,7 +88,7 @@ struct ConvertView: View {
                 Button(action: state.startConversion) {
                     HStack(spacing: 7) {
                         Image(systemName: "bolt.fill").font(.system(size: 12, weight: .bold))
-                        Text("\(state.convertFiles.count) konvertieren").font(.system(size: 12.5, weight: .bold))
+                        Text("Convert \(state.convertFiles.count)").font(.system(size: 12.5, weight: .bold))
                     }
                     .foregroundStyle(.white)
                     .padding(.horizontal, 15).padding(.vertical, 7)
@@ -106,11 +106,11 @@ struct ConvertView: View {
     // MARK: FFmpeg onboarding (FR16)
 
     private var ffmpegMissingCard: some View {
-        card("FFmpeg einrichten") {
+        card("Set up FFmpeg") {
             HStack(alignment: .top, spacing: 8) {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .font(.system(size: 13)).foregroundStyle(Theme.warn)
-                Text("FFmpeg wurde nicht gefunden. Zum Konvertieren entweder installieren oder eine vorhandene FFmpeg-Datei auswählen.")
+                Text("FFmpeg was not found. To convert, either install it or choose an existing FFmpeg file.")
                     .font(.caption).foregroundStyle(Theme.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
                 Spacer()
@@ -122,11 +122,11 @@ struct ConvertView: View {
                     .padding(.horizontal, 8).padding(.vertical, 5)
                     .background(Color.black.opacity(0.25), in: RoundedRectangle(cornerRadius: 6))
                     .textSelection(.enabled)
-                Button("Befehl kopieren", action: copyInstallCommand).controlSize(.small)
+                Button("Copy command", action: copyInstallCommand).controlSize(.small)
                 Spacer()
             }
             HStack(spacing: 8) {
-                Button("FFmpeg-Datei wählen…", action: chooseFFmpeg).controlSize(.small)
+                Button("Choose FFmpeg file…", action: chooseFFmpeg).controlSize(.small)
                 if !state.customFFmpegPath.isEmpty {
                     Text(state.customFFmpegPath)
                         .font(.system(size: 11, design: .monospaced))
@@ -148,15 +148,15 @@ struct ConvertView: View {
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
-        panel.prompt = "Auswählen"
-        panel.message = "Wähle die FFmpeg-Programmdatei (z. B. /opt/homebrew/bin/ffmpeg)."
+        panel.prompt = "Choose"
+        panel.message = "Choose the FFmpeg program file (e.g. /opt/homebrew/bin/ffmpeg)."
         if panel.runModal() == .OK, let url = panel.url { state.setFFmpegPath(url) }
     }
 
     // MARK: Files
 
     private var filesCard: some View {
-        card("Warteschlange") {
+        card("Queue") {
             if state.currentConvert == nil && state.convertFiles.isEmpty {
                 dropZone
             } else {
@@ -173,7 +173,7 @@ struct ConvertView: View {
                                 Image(systemName: "xmark.circle.fill").foregroundStyle(Theme.textTertiary)
                             }
                             .buttonStyle(.borderless)
-                            .help("Aktuelle Konvertierung abbrechen")
+                            .help("Cancel current conversion")
                         }
                     }
                     ForEach(state.convertFiles, id: \.self) { url in
@@ -191,12 +191,12 @@ struct ConvertView: View {
                         }
                     }
                     HStack {
-                        Button("Dateien hinzufügen…", action: chooseFiles).controlSize(.small)
+                        Button("Add files…", action: chooseFiles).controlSize(.small)
                         if !state.convertFiles.isEmpty {
-                            Button("Wartende leeren", action: state.clearConvertFiles).controlSize(.small)
+                            Button("Clear pending", action: state.clearConvertFiles).controlSize(.small)
                         }
                         Spacer()
-                        Text("\(state.convertFiles.count) wartend")
+                        Text("\(state.convertFiles.count) pending")
                             .font(.caption).foregroundStyle(Theme.textSecondary)
                     }
                     .padding(.top, 2)
@@ -220,9 +220,9 @@ struct ConvertView: View {
             Image(systemName: "arrow.down.circle")
                 .font(.system(size: 30, weight: .light))
                 .foregroundStyle(dropTargeted ? Theme.accentBright : Theme.textSecondary)
-            Text("Videodateien zum Konvertieren hierher ziehen")
+            Text("Drag video files here to convert")
                 .font(.system(size: 13)).foregroundStyle(Theme.textSecondary)
-            Button("Dateien wählen…", action: chooseFiles).controlSize(.small)
+            Button("Choose files…", action: chooseFiles).controlSize(.small)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 26)
@@ -234,7 +234,7 @@ struct ConvertView: View {
     }
 
     private var logCard: some View {
-        card("Verlauf") {
+        card("History") {
             VStack(alignment: .leading, spacing: 4) {
                 ForEach(Array(state.convertLog.enumerated()), id: \.offset) { _, line in
                     Text(line)
@@ -254,7 +254,7 @@ struct ConvertView: View {
                 Text("H.265 / HEVC").tag(ConversionOptions.VideoCodec.h265)
                 Text("H.264").tag(ConversionOptions.VideoCodec.h264)
                 Text("AV1 (SVT)").tag(ConversionOptions.VideoCodec.av1)
-                Text("Kopieren").tag(ConversionOptions.VideoCodec.copy)
+                Text("Copy").tag(ConversionOptions.VideoCodec.copy)
             }
             .pickerStyle(.segmented)
 
@@ -276,10 +276,10 @@ struct ConvertView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(Color.white.opacity(0.03), in: RoundedRectangle(cornerRadius: 8))
 
-            Toggle("Hardwarebeschleunigung (VideoToolbox)",
+            Toggle("Hardware acceleration (VideoToolbox)",
                    isOn: $state.conversionOptions.useHardwareAcceleration)
             if o.useHardwareAcceleration {
-                note("Schnell, aber kein echtes CRF und weniger effizient. Für maximale Qualität pro Byte ausschalten.")
+                note("Fast, but no true CRF and less efficient. Turn off for maximum quality per byte.")
             }
 
             VStack(alignment: .leading, spacing: 4) {
@@ -291,16 +291,16 @@ struct ConvertView: View {
                 }
                 Slider(value: qualityBinding, in: 14...30, step: 1)
                 HStack {
-                    Text("beste Qualität / größer").font(.caption2).foregroundStyle(Theme.textTertiary)
+                    Text("best quality / larger").font(.caption2).foregroundStyle(Theme.textTertiary)
                     Spacer()
-                    Text("kleiner").font(.caption2).foregroundStyle(Theme.textTertiary)
+                    Text("smaller").font(.caption2).foregroundStyle(Theme.textTertiary)
                 }
             }
 
             // Perceptual quality indicator (about how it looks, not the bitrate).
             HStack(spacing: 8) {
                 Circle().fill(qualityColor(state.convertQuality.rank)).frame(width: 9, height: 9)
-                Text("Bildqualität: \(state.convertQuality.label)")
+                Text("Picture quality: \(state.convertQuality.label)")
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(Theme.textRow)
                 Spacer()
@@ -314,12 +314,12 @@ struct ConvertView: View {
                     }
                 }
                 .pickerStyle(.menu)
-                note("Mindestens slow-Preset für bessere Effizienz (kostet nur Encode-Zeit).")
+                note("Use at least the slow preset for better efficiency (only costs encode time).")
             }
 
-            Toggle("10-Bit (main10) – weniger Banding", isOn: $state.conversionOptions.tenBit)
+            Toggle("10-bit (main10) - less banding", isOn: $state.conversionOptions.tenBit)
 
-            Picker("Auflösung", selection: heightBinding) {
+            Picker("Resolution", selection: heightBinding) {
                 Text("Original").tag(0)
                 Text("2160p").tag(2160)
                 Text("1080p").tag(1080)
@@ -330,9 +330,9 @@ struct ConvertView: View {
     }
 
     private var audioCard: some View {
-        card("Audio & Spuren") {
+        card("Audio & Tracks") {
             Picker("Audio", selection: $state.conversionOptions.audioMode) {
-                Text("Original behalten (Passthru)").tag(ConversionOptions.AudioMode.passthrough)
+                Text("Keep original (Passthru)").tag(ConversionOptions.AudioMode.passthrough)
                 Text("Opus").tag(ConversionOptions.AudioMode.opus)
                 Text("AAC").tag(ConversionOptions.AudioMode.aac)
             }
@@ -340,29 +340,29 @@ struct ConvertView: View {
 
             if o.audioMode != .passthrough {
                 Stepper(value: $state.conversionOptions.audioBitrate, in: 64...512, step: 16) {
-                    Text("Audio-Bitrate: \(o.audioBitrate) kbps")
+                    Text("Audio bitrate: \(o.audioBitrate) kbps")
                 }
             }
 
-            Toggle("Nur erste Tonspur behalten", isOn: $state.conversionOptions.keepOnlyFirstAudio)
-            Toggle("Untertitelspuren entfernen", isOn: $state.conversionOptions.stripSubtitles)
+            Toggle("Keep only the first audio track", isOn: $state.conversionOptions.keepOnlyFirstAudio)
+            Toggle("Remove subtitle tracks", isOn: $state.conversionOptions.stripSubtitles)
         }
     }
 
     private var codecInfo: (icon: String, color: Color, headline: String, detail: String) {
         switch o.videoCodec {
         case .h265:
-            return ("star.fill", Theme.accentBright, "Empfohlen für die meisten",
-                    "Modern und sparsam: kleine Dateien bei guter Qualität. Läuft auf fast allen aktuellen Geräten (auch Apple, Jellyfin-Clients).")
+            return ("star.fill", Theme.accentBright, "Recommended for most",
+                    "Modern and efficient: small files at good quality. Runs on almost all current devices (including Apple, Jellyfin clients).")
         case .h264:
-            return ("checkmark.seal", Theme.movie, "Maximale Kompatibilität",
-                    "Läuft wirklich überall – auch auf alten Fernsehern und Geräten. Dafür sind die Dateien größer als bei H.265.")
+            return ("checkmark.seal", Theme.movie, "Maximum compatibility",
+                    "Runs literally everywhere - even on old TVs and devices. In return, the files are larger than with H.265.")
         case .av1:
-            return ("sparkles", Theme.series, "Kleinste Dateien",
-                    "Am effizientesten (noch kleiner als H.265), aber flüssig nur auf neueren Geräten mit AV1-Hardware. Das Umwandeln dauert deutlich länger.")
+            return ("sparkles", Theme.series, "Smallest files",
+                    "The most efficient (even smaller than H.265), but smooth only on newer devices with AV1 hardware. Converting takes considerably longer.")
         case .copy:
-            return ("doc.on.doc", Theme.textSecondary, "Nur umpacken",
-                    "Kein Neukodieren – das Video wird unverändert in eine MKV-Datei gelegt. Verlustfrei und sehr schnell, spart aber keinen Speicher.")
+            return ("doc.on.doc", Theme.textSecondary, "Repackage only",
+                    "No re-encoding - the video is placed unchanged into an MKV file. Lossless and very fast, but saves no storage.")
         }
     }
 

@@ -266,7 +266,7 @@ final class AppState: ObservableObject {
         webServer.stop()
         guard webEnabled else { return }
         guard webServer.start(port: webPort, localOnly: webLocalOnly) else {
-            lastResult = "Status-Webseite: Port \(webPort) konnte nicht geöffnet werden."
+            lastResult = "Status web page: port \(webPort) could not be opened."
             return
         }
         publishStatus()
@@ -317,7 +317,7 @@ final class AppState: ObservableObject {
         watchTimer = nil
         guard watchEnabled, let folder = watchFolderURL else { return }
         watchScanner.reset()
-        logActivity("Überwachung gestartet: \(folder.lastPathComponent)")
+        logActivity("Monitoring started: \(folder.lastPathComponent)")
         let timer = Timer.scheduledTimer(withTimeInterval: 4, repeats: true) { _ in
             Task { @MainActor [weak self] in self?.pollWatch() }
         }
@@ -331,10 +331,10 @@ final class AppState: ObservableObject {
         let found = watchScanner.poll(directory: folder)
         guard !found.isEmpty else { return }
         let names = found.map { $0.lastPathComponent }.joined(separator: ", ")
-        logActivity("\(found.count) neue Datei(en) erkannt: \(names)")
+        logActivity("\(found.count) new file(s) detected: \(names)")
         importURLs(found)
         if watchAutoRename {
-            logActivity("Automatische Umbenennung gestartet …")
+            logActivity("Automatic renaming started …")
             runExecution(resolutions: [:])
         }
     }
@@ -405,7 +405,7 @@ final class AppState: ObservableObject {
         panel.canChooseDirectories = true
         panel.canChooseFiles = true
         panel.allowsMultipleSelection = true
-        panel.prompt = "Aufräumen"
+        panel.prompt = "Organize"
         guard panel.runModal() == .OK, !panel.urls.isEmpty else { return }
         if !namingOptions.useMovieFolders { namingOptions.useMovieFolders = true }
         importURLs(panel.urls)
@@ -449,9 +449,9 @@ final class AppState: ObservableObject {
         let pct = Int((Double(saved) / Double(input) * 100).rounded())
         let f: (Int64) -> String = { ByteCountFormatter.string(fromByteCount: $0, countStyle: .file) }
         if saved >= 0 {
-            return "≈ \(f(output)) statt \(f(input)) · spart ~\(pct) %"
+            return "≈ \(f(output)) instead of \(f(input)) · saves ~\(pct) %"
         }
-        return "≈ \(f(output)) statt \(f(input)) · ~+\(-pct) % größer"
+        return "≈ \(f(output)) instead of \(f(input)) · ~+\(-pct) % larger"
     }
 
     func removeConvertFile(_ url: URL) {
@@ -468,7 +468,7 @@ final class AppState: ObservableObject {
     func startConversion() {
         guard !isConverting, !convertFiles.isEmpty else { return }
         guard ffmpegPath != nil else {
-            convertStatus = "FFmpeg nicht gefunden – installieren mit: brew install ffmpeg"
+            convertStatus = "FFmpeg not found – install with: brew install ffmpeg"
             return
         }
         isConverting = true
@@ -476,7 +476,7 @@ final class AppState: ObservableObject {
         convDone = 0
         convFailed = 0
         convertProgress = 0
-        convertStatus = "Konvertiere…"
+        convertStatus = "Converting…"
         lastRunHadError = false
         publishStatus()
         processNext()
@@ -486,7 +486,7 @@ final class AppState: ObservableObject {
         guard isConverting else { return }
         cancelRequested = true
         processBox.terminate()
-        convertStatus = "Wird gestoppt…"
+        convertStatus = "Stopping…"
     }
 
     /// Pops the next file from the (live) queue and converts it, then recurses —
@@ -544,8 +544,8 @@ final class AppState: ObservableObject {
         currentConvert = nil
         convertProgress = stopped ? 0 : 1
         convertDetail = nil
-        convertStatus = (stopped ? "Gestoppt" : "Fertig")
-            + ": \(convDone) konvertiert, \(convFailed) fehlgeschlagen."
+        convertStatus = (stopped ? "Stopped" : "Done")
+            + ": \(convDone) converted, \(convFailed) failed."
         lastRunHadError = convFailed > 0
         publishStatus()
     }
@@ -584,7 +584,7 @@ final class AppState: ObservableObject {
         if let speed = p.speed { parts.append(String(format: "%.1f×", speed)) }
         if let eta = p.etaSeconds {
             let total = Int(eta.rounded())
-            parts.append(String(format: "Rest ~%d:%02d", total / 60, total % 60))
+            parts.append(String(format: "Left ~%d:%02d", total / 60, total % 60))
         }
         return parts.joined(separator: " · ")
     }
@@ -629,24 +629,24 @@ final class AppState: ObservableObject {
     @Published var tmdbTestResult: String?
     func testTMDb() {
         guard !tmdbAPIKey.isEmpty else {
-            tmdbTestResult = "Kein API-Schlüssel eingegeben."
+            tmdbTestResult = "No API key entered."
             return
         }
-        tmdbTestResult = "Teste Verbindung …"
+        tmdbTestResult = "Testing connection …"
         let provider = TMDbMetadataProvider(apiKey: tmdbAPIKey)
         Task { [weak self] in
             do {
                 let status = try await provider.verify()
                 switch status {
                 case 200:
-                    self?.tmdbTestResult = "✓ Verbunden – Schlüssel gültig."
+                    self?.tmdbTestResult = "✓ Connected – key valid."
                 case 401:
-                    self?.tmdbTestResult = "✗ Ungültiger Schlüssel (401). Bitte den v3-API-Key verwenden, nicht den v4-Token."
+                    self?.tmdbTestResult = "✗ Invalid key (401). Please use the v3 API key, not the v4 token."
                 default:
-                    self?.tmdbTestResult = "TMDb antwortete mit Status \(status)."
+                    self?.tmdbTestResult = "TMDb responded with status \(status)."
                 }
             } catch {
-                self?.tmdbTestResult = "✗ Keine Verbindung: \(error.localizedDescription)"
+                self?.tmdbTestResult = "✗ No connection: \(error.localizedDescription)"
             }
         }
     }
@@ -663,27 +663,27 @@ final class AppState: ObservableObject {
     /// Verifies the Jellyfin connection and reports clear feedback.
     func testJellyfin() {
         guard jellyfinEnabled, !jellyfinServerURL.isEmpty, !jellyfinAPIKey.isEmpty else {
-            jellyfinTestResult = "Server-URL und API-Schlüssel eingeben."
+            jellyfinTestResult = "Enter server URL and API key."
             return
         }
         guard let connector = makeJellyfinConnector() else {
-            jellyfinTestResult = "✗ Ungültige Server-URL (z. B. http://localhost:8096)."
+            jellyfinTestResult = "✗ Invalid server URL (e.g. http://localhost:8096)."
             return
         }
-        jellyfinTestResult = "Teste Verbindung …"
+        jellyfinTestResult = "Testing connection …"
         Task { [weak self] in
             do {
                 let status = try await connector.verify()
                 switch status {
                 case 200:
-                    self?.jellyfinTestResult = "✓ Verbunden – API-Schlüssel gültig."
+                    self?.jellyfinTestResult = "✓ Connected – API key valid."
                 case 401, 403:
-                    self?.jellyfinTestResult = "✗ API-Schlüssel ungültig (\(status))."
+                    self?.jellyfinTestResult = "✗ API key invalid (\(status))."
                 default:
-                    self?.jellyfinTestResult = "Jellyfin antwortete mit Status \(status)."
+                    self?.jellyfinTestResult = "Jellyfin responded with status \(status)."
                 }
             } catch {
-                self?.jellyfinTestResult = "✗ Keine Verbindung: \(error.localizedDescription)"
+                self?.jellyfinTestResult = "✗ No connection: \(error.localizedDescription)"
             }
         }
     }
@@ -694,9 +694,9 @@ final class AppState: ObservableObject {
         Task { [weak self] in
             do {
                 try await connector.refresh()
-                self?.logActivity("Jellyfin-Bibliothek wird aktualisiert …")
+                self?.logActivity("Refreshing Jellyfin library …")
             } catch {
-                self?.logActivity("Jellyfin-Aktualisierung fehlgeschlagen: \(error.localizedDescription)")
+                self?.logActivity("Jellyfin refresh failed: \(error.localizedDescription)")
             }
         }
     }
@@ -908,23 +908,23 @@ final class AppState: ObservableObject {
     }
 
     var subtitleText: String {
-        guard hasFiles else { return "Bereit zum Import" }
-        return "\(items.count) Dateien analysiert · \(approvedActiveCount) ausgewählt"
+        guard hasFiles else { return "Ready to import" }
+        return "\(items.count) files analyzed · \(approvedActiveCount) selected"
     }
 
     var statusBarText: String {
         if let lastResult { return lastResult }
         if doneCount > 0 {
             return didUndo
-                ? "\(items.count) Dateien · Umbenennung rückgängig gemacht"
-                : "\(doneCount) umbenannt · protokolliert · rückgängig möglich"
+                ? "\(items.count) files · rename undone"
+                : "\(doneCount) renamed · logged · undo available"
         }
-        guard hasFiles else { return "Keine Dateien · alles wird lokal verarbeitet" }
-        return "\(readyCount) bereit · \(warnCount) benötigen Prüfung"
+        guard hasFiles else { return "No files · everything is processed locally" }
+        return "\(readyCount) ready · \(warnCount) need review"
     }
 
     var startLabel: String {
-        isProcessing ? "Läuft …" : "\(approvedActiveCount) umbenennen"
+        isProcessing ? "Running …" : "Rename \(approvedActiveCount)"
     }
 
     // MARK: Editing (FR9)
@@ -986,7 +986,7 @@ final class AppState: ObservableObject {
 
     func cancelConflictResolution() {
         conflictsToResolve = []
-        lastResult = "Abgebrochen — Konflikte auflösen und erneut starten."
+        lastResult = "Cancelled — resolve conflicts and start again."
     }
 
     private func runExecution(resolutions: [String: ConflictPolicy]) {
@@ -1029,7 +1029,7 @@ final class AppState: ObservableObject {
         progress = 1
         logEntries = log.entries
         canUndo = journal.canUndo
-        lastResult = "Fertig: \(outcome.succeeded) umbenannt, \(outcome.skipped) übersprungen, \(outcome.failed) fehlgeschlagen."
+        lastResult = "Done: \(outcome.succeeded) renamed, \(outcome.skipped) skipped, \(outcome.failed) failed."
         lastRunHadError = outcome.failed > 0
         publishStatus()
         // Tell Jellyfin to rescan so the renamed files are exported (FR20).
@@ -1043,7 +1043,7 @@ final class AppState: ObservableObject {
         didUndo = true
         logEntries = log.entries
         canUndo = journal.canUndo
-        lastResult = "Rückgängig gemacht: \(restored) Datei(en) wiederhergestellt."
+        lastResult = "Undone: \(restored) file(s) restored."
     }
 
     // MARK: Log

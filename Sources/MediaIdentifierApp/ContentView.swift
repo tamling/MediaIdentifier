@@ -65,11 +65,11 @@ private struct TitleBar: View {
 
     private var badge: some View {
         let color = isOnline ? Theme.movie : Theme.accentGlow
-        let localSuffix = usingLocalAI ? " · KI" : (usingLocalDB ? " · DB" : "")
-        let label = isOnline ? "TMDb" : "Lokal\(localSuffix)"
+        let localSuffix = usingLocalAI ? " · AI" : (usingLocalDB ? " · DB" : "")
+        let label = isOnline ? "TMDb" : "Local\(localSuffix)"
         let help = isOnline
-            ? "Online-Titelsuche aktiv – es werden nur Titel und Jahr an TMDb gesendet, niemals Mediendateien."
-            : "Alle Dateien werden lokal verarbeitet – keine Cloud-Uploads."
+            ? "Online title search active – only title and year are sent to TMDb, never media files."
+            : "All files are processed locally – no cloud uploads."
         return HStack(spacing: 6) {
             Circle().fill(color).frame(width: 6, height: 6).shadow(color: color, radius: 3)
             Text(label).font(.system(size: 11, weight: .semibold)).foregroundStyle(color)
@@ -92,19 +92,19 @@ private struct ActivityBar: View {
         if active {
             HStack(spacing: 16) {
                 if state.isProcessing {
-                    item("Umbenennen", "\(Int(state.progress * 100)) %")
+                    item("Rename", "\(Int(state.progress * 100)) %")
                 }
                 if state.isConverting {
-                    item("Konvertieren", convertLabel)
+                    item("Convert", convertLabel)
                 }
                 if state.isLookingUp {
-                    item("Erkennung", "läuft …")
+                    item("Identification", "running …")
                 }
                 Spacer()
                 if state.watchActive {
                     HStack(spacing: 6) {
                         Circle().fill(Theme.accentBright).frame(width: 6, height: 6)
-                        Text("Watch aktiv").font(.system(size: 11, weight: .semibold))
+                        Text("Watch active").font(.system(size: 11, weight: .semibold))
                             .foregroundStyle(Theme.textSecondary)
                     }
                 }
@@ -141,11 +141,11 @@ private struct MainArea: View {
         case .overview:
             OverviewView()
         case .queue:
-            QueueView(section: .queue, title: "Warteschlange")
+            QueueView(section: .queue, title: "Queue")
         case .movies:
-            QueueView(section: .movies, title: "Filme")
+            QueueView(section: .movies, title: "Movies")
         case .series:
-            QueueView(section: .series, title: "Serien")
+            QueueView(section: .series, title: "Series")
         case .convert:
             ConvertView()
         case .watch:

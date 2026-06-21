@@ -44,7 +44,7 @@ struct FileRowView: View {
                         .foregroundStyle(Theme.accentBright)
                 }
                 .buttonStyle(.borderless)
-                .help("Diese Datei konvertieren")
+                .help("Convert this file")
                 .padding(.top, 2)
             } else {
                 Button(action: beginEdit) {
@@ -53,7 +53,7 @@ struct FileRowView: View {
                         .foregroundStyle(editing ? Theme.accentBright : Theme.textSecondary)
                 }
                 .buttonStyle(.borderless)
-                .help("Zielnamen bearbeiten")
+                .help("Edit target name")
                 .padding(.top, 2)
             }
 
@@ -63,7 +63,7 @@ struct FileRowView: View {
                     .foregroundStyle(Theme.textSecondary)
             }
             .buttonStyle(.borderless)
-            .help("Ordner im Finder öffnen")
+            .help("Open folder in Finder")
             .padding(.top, 2)
 
             statusBadge
@@ -103,14 +103,14 @@ struct FileRowView: View {
                             .foregroundStyle(Color(hex: 0x7E7E85))
                             .lineLimit(1).truncationMode(.middle)
                     }
-                    TextField("Dateiname", text: $draft)
+                    TextField("File name", text: $draft)
                         .textFieldStyle(.roundedBorder)
                         .font(.system(size: 13, weight: .semibold))
                         .frame(maxWidth: 340)
                         .onSubmit(commitEdit)
-                    Button("Sichern", action: commitEdit)
+                    Button("Save", action: commitEdit)
                         .controlSize(.small)
-                    Button("Abbrechen") { editing = false }
+                    Button("Cancel") { editing = false }
                         .controlSize(.small)
                 }
             } else {
@@ -129,7 +129,7 @@ struct FileRowView: View {
                     }
                 }
                 .buttonStyle(.plain)
-                .help("Im Finder anzeigen")
+                .help("Show in Finder")
             }
 
             // Original name.
@@ -149,7 +149,7 @@ struct FileRowView: View {
                     Image(systemName: "sparkle.magnifyingglass")
                         .font(.system(size: 9, weight: .bold))
                         .foregroundStyle(Theme.accentBright)
-                    Text("Erkannt: \(parsed.title)\(parsed.year.map { " (\($0))" } ?? "") · via \(source)")
+                    Text("Identified: \(parsed.title)\(parsed.year.map { " (\($0))" } ?? "") · via \(source)")
                         .font(.system(size: 11))
                         .foregroundStyle(Theme.accentBright)
                         .lineLimit(1).truncationMode(.middle)
@@ -158,7 +158,7 @@ struct FileRowView: View {
 
             // Chips.
             HStack(spacing: 6) {
-                Chip(text: isSeries ? "SERIE" : "FILM",
+                Chip(text: isSeries ? "SHOW" : "MOVIE",
                      fg: isSeries ? Theme.series : Theme.movie,
                      bg: isSeries ? Theme.seriesBg : Theme.movieBg)
                 Chip(text: tagText)
@@ -215,7 +215,7 @@ struct FileRowView: View {
             case .nfo:    return ExtraChip(label: "+NFO\(suffix)", icon: "doc.text")
             case .image:  return ExtraChip(label: "+Cover\(suffix)", icon: "photo")
             case .sample: return ExtraChip(label: "+Sample\(suffix)", icon: "film.stack")
-            case .other:  return ExtraChip(label: "+Datei\(suffix)", icon: "paperclip")
+            case .other:  return ExtraChip(label: "+File\(suffix)", icon: "paperclip")
             case .subtitle: return nil
             }
         }
@@ -254,10 +254,10 @@ struct FileRowView: View {
 
     private var statusInfo: (color: Color, label: String) {
         switch statusValue {
-        case .ready:    return (Theme.accentBright, "Bereit")
-        case .conflict: return (Theme.warn, "Konflikt")
-        case .done:     return (Theme.accentBright, "Umbenannt")
-        case .skipped:  return (Theme.mono, "Übersprungen")
+        case .ready:    return (Theme.accentBright, "Ready")
+        case .conflict: return (Theme.warn, "Conflict")
+        case .done:     return (Theme.accentBright, "Renamed")
+        case .skipped:  return (Theme.mono, "Skipped")
         }
     }
 

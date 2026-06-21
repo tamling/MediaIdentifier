@@ -12,23 +12,23 @@ struct WatchView: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
-                    card("Überwachung") {
-                        Toggle("Ordner überwachen", isOn: $state.watchEnabled)
+                    card("Monitoring") {
+                        Toggle("Monitor folder", isOn: $state.watchEnabled)
                             .disabled(state.watchFolderURL == nil)
 
                         HStack(spacing: 10) {
                             Image(systemName: "folder")
                                 .foregroundStyle(Theme.textSecondary)
-                            Text(state.watchFolderPath.isEmpty ? "Kein Ordner gewählt" : state.watchFolderPath)
+                            Text(state.watchFolderPath.isEmpty ? "No folder chosen" : state.watchFolderPath)
                                 .font(.system(size: 12.5, design: .monospaced))
                                 .foregroundStyle(state.watchFolderPath.isEmpty ? Theme.textTertiary : Theme.textRow)
                                 .lineLimit(1).truncationMode(.middle)
                             Spacer()
-                            ToolbarButton(title: "Ordner wählen…", action: chooseFolder)
+                            ToolbarButton(title: "Choose folder…", action: chooseFolder)
                         }
 
-                        Toggle("Neue Dateien automatisch umbenennen", isOn: $state.watchAutoRename)
-                        Text("Fertig heruntergeladene Videodateien werden erkannt, analysiert und – wenn aktiviert – sofort nach dem Jellyfin-Schema umbenannt. Alles geschieht lokal.")
+                        Toggle("Automatically rename new files", isOn: $state.watchAutoRename)
+                        Text("Finished downloaded video files are detected, analyzed and - if enabled - renamed immediately following the Jellyfin scheme. Everything happens locally.")
                             .font(.caption)
                             .foregroundStyle(Theme.textSecondary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -36,9 +36,9 @@ struct WatchView: View {
 
                     statusCard
 
-                    card("Aktivität") {
+                    card("Activity") {
                         if state.watchActivity.isEmpty {
-                            Text("Noch keine Aktivität.")
+                            Text("No activity yet.")
                                 .font(.system(size: 12))
                                 .foregroundStyle(Theme.textTertiary)
                         } else {
@@ -64,9 +64,9 @@ struct WatchView: View {
     private var header: some View {
         HStack {
             VStack(alignment: .leading, spacing: 1) {
-                Text("Watch-Ordner").font(.system(size: 15, weight: .bold))
+                Text("Watch folder").font(.system(size: 15, weight: .bold))
                     .foregroundStyle(Theme.textPrimary)
-                Text("Automatische Hintergrundverarbeitung").font(.system(size: 11.5))
+                Text("Automatic background processing").font(.system(size: 11.5))
                     .foregroundStyle(Theme.textSecondary)
             }
             Spacer()
@@ -83,19 +83,19 @@ struct WatchView: View {
         return HStack(spacing: 6) {
             Circle().fill(color).frame(width: 7, height: 7)
                 .shadow(color: active ? color : .clear, radius: 3)
-            Text(active ? "Aktiv" : "Inaktiv")
+            Text(active ? "Active" : "Inactive")
                 .font(.system(size: 11.5, weight: .bold)).foregroundStyle(color)
         }
     }
 
     private var statusCard: some View {
-        card("Modus") {
+        card("Mode") {
             HStack(spacing: 8) {
                 Image(systemName: state.watchAutoRename ? "wand.and.stars" : "tray.and.arrow.down")
                     .foregroundStyle(Theme.accent)
                 Text(state.watchAutoRename
-                     ? "Auto-Umbenennen: neue Dateien werden sofort verarbeitet."
-                     : "Nur Import: neue Dateien landen in der Warteschlange zur Prüfung.")
+                     ? "Auto-rename: new files are processed immediately."
+                     : "Import only: new files land in the queue for review.")
                     .font(.system(size: 12.5))
                     .foregroundStyle(Theme.textRow)
             }
@@ -107,7 +107,7 @@ struct WatchView: View {
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
-        panel.prompt = "Überwachen"
+        panel.prompt = "Monitor"
         if panel.runModal() == .OK, let url = panel.url {
             state.setWatchFolder(url)
         }
