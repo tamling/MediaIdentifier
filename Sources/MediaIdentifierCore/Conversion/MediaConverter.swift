@@ -190,25 +190,80 @@ public final class FFmpegConverter {
     }
 
     #if os(macOS)
-    /// Runs a conversion synchronously. Intended to be called off the main thread.
-    public func convert(input: URL, output: URL, options: ConversionOptions) throws {
+    /// Runs a conversion synchronously. Intended to be called off the main
+    /// thread. `progress` reports this file's completion fraction (0...1),
+    /// parsed live from FFmpeg's `-progress` output.
+    public func convert(
+        input: URL,
+        output: URL,
+        options: ConversionOptions,
+        progress: (@Sendable (Double) -> Void)? = nil
+    ) throws {
         guard isAvailable else { throw ConverterError.ffmpegNotFound }
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: ffmpegPath)
-        process.arguments = FFmpegArgumentBuilder.arguments(input: input, output: output, options: options)
+        var args = FFmpegArgumentBuilder.arguments(input: input, output: output, options: options)
+        args.insert(contentsOf: ["-progress", "pipe:1", "-nostats"], at: 1)
+        process.arguments = args
 
-        let errorPipe = Pipe()
-        process.standardError = errorPipe
+        let outPipe = Pipe()
+        let errPipe = Pipe()
+        process.standardOutput = outPipe
+        process.standardError = errPipe
+
+        let state = ProgressState()
+
+        errPipe.fileHandleForReading.readabilityHandler = { handle in
+            let data = handle.availableData
+            guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
+            state.appendError(text)
+            if let dur = FFmpegConverter.parseDuration(text) { state.setDurationIfNeeded(dur) }
+        }
+        outPipe.fileHandleForReading.readabilityHandler = { handle in
+            let data = handle.availableData
+            guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
+            for line in text.split(separator: "\n") where line.hasPrefix("out_time_us=") {
+                if let us = Double(line.dropFirst("out_time_us=".count)),
+                   let duration = state.duration, duration > 0 {
+                    progress?(min(1.0, us / 1_000_000.0 / duration))
+                }
+            }
+        }
 
         try process.run()
-        let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
+        outPipe.fileHandleForReading.readabilityHandler = nil
+        errPipe.fileHandleForReading.readabilityHandler = nil
 
         if process.terminationStatus != 0 {
-            let message = String(data: errorData, encoding: .utf8) ?? ""
-            throw ConverterError.conversionFailed(code: process.terminationStatus, message: message)
+            throw ConverterError.conversionFailed(code: process.terminationStatus, message: state.errorText)
         }
+        progress?(1)
+    }
+
+    /// Parses an FFmpeg "Duration: HH:MM:SS.ss" line into seconds.
+    static func parseDuration(_ text: String) -> Double? {
+        let pattern = #"Duration: (\d+):(\d+):(\d+(?:\.\d+)?)"#
+        guard let regex = try? NSRegularExpression(pattern: pattern),
+              let m = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+              let hR = Range(m.range(at: 1), in: text),
+              let mR = Range(m.range(at: 2), in: text),
+              let sR = Range(m.range(at: 3), in: text),
+              let h = Double(text[hR]), let min = Double(text[mR]), let s = Double(text[sR])
+        else { return nil }
+        return h * 3600 + min * 60 + s
+    }
+
+    /// Thread-safe holder shared by the stdout/stderr readability handlers.
+    private final class ProgressState: @unchecked Sendable {
+        private let lock = NSLock()
+        private var _duration: Double?
+        private var _error = ""
+        var duration: Double? { lock.lock(); defer { lock.unlock() }; return _duration }
+        var errorText: String { lock.lock(); defer { lock.unlock() }; return _error }
+        func setDurationIfNeeded(_ d: Double) { lock.lock(); if _duration == nil { _duration = d }; lock.unlock() }
+        func appendError(_ s: String) { lock.lock(); _error += s; lock.unlock() }
     }
     #endif
 }

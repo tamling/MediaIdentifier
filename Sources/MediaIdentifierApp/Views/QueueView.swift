@@ -86,8 +86,13 @@ struct QueueView: View {
             listHeader
             ScrollView {
                 LazyVStack(spacing: 4) {
-                    ForEach(rows) { item in
-                        FileRowView(item: item)
+                    ForEach(sections) { section in
+                        if let title = section.title {
+                            GroupHeader(title: title, count: section.items.count)
+                        }
+                        ForEach(section.items) { item in
+                            FileRowView(item: item)
+                        }
                     }
                 }
                 .padding(.horizontal, 14)
@@ -95,6 +100,45 @@ struct QueueView: View {
                 .padding(.bottom, 16)
             }
         }
+    }
+
+    // Groups episodes under "Show · Staffel XX" headers (movies under "Filme")
+    // when sorting by show is enabled.
+    private struct RowSection: Identifiable { let id: String; let title: String?; let items: [RenameItem] }
+
+    private var sections: [RowSection] {
+        let items = state.sortedItems(in: section)
+        guard state.sortByShow, !items.isEmpty else {
+            return [RowSection(id: "all", title: nil, items: items)]
+        }
+        var result: [RowSection] = []
+        var key: String? = nil
+        var bucket: [RenameItem] = []
+        func flush() {
+            guard let first = bucket.first else { return }
+            result.append(RowSection(id: key ?? first.id.uuidString, title: header(for: first), items: bucket))
+            bucket = []
+        }
+        for item in items {
+            let k = groupKey(for: item)
+            if k != key { flush(); key = k }
+            bucket.append(item)
+        }
+        flush()
+        return result
+    }
+
+    private func groupKey(for item: RenameItem) -> String {
+        let p = item.mediaFile.parsed
+        guard p.kind == .episode else { return "movies" }
+        return "\(p.title.lowercased())|\(p.season ?? 0)"
+    }
+
+    private func header(for item: RenameItem) -> String {
+        let p = item.mediaFile.parsed
+        guard p.kind == .episode else { return "Filme" }
+        let title = p.title.isEmpty ? "Unbekannt" : p.title
+        return "\(title) · Staffel \(String(format: "%02d", p.season ?? 1))"
     }
 
     private var listHeader: some View {
@@ -211,6 +255,28 @@ private struct DropOverlay: View {
                     .foregroundStyle(Theme.accentBright)
             )
             .padding(10)
+    }
+}
+
+/// Section heading for grouped results (e.g. "The Last of Us · Staffel 01").
+private struct GroupHeader: View {
+    let title: String
+    let count: Int
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(title)
+                .font(.system(size: 12, weight: .bold))
+                .foregroundStyle(Theme.textRow)
+                .lineLimit(1).truncationMode(.middle)
+            Text("\(count)")
+                .font(.system(size: 10.5, weight: .bold))
+                .foregroundStyle(Theme.textSecondary)
+                .padding(.horizontal, 6).padding(.vertical, 1)
+                .background(Theme.chipBg, in: Capsule())
+            Spacer()
+        }
+        .padding(.horizontal, 14)
+        .padding(.top, 12).padding(.bottom, 4)
     }
 }
 

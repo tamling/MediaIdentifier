@@ -306,7 +306,11 @@ final class AppState: ObservableObject {
                 let output = AppState.conversionOutputURL(for: input, options: options)
                 await self?.appendConvertLog("⏳ \(input.lastPathComponent)")
                 do {
-                    try converter.convert(input: input, output: output, options: options)
+                    try converter.convert(input: input, output: output, options: options) { frac in
+                        Task { @MainActor [weak self] in
+                            self?.convertProgress = (Double(index) + frac) / Double(total)
+                        }
+                    }
                     done += 1
                     await self?.appendConvertLog("✓ \(output.lastPathComponent)")
                 } catch {

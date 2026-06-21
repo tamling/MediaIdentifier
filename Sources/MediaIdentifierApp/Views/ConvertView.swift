@@ -166,10 +166,21 @@ struct ConvertView: View {
                 note("Schnell, aber kein echtes CRF und weniger effizient. Für maximale Qualität pro Byte ausschalten.")
             }
 
-            Stepper(value: $state.conversionOptions.quality, in: 1...51) {
-                Text("Constant Quality (RF): \(o.quality)")
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Text("Constant Quality (RF)").font(.system(size: 12.5))
+                    Spacer()
+                    Text("\(o.quality)").font(.system(size: 13, weight: .bold).monospacedDigit())
+                        .foregroundStyle(Theme.accentBright)
+                }
+                Slider(value: qualityBinding, in: 14...30, step: 1)
+                HStack {
+                    Text("beste Qualität / größer").font(.caption2).foregroundStyle(Theme.textTertiary)
+                    Spacer()
+                    Text("kleiner").font(.caption2).foregroundStyle(Theme.textTertiary)
+                }
             }
-            note("Niedriger = bessere Qualität/größer. 1080p: 20–22, 4K: 22–26.")
+            note("1080p: 20–22, 4K: 22–26.")
 
             if isSoftware {
                 Picker("Preset", selection: $state.conversionOptions.preset) {
@@ -211,6 +222,13 @@ struct ConvertView: View {
             Toggle("Nur erste Tonspur behalten", isOn: $state.conversionOptions.keepOnlyFirstAudio)
             Toggle("Untertitelspuren entfernen", isOn: $state.conversionOptions.stripSubtitles)
         }
+    }
+
+    private var qualityBinding: Binding<Double> {
+        Binding(
+            get: { Double(o.quality) },
+            set: { state.conversionOptions.quality = Int($0.rounded()) }
+        )
     }
 
     private var heightBinding: Binding<Int> {
