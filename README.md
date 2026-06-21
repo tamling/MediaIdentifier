@@ -35,12 +35,10 @@ The repository is a Swift Package plus an XcodeGen spec.
 ./build_app.sh
 ```
 
-This compiles with SwiftPM and assembles `build/MediaIdentifier.app` directly
-(icon included via `sips`/`iconutil`), so it does **not** depend on the Xcode
-project format / Xcode version.
-
-You can also get a ready-built, signed-as-adhoc `.app` from CI: open the latest
-**Build** workflow run on the PR and download the `MediaIdentifier-app` artifact.
+Produces `build/MediaIdentifier.app`. It builds via Xcode (xcodegen + xcodebuild)
+when available and falls back to a SwiftPM build with a hand-assembled bundle, so
+it does not depend on the Xcode project format / version. On failure it prints
+the error and keeps a log at `build/build.log`.
 
 ### Option B — Xcode project (requires Xcode 16+)
 
@@ -52,7 +50,10 @@ open MediaIdentifier.xcodeproj
 ```
 
 > Older Xcode (≤ 15.x) cannot open the generated project ("future Xcode project
-> file format (77)"). Use Option A or update Xcode.
+> file format (77)"). Use Option A (it falls back to SwiftPM) or update Xcode.
+
+A ready-built, ad-hoc-signed `.app` is also published on the
+[Releases page](https://github.com/tamling/MediaIdentifier/releases/tag/latest).
 
 ### Option C — open the package directly
 
