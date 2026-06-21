@@ -117,7 +117,7 @@ struct OverviewView: View {
                 : "Not available (requires macOS 26+, Apple Silicon, Apple Intelligence).",
             level: state.appleIntelligenceSupported ? .ok : .warn,
             actionLabel: state.appleIntelligenceSupported && !state.useAppleIntelligence ? "Settings" : nil,
-            action: { state.showingSettings = true }))
+            action: { state.openSettings(.identification) }))
 
         // FFmpeg
         list.append(Check(
@@ -134,7 +134,7 @@ struct OverviewView: View {
             detail: state.tmdbConfigured ? "Configured and active." : "Optional – no API key stored.",
             level: state.tmdbConfigured ? .ok : .warn,
             actionLabel: state.tmdbConfigured ? nil : "Set up",
-            action: { state.showingSettings = true }))
+            action: { state.openSettings(.identification) }))
 
         // Local title database
         list.append(Check(
@@ -143,7 +143,7 @@ struct OverviewView: View {
                                               : "Optional – no offline database loaded.",
             level: state.localDatabaseLoaded ? .ok : .warn,
             actionLabel: state.localDatabaseLoaded ? nil : "Load",
-            action: { state.showingSettings = true }))
+            action: { state.openSettings(.identification) }))
 
         // Watch folder
         list.append(Check(
@@ -160,7 +160,7 @@ struct OverviewView: View {
                                              : "Optional – not configured.",
             level: state.jellyfinConfigured ? .ok : .neutral,
             actionLabel: state.jellyfinConfigured ? nil : "Set up",
-            action: { state.showingSettings = true }))
+            action: { state.openSettings(.server) }))
 
         // Status web page
         list.append(Check(
@@ -169,7 +169,7 @@ struct OverviewView: View {
                                      : "Optional – can be enabled for Uptime Kuma and similar.",
             level: state.webEnabled ? .ok : .neutral,
             actionLabel: state.webEnabled ? nil : "Set up",
-            action: { state.showingSettings = true }))
+            action: { state.openSettings(.server) }))
 
         return list
     }

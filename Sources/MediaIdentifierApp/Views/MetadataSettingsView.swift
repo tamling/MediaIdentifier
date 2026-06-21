@@ -8,21 +8,23 @@ struct MetadataSettingsView: View {
     @EnvironmentObject private var state: AppState
     @Environment(\.dismiss) private var dismiss
 
+    @State private var selectedTab = 0
+
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("Settings")
                 .font(.system(size: 16, weight: .bold))
                 .foregroundStyle(Theme.textPrimary)
 
-            TabView {
+            TabView(selection: $selectedTab) {
                 tab { namingTab }
-                    .tabItem { Label("Naming & output", systemImage: "textformat") }
+                    .tabItem { Label("Naming & output", systemImage: "textformat") }.tag(0)
                 tab { detectionTab }
-                    .tabItem { Label("Identification", systemImage: "sparkles") }
+                    .tabItem { Label("Identification", systemImage: "sparkles") }.tag(1)
                 tab { serverTab }
-                    .tabItem { Label("Server & automation", systemImage: "server.rack") }
+                    .tabItem { Label("Server & automation", systemImage: "server.rack") }.tag(2)
             }
-            .frame(height: 430)
+            .frame(height: 600)
 
             HStack {
                 Spacer()
@@ -31,10 +33,22 @@ struct MetadataSettingsView: View {
                     .buttonStyle(.borderedProminent)
             }
         }
-        .padding(20)
-        .frame(width: 470)
+        .padding(22)
+        .frame(width: 600)
         .background(Theme.windowBg)
         .tint(Theme.accent)
+        .onAppear(perform: applyFocus)
+        .onChange(of: state.settingsFocus) { _ in applyFocus() }
+    }
+
+    /// Opens the tab matching the area the user asked to set up (from Overview).
+    private func applyFocus() {
+        switch state.settingsFocus {
+        case .naming: selectedTab = 0
+        case .identification: selectedTab = 1
+        case .server: selectedTab = 2
+        case nil: break
+        }
     }
 
     /// Wraps a tab's groups in a scroll view so long content stays reachable.

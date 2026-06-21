@@ -1,7 +1,8 @@
 import SwiftUI
+import AppKit
 import MediaIdentifierCore
 
-/// Protokoll: the persisted rename log (FR12), styled to match the design.
+/// The persisted rename log (FR12), styled to match the design.
 struct LogView: View {
     @EnvironmentObject private var state: AppState
 
@@ -23,6 +24,8 @@ struct LogView: View {
                 }
                 Spacer()
                 if !state.logEntries.isEmpty {
+                    ToolbarButton(title: "Export…", systemImage: "square.and.arrow.up",
+                                  action: exportLog)
                     ToolbarButton(title: "Clear log", action: state.clearLog)
                 }
             }
@@ -59,6 +62,14 @@ struct LogView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Theme.windowBg)
+    }
+
+    private func exportLog() {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "MediaIdentifier-log.txt"
+        panel.prompt = "Export"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        try? state.logExportText.write(to: url, atomically: true, encoding: .utf8)
     }
 }
 

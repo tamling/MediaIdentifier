@@ -10,36 +10,37 @@ struct EmptyDropView: View {
 
     var body: some View {
         // The dashed drop area fills the whole pane and scales with the window.
-        Button(action: chooseFiles) {
-            VStack(spacing: 0) {
-                Spacer(minLength: 0)
-                iconBadge
-                Text("Drag files here")
-                    .font(.system(size: 20, weight: .bold))
-                    .foregroundStyle(Theme.textPrimary)
-                    .padding(.top, 22)
-                Text("Single movies, whole seasons or complete folders.\nRelease names are analyzed automatically.")
-                    .font(.system(size: 13.5))
-                    .foregroundStyle(Color(hex: 0x9A9AA0))
-                    .multilineTextAlignment(.center)
-                    .lineSpacing(3)
-                    .padding(.top, 8)
-                chips.padding(.top, 22)
-                Text("or choose files →")
-                    .font(.system(size: 12.5, weight: .semibold))
-                    .foregroundStyle(Theme.accentBright)
-                    .padding(.top, 26)
-                Spacer(minLength: 0)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Color.white.opacity(0.018), in: RoundedRectangle(cornerRadius: 18))
-            .overlay(
-                RoundedRectangle(cornerRadius: 18)
-                    .strokeBorder(style: StrokeStyle(lineWidth: 2, dash: [7]))
-                    .foregroundStyle(Color.white.opacity(0.14))
-            )
+        // A tap gesture (not a Button) avoids the macOS focus ring that would
+        // otherwise draw a blue frame around the whole pane on launch.
+        VStack(spacing: 0) {
+            Spacer(minLength: 0)
+            iconBadge
+            Text("Drag files here")
+                .font(.system(size: 20, weight: .bold))
+                .foregroundStyle(Theme.textPrimary)
+                .padding(.top, 22)
+            Text("Single movies, whole seasons or complete folders.\nRelease names are analyzed automatically.")
+                .font(.system(size: 13.5))
+                .foregroundStyle(Color(hex: 0x9A9AA0))
+                .multilineTextAlignment(.center)
+                .lineSpacing(3)
+                .padding(.top, 8)
+            chips.padding(.top, 22)
+            Text("or choose files →")
+                .font(.system(size: 12.5, weight: .semibold))
+                .foregroundStyle(Theme.accentBright)
+                .padding(.top, 26)
+            Spacer(minLength: 0)
         }
-        .buttonStyle(.plain)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color.white.opacity(0.018), in: RoundedRectangle(cornerRadius: 18))
+        .overlay(
+            RoundedRectangle(cornerRadius: 18)
+                .strokeBorder(style: StrokeStyle(lineWidth: 2, dash: [7]))
+                .foregroundStyle(Color.white.opacity(0.14))
+        )
+        .contentShape(Rectangle())
+        .onTapGesture(perform: chooseFiles)
         .padding(24)
     }
 

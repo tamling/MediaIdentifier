@@ -85,6 +85,7 @@ struct QueueView: View {
 
             ToolbarButton(title: "Organize…", systemImage: "wand.and.stars",
                           action: state.chooseFoldersToOrganize)
+                .disabled(!state.hasFiles)
             if state.hasFiles && state.hasEnrichmentProvider {
                 ToolbarButton(title: state.isLookingUp ? "Identifying …" : "Re-identify",
                               systemImage: "sparkle.magnifyingglass",
@@ -204,6 +205,16 @@ struct QueueView: View {
 
             searchField
 
+            Picker("", selection: $state.libraryFilter) {
+                ForEach(LibraryFilter.allCases, id: \.self) { f in
+                    Text(filterLabel(f)).tag(f)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .fixedSize()
+            .help("Filter the queue by media kind")
+
             Button(action: { state.hideCompleted.toggle() }) {
                 HStack(spacing: 5) {
                     Image(systemName: state.hideCompleted ? "eye.slash" : "eye")
@@ -237,6 +248,14 @@ struct QueueView: View {
         .padding(.horizontal, 20)
         .padding(.vertical, 11)
         .overlay(Theme.hairline.frame(height: 0.5), alignment: .bottom)
+    }
+
+    private func filterLabel(_ f: LibraryFilter) -> String {
+        switch f {
+        case .all: return "All"
+        case .movies: return state.movieCount > 0 ? "Movies (\(state.movieCount))" : "Movies"
+        case .series: return state.seriesCount > 0 ? "Series (\(state.seriesCount))" : "Series"
+        }
     }
 
     // MARK: Status bar

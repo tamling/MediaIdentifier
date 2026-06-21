@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 /// macOS (Apple Silicon) entry point. Drag-and-drop media files, preview the
 /// Jellyfin-conformant renames, then apply them.
@@ -28,23 +29,46 @@ struct MediaIdentifierApp: App {
                     .keyboardShortcut(.delete, modifiers: [.command])
                     .disabled(!state.hasFiles)
             }
-            // Jump between sidebar sections with ⌘1…⌘7.
+            // Jump between sidebar sections with ⌘1…⌘5.
             CommandGroup(after: .sidebar) {
                 Button("Queue") { state.section = .queue }
                     .keyboardShortcut("1", modifiers: [.command])
-                Button("Movies") { state.section = .movies }
-                    .keyboardShortcut("2", modifiers: [.command])
-                Button("Series") { state.section = .series }
-                    .keyboardShortcut("3", modifiers: [.command])
                 Button("Convert") { state.section = .convert }
-                    .keyboardShortcut("4", modifiers: [.command])
+                    .keyboardShortcut("2", modifiers: [.command])
                 Button("Watch folder") { state.section = .watch }
-                    .keyboardShortcut("5", modifiers: [.command])
+                    .keyboardShortcut("3", modifiers: [.command])
                 Button("Log") { state.section = .log }
-                    .keyboardShortcut("6", modifiers: [.command])
+                    .keyboardShortcut("4", modifiers: [.command])
                 Button("Overview") { state.section = .overview }
-                    .keyboardShortcut("7", modifiers: [.command])
+                    .keyboardShortcut("5", modifiers: [.command])
             }
+        }
+
+        // Menu-bar item: keep the app reachable from the status bar when the
+        // window is minimized/closed (Show / Quit, with a live status line).
+        MenuBarExtra("MediaIdentifier", systemImage: "film.stack") {
+            Text(menuBarStatus)
+            Divider()
+            Button("Show MediaIdentifier") { showMainWindow() }
+            Button("Settings…") { showMainWindow(); state.showingSettings = true }
+            Divider()
+            Button("Quit MediaIdentifier") { NSApplication.shared.terminate(nil) }
+                .keyboardShortcut("q", modifiers: [.command])
+        }
+    }
+
+    private var menuBarStatus: String {
+        if state.isProcessing { return "Renaming… \(Int(state.progress * 100)) %" }
+        if state.isConverting { return "Converting… \(Int(state.convertProgress * 100)) %" }
+        if state.hasFiles { return "\(state.items.count) files in queue" }
+        return "Idle"
+    }
+
+    private func showMainWindow() {
+        NSApplication.shared.activate(ignoringOtherApps: true)
+        for window in NSApplication.shared.windows where window.canBecomeMain {
+            window.deminiaturize(nil)
+            window.makeKeyAndOrderFront(nil)
         }
     }
 }

@@ -24,6 +24,20 @@ enum SidebarSection: Hashable {
     case log
 }
 
+/// Filter for the consolidated queue (Queue/Movies/Series were merged).
+enum LibraryFilter: String, CaseIterable {
+    case all = "All"
+    case movies = "Movies"
+    case series = "Series"
+}
+
+/// Which settings group to reveal/highlight when opening Settings.
+enum SettingsFocus {
+    case naming
+    case identification
+    case server
+}
+
 /// Display status for a queued item (matches the design's status pills).
 enum ItemStatus {
     case ready      // Bereit
@@ -48,6 +62,16 @@ final class AppState: ObservableObject {
     @Published var searchText = ""
     /// Hide already-renamed rows so the working set stays focused.
     @Published var hideCompleted = false
+    /// Filter the consolidated queue by media kind (All / Movies / Series).
+    @Published var libraryFilter: LibraryFilter = .all
+    /// Set when the user opens Settings for a specific area, to highlight it.
+    @Published var settingsFocus: SettingsFocus?
+
+    /// Opens Settings focused on a specific group (used by Overview "Set up").
+    func openSettings(_ focus: SettingsFocus) {
+        settingsFocus = focus
+        showingSettings = true
+    }
 
     // Settings.
     @Published var namingOptions: NamingOptions = .default { didSet { rebuildPlan() } }
@@ -853,9 +877,25 @@ final class AppState: ObservableObject {
             return items.filter { $0.mediaFile.parsed.kind != .episode }
         case .series:
             return items.filter { $0.mediaFile.parsed.kind == .episode }
+        case .queue:
+            // The consolidated queue applies the in-header Movies/Series filter.
+            switch libraryFilter {
+            case .all: return items
+            case .movies: return items.filter { $0.mediaFile.parsed.kind != .episode }
+            case .series: return items.filter { $0.mediaFile.parsed.kind == .episode }
+            }
         default:
             return items
         }
+    }
+
+    /// Plain-text export of the rename log (FR12).
+    var logExportText: String {
+        let stamp = ISO8601DateFormatter()
+        return logEntries.map { entry in
+            let error = entry.errorDescription.map { " — \($0)" } ?? ""
+            return "\(stamp.string(from: entry.date))\t\(entry.status)\t\(entry.oldName) -> \(entry.newName)\(error)"
+        }.joined(separator: "\n")
     }
 
     /// Items for a section after applying the search filter and hide-completed

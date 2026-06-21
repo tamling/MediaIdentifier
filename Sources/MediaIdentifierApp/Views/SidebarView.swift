@@ -13,10 +13,6 @@ struct SidebarView: View {
                        section: .queue,
                        badge: state.hasFiles ? "\(state.items.count)" : nil,
                        active: state.isProcessing)
-            SidebarRow(title: "Movies", systemImage: "film",
-                       section: .movies, badge: state.movieCount > 0 ? "\(state.movieCount)" : nil)
-            SidebarRow(title: "Series", systemImage: "tv",
-                       section: .series, badge: state.seriesCount > 0 ? "\(state.seriesCount)" : nil)
 
             sectionLabel("Tools").padding(.top, 14)
             SidebarRow(title: "Convert", systemImage: "arrow.triangle.2.circlepath",

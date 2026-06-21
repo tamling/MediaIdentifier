@@ -1,5 +1,6 @@
 import SwiftUI
 import UniformTypeIdentifiers
+import AppKit
 import MediaIdentifierCore
 
 /// Root layout: custom title bar + sidebar + main content (matches the design).
@@ -58,6 +59,9 @@ private struct TitleBar: View {
             LinearGradient(colors: [Theme.titleBarTop, Theme.titleBarBot], startPoint: .top, endPoint: .bottom)
         )
         .overlay(Theme.hairline.frame(height: 0.5), alignment: .bottom)
+        .contentShape(Rectangle())
+        // Double-click the title bar to zoom/maximize, like a standard window.
+        .onTapGesture(count: 2) { NSApp.keyWindow?.zoom(nil) }
     }
 
     private var usingLocalAI: Bool { state.useAppleIntelligence && state.appleIntelligenceSupported }
@@ -66,12 +70,14 @@ private struct TitleBar: View {
     private var badge: some View {
         let color = isOnline ? Theme.movie : Theme.accentGlow
         let localSuffix = usingLocalAI ? " · AI" : (usingLocalDB ? " · DB" : "")
-        let label = isOnline ? "TMDb" : "Local\(localSuffix)"
+        // Spell out what the indicator means so the colour isn't ambiguous.
+        let label = isOnline ? "Online · TMDb" : "Local only\(localSuffix)"
         let help = isOnline
-            ? "Online title search active – only title and year are sent to TMDb, never media files."
-            : "All files are processed locally – no cloud uploads."
+            ? "Online mode: identifying titles via TMDb. Only the title and year are sent — never media files. Turn this off in Settings → Identification to stay fully local."
+            : "Local mode (green): everything is processed on this Mac, no uploads. The alternative is online lookup via TMDb (Settings → Identification)."
         return HStack(spacing: 6) {
-            Circle().fill(color).frame(width: 6, height: 6).shadow(color: color, radius: 3)
+            Image(systemName: isOnline ? "globe" : "lock.fill")
+                .font(.system(size: 9, weight: .bold)).foregroundStyle(color)
             Text(label).font(.system(size: 11, weight: .semibold)).foregroundStyle(color)
         }
         .padding(.horizontal, 8).padding(.vertical, 3)
