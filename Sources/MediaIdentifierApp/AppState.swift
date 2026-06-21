@@ -314,13 +314,13 @@ final class AppState: ObservableObject {
                     await self?.appendConvertLog("✗ \(input.lastPathComponent): \(error.localizedDescription)")
                 }
                 let progress = Double(index + 1) / Double(total)
-                await MainActor.run { self?.convertProgress = progress }
+                await MainActor.run { [weak self] in self?.convertProgress = progress }
             }
             await self?.finishConversion(done: done, failed: failed)
         }
     }
 
-    static func conversionOutputURL(for input: URL, options: ConversionOptions) -> URL {
+    nonisolated static func conversionOutputURL(for input: URL, options: ConversionOptions) -> URL {
         let stem = input.deletingPathExtension().lastPathComponent
         let tag = options.videoCodec == .copy ? "remux" : options.videoCodec.rawValue
         return input.deletingLastPathComponent().appendingPathComponent("\(stem).\(tag).mkv")
