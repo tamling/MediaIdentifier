@@ -41,6 +41,8 @@ final class AppState: ObservableObject {
     // the sidebar.
     @Published var section: SidebarSection = .queue
     @Published var showingSettings = false
+    /// Sort the preview by show → season → episode (movies by title).
+    @Published var sortByShow = true
 
     // Settings.
     @Published var namingOptions: NamingOptions = .default { didSet { rebuildPlan() } }
@@ -434,6 +436,22 @@ final class AppState: ObservableObject {
             return items.filter { $0.mediaFile.parsed.kind == .episode }
         default:
             return items
+        }
+    }
+
+    /// Items for a section, optionally grouped/sorted by show → season → episode.
+    func sortedItems(in section: SidebarSection) -> [RenameItem] {
+        let list = items(in: section)
+        guard sortByShow else { return list }
+        return list.sorted { a, b in
+            let pa = a.mediaFile.parsed, pb = b.mediaFile.parsed
+            let ta = pa.title.lowercased(), tb = pb.title.lowercased()
+            if ta != tb { return ta < tb }
+            let sa = pa.season ?? -1, sb = pb.season ?? -1
+            if sa != sb { return sa < sb }
+            let ea = pa.episode ?? -1, eb = pb.episode ?? -1
+            if ea != eb { return ea < eb }
+            return a.originalFileName < b.originalFileName
         }
     }
 

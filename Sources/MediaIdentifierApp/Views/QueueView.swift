@@ -10,7 +10,7 @@ struct QueueView: View {
 
     @State private var dragging = false
 
-    private var rows: [RenameItem] { state.items(in: section) }
+    private var rows: [RenameItem] { state.sortedItems(in: section) }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -109,6 +109,16 @@ struct QueueView: View {
             }
             .buttonStyle(.plain)
             Spacer()
+            Button(action: { state.sortByShow.toggle() }) {
+                HStack(spacing: 5) {
+                    Image(systemName: "arrow.up.arrow.down")
+                    Text(state.sortByShow ? "Serie/Staffel" : "Reihenfolge")
+                }
+                .font(.system(size: 11.5, weight: .semibold))
+                .foregroundStyle(state.sortByShow ? Theme.accentBright : Theme.textSecondary)
+            }
+            .buttonStyle(.plain)
+            .help("Sortierung: nach Serie → Staffel → Episode")
             HStack(spacing: 14) {
                 Text("\(state.readyCount) bereit")
                     .foregroundStyle(Theme.accentBright)
