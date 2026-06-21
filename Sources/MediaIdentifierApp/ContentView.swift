@@ -10,7 +10,6 @@ struct ContentView: View {
     var body: some View {
         VStack(spacing: 0) {
             TitleBar()
-            ActivityBar()
             HStack(spacing: 0) {
                 SidebarView()
                 Divider().overlay(Theme.hairline)
@@ -50,6 +49,7 @@ private struct TitleBar: View {
             Text("Mediafin")
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(Color(hex: 0xD7D7DA))
+            activity
             Spacer()
             lamps
             badge
@@ -68,6 +68,36 @@ private struct TitleBar: View {
 
     private var usingLocalAI: Bool { state.useAppleIntelligence && state.appleIntelligenceSupported }
     private var usingLocalDB: Bool { state.useLocalDatabase && state.localDatabaseCount > 0 }
+
+    // MARK: Inline activity (progress shown on the title line)
+
+    @ViewBuilder private var activity: some View {
+        if state.isProcessing {
+            activityItem("Renaming", "\(Int(state.progress * 100)) %")
+        } else if state.isConverting {
+            activityItem("Converting", convertLabel)
+        } else if state.isLookingUp {
+            activityItem("Identifying", "…")
+        }
+    }
+
+    private var convertLabel: String {
+        let name = state.currentConvert?.lastPathComponent ?? ""
+        let pct = Int(state.convertProgress * 100)
+        return name.isEmpty ? "\(pct) %" : "\(name) · \(pct) %"
+    }
+
+    private func activityItem(_ title: String, _ detail: String) -> some View {
+        HStack(spacing: 6) {
+            ProgressView().controlSize(.small).scaleEffect(0.6).frame(width: 14)
+            Text(title).font(.system(size: 11, weight: .bold)).foregroundStyle(Theme.textRow)
+            Text(detail).font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(Theme.accentBright)
+                .lineLimit(1).truncationMode(.middle)
+        }
+        .padding(.leading, 6)
+        .layoutPriority(1)
+    }
 
     // MARK: Status lamps (red/yellow/green at-a-glance, on the same line)
 
@@ -134,57 +164,6 @@ private struct TitleBar: View {
         .background(color.opacity(0.14), in: RoundedRectangle(cornerRadius: 6))
         .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(color.opacity(0.3), lineWidth: 0.5))
         .help(help)
-    }
-}
-
-/// Slim, always-visible strip showing what is currently running across the app
-/// (renaming, converting, identifying) plus a steady watch-folder indicator.
-private struct ActivityBar: View {
-    @EnvironmentObject private var state: AppState
-
-    private var active: Bool { state.isProcessing || state.isConverting || state.isLookingUp }
-
-    var body: some View {
-        if active {
-            HStack(spacing: 16) {
-                if state.isProcessing {
-                    item("Rename", "\(Int(state.progress * 100)) %")
-                }
-                if state.isConverting {
-                    item("Convert", convertLabel)
-                }
-                if state.isLookingUp {
-                    item("Identification", "running …")
-                }
-                Spacer()
-                if state.watchActive {
-                    HStack(spacing: 6) {
-                        Circle().fill(Theme.accentBright).frame(width: 6, height: 6)
-                        Text("Watch active").font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(Theme.textSecondary)
-                    }
-                }
-            }
-            .padding(.horizontal, 16)
-            .frame(height: 26)
-            .background(Theme.titleBarBot)
-            .overlay(Theme.hairline.frame(height: 0.5), alignment: .bottom)
-        }
-    }
-
-    private var convertLabel: String {
-        let name = state.currentConvert?.lastPathComponent ?? ""
-        return "\(name) · \(Int(state.convertProgress * 100)) %"
-    }
-
-    private func item(_ title: String, _ detail: String) -> some View {
-        HStack(spacing: 7) {
-            ProgressView().controlSize(.small).scaleEffect(0.7)
-            Text(title).font(.system(size: 11, weight: .bold)).foregroundStyle(Theme.textRow)
-            Text(detail).font(.system(size: 11, design: .monospaced))
-                .foregroundStyle(Theme.accentBright)
-                .lineLimit(1).truncationMode(.middle)
-        }
     }
 }
 
