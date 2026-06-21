@@ -184,12 +184,7 @@ struct MetadataSettingsView: View {
                         .disabled(state.tmdbAPIKey.isEmpty)
                     Spacer()
                 }
-                if let result = state.tmdbTestResult {
-                    Text(result)
-                        .font(.caption)
-                        .foregroundStyle(result.hasPrefix("✓") ? Theme.accentBright : Theme.warn)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+                testResult(state.tmdbTestResult)
             }
     }
 
@@ -213,12 +208,7 @@ struct MetadataSettingsView: View {
                         .disabled(!state.jellyfinEnabled || state.jellyfinServerURL.isEmpty || state.jellyfinAPIKey.isEmpty)
                     Spacer()
                 }
-                if let result = state.jellyfinTestResult {
-                    Text(result)
-                        .font(.caption)
-                        .foregroundStyle(result.hasPrefix("✓") ? Theme.accentBright : Theme.warn)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+                testResult(state.jellyfinTestResult)
             }
 
             // Read-only status web page (FR20)
@@ -261,26 +251,17 @@ struct MetadataSettingsView: View {
         return state.localDatabasePath.isEmpty ? "Keine Datei gewählt" : "Nicht geladen"
     }
 
-    private func chooseLibrary() {
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.allowsMultipleSelection = false
-        panel.prompt = "Wählen"
-        if panel.runModal() == .OK, let url = panel.url {
-            state.setLibraryFolder(url)
-        }
-    }
+    private func chooseLibrary() { chooseFolder(apply: state.setLibraryFolder) }
+    private func chooseOutput() { chooseFolder(apply: state.setOutputFolder) }
 
-    private func chooseOutput() {
+    /// Prompts for a single folder and passes the chosen URL to `apply`.
+    private func chooseFolder(apply: (URL) -> Void) {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
         panel.prompt = "Wählen"
-        if panel.runModal() == .OK, let url = panel.url {
-            state.setOutputFolder(url)
-        }
+        if panel.runModal() == .OK, let url = panel.url { apply(url) }
     }
 
     private func chooseDatabase() {
@@ -291,6 +272,17 @@ struct MetadataSettingsView: View {
         panel.prompt = "Laden"
         if panel.runModal() == .OK, let url = panel.url {
             state.setLocalDatabaseFile(url)
+        }
+    }
+
+    /// Coloured connection-test feedback (green for success, warn otherwise).
+    @ViewBuilder
+    private func testResult(_ result: String?) -> some View {
+        if let result {
+            Text(result)
+                .font(.caption)
+                .foregroundStyle(result.hasPrefix("✓") ? Theme.accentBright : Theme.warn)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 

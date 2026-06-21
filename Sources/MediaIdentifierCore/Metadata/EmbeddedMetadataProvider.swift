@@ -44,19 +44,10 @@ public struct EmbeddedMetadataProvider: MetadataProvider {
     private func year(from items: [AVMetadataItem]) async throws -> Int? {
         // Try an explicit creation date, then any year-like number in its string.
         if let dateString = try await string(from: items, identifier: .commonIdentifierCreationDate),
-           let parsed = Self.extractYear(dateString) {
+           let parsed = YearParser.firstYear(in: dateString) {
             return parsed
         }
         return nil
-    }
-
-    static func extractYear(_ string: String) -> Int? {
-        // First 19xx/20xx run in the string.
-        let pattern = try? NSRegularExpression(pattern: #"(19|20)\d{2}"#)
-        let range = NSRange(string.startIndex..<string.endIndex, in: string)
-        guard let match = pattern?.firstMatch(in: string, range: range),
-              let r = Range(match.range, in: string) else { return nil }
-        return Int(string[r])
     }
 }
 #endif

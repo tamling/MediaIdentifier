@@ -34,7 +34,7 @@ public struct FFprobeMetadataProvider: MetadataProvider {
         guard let title, !title.isEmpty else { return nil }
 
         let year = Self.value(in: tags, keys: ["date", "year", "creation_time", "released_date"])
-            .flatMap(Self.extractYear)
+            .flatMap(YearParser.firstYear)
         return MediaMetadata(
             title: title,
             year: year ?? parsed.year,
@@ -82,15 +82,6 @@ public struct FFprobeMetadataProvider: MetadataProvider {
             if let value = tags[key.lowercased()] { return value }
         }
         return nil
-    }
-
-    /// First 19xx/20xx run in the string.
-    static func extractYear(_ string: String) -> Int? {
-        let pattern = try? NSRegularExpression(pattern: #"(19|20)\d{2}"#)
-        let range = NSRange(string.startIndex..<string.endIndex, in: string)
-        guard let match = pattern?.firstMatch(in: string, range: range),
-              let r = Range(match.range, in: string) else { return nil }
-        return Int(string[r])
     }
 }
 #endif

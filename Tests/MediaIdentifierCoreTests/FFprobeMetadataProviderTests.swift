@@ -30,12 +30,5 @@ final class FFprobeMetadataProviderTests: XCTestCase {
         )
         XCTAssertNil(FFprobeMetadataProvider.value(in: tags, keys: ["title"]))
     }
-
-    func testExtractsYearFromVariousDateFormats() {
-        XCTAssertEqual(FFprobeMetadataProvider.extractYear("1999-03-31"), 1999)
-        XCTAssertEqual(FFprobeMetadataProvider.extractYear("2021"), 2021)
-        XCTAssertEqual(FFprobeMetadataProvider.extractYear("2014-08-01T00:00:00Z"), 2014)
-        XCTAssertNil(FFprobeMetadataProvider.extractYear("no year here"))
-    }
 }
 #endif
