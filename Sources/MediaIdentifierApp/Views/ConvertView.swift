@@ -207,6 +207,24 @@ struct ConvertView: View {
             }
             .pickerStyle(.segmented)
 
+            // Plain-language explanation of the selected codec.
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: codecInfo.icon).font(.system(size: 12))
+                    .foregroundStyle(codecInfo.color)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(codecInfo.headline)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(Theme.textRow)
+                    Text(codecInfo.detail)
+                        .font(.caption).foregroundStyle(Theme.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer()
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.white.opacity(0.03), in: RoundedRectangle(cornerRadius: 8))
+
             Toggle("Hardwarebeschleunigung (VideoToolbox)",
                    isOn: $state.conversionOptions.useHardwareAcceleration)
             if o.useHardwareAcceleration {
@@ -277,6 +295,23 @@ struct ConvertView: View {
 
             Toggle("Nur erste Tonspur behalten", isOn: $state.conversionOptions.keepOnlyFirstAudio)
             Toggle("Untertitelspuren entfernen", isOn: $state.conversionOptions.stripSubtitles)
+        }
+    }
+
+    private var codecInfo: (icon: String, color: Color, headline: String, detail: String) {
+        switch o.videoCodec {
+        case .h265:
+            return ("star.fill", Theme.accentBright, "Empfohlen für die meisten",
+                    "Modern und sparsam: kleine Dateien bei guter Qualität. Läuft auf fast allen aktuellen Geräten (auch Apple, Jellyfin-Clients).")
+        case .h264:
+            return ("checkmark.seal", Theme.movie, "Maximale Kompatibilität",
+                    "Läuft wirklich überall – auch auf alten Fernsehern und Geräten. Dafür sind die Dateien größer als bei H.265.")
+        case .av1:
+            return ("sparkles", Theme.series, "Kleinste Dateien",
+                    "Am effizientesten (noch kleiner als H.265), aber flüssig nur auf neueren Geräten mit AV1-Hardware. Das Umwandeln dauert deutlich länger.")
+        case .copy:
+            return ("doc.on.doc", Theme.textSecondary, "Nur umpacken",
+                    "Kein Neukodieren – das Video wird unverändert in eine MKV-Datei gelegt. Verlustfrei und sehr schnell, spart aber keinen Speicher.")
         }
     }
 
