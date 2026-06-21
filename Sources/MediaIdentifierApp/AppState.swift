@@ -82,6 +82,12 @@ final class AppState: ObservableObject {
 
     // Conversion options (FR16/FR17 scaffold).
     @Published var conversionOptions = ConversionOptions()
+    // Conversion queue & progress (FR16).
+    @Published var convertFiles: [URL] = []
+    @Published var isConverting = false
+    @Published var convertProgress: Double = 0
+    @Published var convertStatus: String?
+    @Published private(set) var convertLog: [String] = []
 
     // Watch folder (FR20). Auto-imports (and optionally auto-renames) finished
     // downloads dropped into a chosen folder.
@@ -266,6 +272,72 @@ final class AppState: ObservableObject {
         importURLs(panel.urls)
     }
 
+    // MARK: Conversion (FR16/FR17)
+
+    func addConvertFiles(_ urls: [URL]) {
+        let found = scanner.scan(urls: urls).map { $0.url }
+        var seen = Set(convertFiles.map { $0.standardizedFileURL.path })
+        for url in found where seen.insert(url.standardizedFileURL.path).inserted {
+            convertFiles.append(url)
+        }
+    }
+
+    func removeConvertFile(_ url: URL) { convertFiles.removeAll { $0 == url } }
+    func clearConvertFiles() { convertFiles.removeAll(); convertProgress = 0; convertStatus = nil }
+
+    func startConversion() {
+        guard !isConverting, !convertFiles.isEmpty else { return }
+        guard let ffmpeg = ffmpegPath else {
+            convertStatus = "FFmpeg nicht gefunden – installieren mit: brew install ffmpeg"
+            return
+        }
+        isConverting = true
+        convertProgress = 0
+        convertStatus = "Konvertiere…"
+
+        let files = convertFiles
+        let options = conversionOptions
+        let total = files.count
+
+        Task.detached(priority: .userInitiated) { [weak self] in
+            let converter = FFmpegConverter(ffmpegPath: ffmpeg)
+            var done = 0, failed = 0
+            for (index, input) in files.enumerated() {
+                let output = AppState.conversionOutputURL(for: input, options: options)
+                await self?.appendConvertLog("⏳ \(input.lastPathComponent)")
+                do {
+                    try converter.convert(input: input, output: output, options: options)
+                    done += 1
+                    await self?.appendConvertLog("✓ \(output.lastPathComponent)")
+                } catch {
+                    failed += 1
+                    await self?.appendConvertLog("✗ \(input.lastPathComponent): \(error.localizedDescription)")
+                }
+                let progress = Double(index + 1) / Double(total)
+                await MainActor.run { self?.convertProgress = progress }
+            }
+            await self?.finishConversion(done: done, failed: failed)
+        }
+    }
+
+    static func conversionOutputURL(for input: URL, options: ConversionOptions) -> URL {
+        let stem = input.deletingPathExtension().lastPathComponent
+        let tag = options.videoCodec == .copy ? "remux" : options.videoCodec.rawValue
+        return input.deletingLastPathComponent().appendingPathComponent("\(stem).\(tag).mkv")
+    }
+
+    private func appendConvertLog(_ line: String) {
+        let stamp = DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium)
+        convertLog.insert("\(stamp)  \(line)", at: 0)
+        if convertLog.count > 200 { convertLog.removeLast() }
+    }
+
+    private func finishConversion(done: Int, failed: Int) {
+        isConverting = false
+        convertProgress = 1
+        convertStatus = "Fertig: \(done) konvertiert, \(failed) fehlgeschlagen."
+    }
+
     // MARK: Metadata enrichment (FR3)
 
     var appleIntelligenceSupported: Bool {
@@ -275,11 +347,12 @@ final class AppState: ObservableObject {
         return false
     }
 
-    /// Whether an FFmpeg binary is present in a common location (FR16).
-    var ffmpegAvailable: Bool {
+    /// First FFmpeg binary found in a common location (FR16).
+    var ffmpegPath: String? {
         ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/usr/bin/ffmpeg"]
-            .contains { FileManager.default.isExecutableFile(atPath: $0) }
+            .first { FileManager.default.isExecutableFile(atPath: $0) }
     }
+    var ffmpegAvailable: Bool { ffmpegPath != nil }
 
     var watchActive: Bool { watchEnabled && watchFolderURL != nil }
     var tmdbConfigured: Bool { onlineLookupEnabled && !tmdbAPIKey.isEmpty }

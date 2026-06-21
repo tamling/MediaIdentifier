@@ -161,8 +161,8 @@ you can decide per file (or apply one choice to all) before anything is moved.
 | FR13 | Rückgängig-Funktion | ✅ | `RenameJournal`, `RenameExecutor.undoLast` |
 | FR14 | Untertitel (SRT/ASS/SUB) mit umbenennen | ✅ | `MediaScanner`, `RenamePlanner` |
 | FR15 | Zusätzliche Dateien (NFO/Cover/Sample) | ✅ | `VideoFileTypes`, `RenamePlanner` |
-| FR16 | Konvertierung via FFmpeg | 🧩 Gerüst | `FFmpegArgumentBuilder`, `FFmpegConverter` |
-| FR17 | Hardwarebeschleunigung (VideoToolbox) | 🧩 Gerüst | `ConversionOptions.useHardwareAcceleration` |
+| FR16 | Konvertierung via FFmpeg | ✅ | `FFmpegConverter` + „Konvertieren"-Ansicht (Drop, Start, Verlauf) |
+| FR17 | Hardwarebeschleunigung (VideoToolbox) | ✅ | `ConversionOptions.useHardwareAcceleration` |
 | FR18 | Lokale Verarbeitung (keine Cloud-Uploads) | ✅ | Offline default, keine Medien-Uploads |
 | FR19 | Grafische Oberfläche (Drop, Vorschau, Fortschritt, Start, Log) | ✅ | SwiftUI Views |
 | FR20 | Erweiterbarkeit (Plex/Emby/Sonarr, Watch-Folder …) | ✅ Basis | Protokoll-basierte Provider/Konverter |
