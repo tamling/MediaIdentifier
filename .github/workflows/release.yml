@@ -89,6 +89,18 @@ jobs:
           # Re-zip so the published archive contains the stapled ticket.
           ditto -c -k --keepParent "$APP" Mediafin.app.zip
           security delete-keychain "$KEYCHAIN" || true
+      - name: Remove stale release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Drop any previously published asset that isn't the current build,
+          # so only Mediafin.app.zip remains on the "latest" release.
+          gh release view latest --repo "$GITHUB_REPOSITORY" --json assets \
+            --jq '.assets[].name' 2>/dev/null | while read -r name; do
+              [ "$name" = "Mediafin.app.zip" ] && continue
+              echo "Deleting stale asset: $name"
+              gh release delete-asset latest "$name" --repo "$GITHUB_REPOSITORY" -y || true
+            done
       - name: Publish to "latest" release
         uses: softprops/action-gh-release@v2
         with:
