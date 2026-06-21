@@ -34,7 +34,7 @@ The repository is a Swift Package plus an XcodeGen spec.
 ./build_app.sh
 ```
 
-Produces `build/MediaIdentifier.app`. It builds via Xcode (xcodegen + xcodebuild)
+Produces `build/Mediafin.app`. It builds via Xcode (xcodegen + xcodebuild)
 when available and falls back to a SwiftPM build with a hand-assembled bundle, so
 it does not depend on the Xcode project format / version. On failure it prints
 the error and keeps a log at `build/build.log`.
@@ -43,9 +43,9 @@ the error and keeps a log at `build/build.log`.
 
 ```bash
 brew install xcodegen      # one-time
-xcodegen generate          # creates MediaIdentifier.xcodeproj (project format 77)
-open MediaIdentifier.xcodeproj
-# Select the "MediaIdentifier" scheme and Run (⌘R)
+xcodegen generate          # creates Mediafin.xcodeproj (project format 77)
+open Mediafin.xcodeproj
+# Select the "Mediafin" scheme and Run (⌘R)
 ```
 
 > Older Xcode (≤ 15.x) cannot open the generated project ("future Xcode project

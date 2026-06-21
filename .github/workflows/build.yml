@@ -32,8 +32,8 @@ jobs:
         run: |
           set -o pipefail
           xcodebuild \
-            -project MediaIdentifier.xcodeproj \
-            -scheme MediaIdentifier \
+            -project Mediafin.xcodeproj \
+            -scheme Mediafin \
             -configuration Release \
             -derivedDataPath build \
             -destination 'generic/platform=macOS' \
@@ -44,7 +44,7 @@ jobs:
         run: |
           APP=$(find build/Build/Products/Release -maxdepth 1 -name '*.app' | head -1)
           echo "Built: $APP"
-          ARCHS_OUT=$(lipo -archs "$APP/Contents/MacOS/MediaIdentifier")
+          ARCHS_OUT=$(lipo -archs "$APP/Contents/MacOS/Mediafin")
           echo "Architectures: $ARCHS_OUT"
           case "$ARCHS_OUT" in
             *arm64*x86_64*|*x86_64*arm64*) echo "Universal binary OK." ;;
@@ -52,10 +52,10 @@ jobs:
           esac
           # Ad-hoc sign so the unsigned universal app is not rejected as "damaged".
           codesign --force --deep --sign - "$APP"
-          ditto -c -k --keepParent "$APP" MediaIdentifier.app.zip
+          ditto -c -k --keepParent "$APP" Mediafin.app.zip
       - name: Upload .app artifact
         uses: actions/upload-artifact@v4
         with:
-          name: MediaIdentifier-app
-          path: MediaIdentifier.app.zip
+          name: Mediafin-app
+          path: Mediafin.app.zip
           if-no-files-found: error

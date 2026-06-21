@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# Builds MediaIdentifier.app locally and leaves it at build/MediaIdentifier.app.
+# Builds Mediafin.app locally and leaves it at build/Mediafin.app.
 # Tries Xcode (xcodegen + xcodebuild) first; falls back to a SwiftPM build with
 # a hand-assembled .app bundle. On failure it prints the error and keeps a log
 # instead of vanishing.
 set -uo pipefail
 cd "$(dirname "$0")"
 
-NAME="MediaIdentifier"
+NAME="Mediafin"
 PRODUCT="MediaIdentifierApp"
-BUNDLE_ID="com.mediaidentifier.app"
+BUNDLE_ID="com.mediafin.app"
 OUT="build"
 LOG="$OUT/build.log"
 ICON_SRC="docs/logo.png"

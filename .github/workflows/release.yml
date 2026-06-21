@@ -23,8 +23,8 @@ jobs:
         run: |
           set -o pipefail
           xcodebuild \
-            -project MediaIdentifier.xcodeproj \
-            -scheme MediaIdentifier \
+            -project Mediafin.xcodeproj \
+            -scheme Mediafin \
             -configuration Release \
             -derivedDataPath build \
             -destination 'generic/platform=macOS' \
@@ -47,7 +47,7 @@ jobs:
           set -euo pipefail
           APP=$(find build/Build/Products/Release -maxdepth 1 -name '*.app' | head -1)
           echo "Built: $APP"
-          ARCHS_OUT=$(lipo -archs "$APP/Contents/MacOS/MediaIdentifier")
+          ARCHS_OUT=$(lipo -archs "$APP/Contents/MacOS/Mediafin")
           echo "Architectures: $ARCHS_OUT"
           # Fail loudly rather than ship a single-arch build by accident.
           case "$ARCHS_OUT" in
@@ -58,7 +58,7 @@ jobs:
           if [ -z "${DEVELOPER_ID_P12_BASE64}" ]; then
             echo "No signing secrets set → ad-hoc signature."
             codesign --force --deep --sign - "$APP"
-            ditto -c -k --keepParent "$APP" MediaIdentifier.app.zip
+            ditto -c -k --keepParent "$APP" Mediafin.app.zip
             exit 0
           fi
 
@@ -81,13 +81,13 @@ jobs:
           codesign --verify --deep --strict --verbose=2 "$APP"
 
           # Notarise the zipped app, then staple the ticket so it works offline.
-          ditto -c -k --keepParent "$APP" MediaIdentifier.app.zip
-          xcrun notarytool submit MediaIdentifier.app.zip \
+          ditto -c -k --keepParent "$APP" Mediafin.app.zip
+          xcrun notarytool submit Mediafin.app.zip \
             --apple-id "$NOTARY_APPLE_ID" --team-id "$NOTARY_TEAM_ID" \
             --password "$NOTARY_PASSWORD" --wait
           xcrun stapler staple "$APP"
           # Re-zip so the published archive contains the stapled ticket.
-          ditto -c -k --keepParent "$APP" MediaIdentifier.app.zip
+          ditto -c -k --keepParent "$APP" Mediafin.app.zip
           security delete-keychain "$KEYCHAIN" || true
       - name: Publish to "latest" release
         uses: softprops/action-gh-release@v2
@@ -95,4 +95,4 @@ jobs:
           tag_name: latest
           name: Latest build (Universal — Apple Silicon & Intel)
           prerelease: true
-          files: MediaIdentifier.app.zip
+          files: Mediafin.app.zip
