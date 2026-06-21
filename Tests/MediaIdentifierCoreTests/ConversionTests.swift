@@ -74,4 +74,18 @@ final class ConversionTests: XCTestCase {
         XCTAssertTrue(adjacent(a, "-c:v", "copy"))
         XCTAssertEqual(a.last, "/tmp/out.mkv")
     }
+
+    // FFmpeg progress: Duration line is parsed into seconds.
+    func testParseDuration() {
+        XCTAssertEqual(FFmpegConverter.parseDuration("  Duration: 01:02:03.50, start: 0"), 3723.5)
+        XCTAssertEqual(FFmpegConverter.parseDuration("Duration: 00:00:42.00,"), 42.0)
+        XCTAssertNil(FFmpegConverter.parseDuration("no duration here"))
+    }
+
+    func testH264HardwareAndSoftwarePaths() {
+        XCTAssertTrue(args(ConversionOptions(videoCodec: .h264, useHardwareAcceleration: true))
+            .contains("h264_videotoolbox"))
+        XCTAssertTrue(args(ConversionOptions(videoCodec: .h264, useHardwareAcceleration: false))
+            .contains("libx264"))
+    }
 }

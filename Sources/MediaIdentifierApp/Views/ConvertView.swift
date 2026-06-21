@@ -23,8 +23,18 @@ struct ConvertView: View {
         VStack(spacing: 0) {
             header
             if state.isConverting {
-                ProgressView(value: state.convertProgress)
-                    .progressViewStyle(.linear).tint(Theme.accent)
+                VStack(spacing: 2) {
+                    ProgressView(value: state.convertProgress)
+                        .progressViewStyle(.linear).tint(Theme.accent)
+                    if let detail = state.convertDetail {
+                        HStack {
+                            Spacer()
+                            Text(detail).font(.system(size: 10.5, design: .monospaced))
+                                .foregroundStyle(Theme.textSecondary)
+                        }
+                    }
+                }
+                .padding(.horizontal, 18).padding(.top, 4)
             }
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {

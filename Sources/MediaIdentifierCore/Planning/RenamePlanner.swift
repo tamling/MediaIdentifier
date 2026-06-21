@@ -18,8 +18,18 @@ public struct RenamePlanner {
     ///   - mediaFiles: parsed media files to rename.
     ///   - outputRoot: destination root. When `nil`, each file is renamed in
     ///     place relative to its own parent directory (FR18, fully local).
-    public func makePlan(for mediaFiles: [MediaFile], outputRoot: URL? = nil) -> [RenameItem] {
-        var items = mediaFiles.map { makeItem(for: $0, outputRoot: outputRoot) }
+    ///   - libraryRoot: when set, finished media is moved here as the final
+    ///     step — movies always, but episodes only when their season is
+    ///     complete (partial seasons stay at `outputRoot`/in place).
+    public func makePlan(
+        for mediaFiles: [MediaFile],
+        outputRoot: URL? = nil,
+        libraryRoot: URL? = nil
+    ) -> [RenameItem] {
+        let completeSeasons = libraryRoot == nil ? [] : SeasonAnalyzer.completeSeasons(in: mediaFiles)
+        var items = mediaFiles.map {
+            makeItem(for: $0, outputRoot: outputRoot, libraryRoot: libraryRoot, completeSeasons: completeSeasons)
+        }
         detectConflicts(in: &items)
         return items
     }
@@ -46,8 +56,25 @@ public struct RenamePlanner {
 
     // MARK: Item construction
 
-    private func makeItem(for mediaFile: MediaFile, outputRoot: URL?) -> RenameItem {
-        let root = outputRoot ?? mediaFile.url.deletingLastPathComponent()
+    private func makeItem(
+        for mediaFile: MediaFile,
+        outputRoot: URL?,
+        libraryRoot: URL?,
+        completeSeasons: Set<SeasonAnalyzer.SeasonKey>
+    ) -> RenameItem {
+        let inPlace = outputRoot ?? mediaFile.url.deletingLastPathComponent()
+        let root: URL
+        if let libraryRoot {
+            switch mediaFile.parsed.kind {
+            case .movie, .unknown:
+                root = libraryRoot
+            case .episode:
+                root = SeasonAnalyzer.isComplete(mediaFile.parsed, within: completeSeasons)
+                    ? libraryRoot : inPlace
+            }
+        } else {
+            root = inPlace
+        }
         let ext = mediaFile.url.pathExtension
         let relativePath = namer.relativePath(for: mediaFile.parsed, fileExtension: ext)
         let primaryDestination = root.appendingPathComponent(relativePath)

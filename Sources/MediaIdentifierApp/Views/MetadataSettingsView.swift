@@ -26,6 +26,24 @@ struct MetadataSettingsView: View {
                 ))
             }
 
+            // Library move (complete seasons / movies)
+            group("Bibliothek") {
+                Toggle("Fertige Dateien in Bibliothek verschieben", isOn: $state.moveToLibrary)
+                HStack(spacing: 10) {
+                    Image(systemName: "books.vertical").foregroundStyle(Theme.textSecondary)
+                    Text(state.libraryFolderPath.isEmpty ? "Kein Ordner gewählt" : state.libraryFolderPath)
+                        .font(.system(size: 12, design: .monospaced))
+                        .foregroundStyle(state.libraryFolderPath.isEmpty ? Theme.textTertiary : Theme.textRow)
+                        .lineLimit(1).truncationMode(.middle)
+                    Spacer()
+                    Button("Ordner wählen…", action: chooseLibrary)
+                }
+                .disabled(!state.moveToLibrary)
+                Text("Filme werden immer verschoben; Serien nur, wenn die Staffel komplett ist (Episoden 1…N lückenlos). Unvollständige Staffeln bleiben am Ort.")
+                    .font(.caption).foregroundStyle(Theme.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             // Conflicts (FR11)
             group("Bei Konflikt") {
                 Picker("", selection: $state.conflictPolicy) {
@@ -132,6 +150,17 @@ struct MetadataSettingsView: View {
         if state.isLoadingDatabase { return "Wird geladen …" }
         if state.localDatabaseCount > 0 { return "\(state.localDatabaseCount) Titel geladen" }
         return state.localDatabasePath.isEmpty ? "Keine Datei gewählt" : "Nicht geladen"
+    }
+
+    private func chooseLibrary() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Wählen"
+        if panel.runModal() == .OK, let url = panel.url {
+            state.setLibraryFolder(url)
+        }
     }
 
     private func chooseDatabase() {

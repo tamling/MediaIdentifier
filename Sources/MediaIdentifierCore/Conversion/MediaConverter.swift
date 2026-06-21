@@ -162,6 +162,22 @@ public enum FFmpegArgumentBuilder {
     }
 }
 
+/// Live conversion progress parsed from FFmpeg's `-progress` output (FR16).
+public struct ConversionProgress: Sendable {
+    /// Completion fraction 0...1.
+    public var fraction: Double
+    /// Encode speed relative to realtime (e.g. 3.1 means 3.1×). `nil` if unknown.
+    public var speed: Double?
+    /// Estimated remaining seconds, when speed and duration are known.
+    public var etaSeconds: Double?
+
+    public init(fraction: Double, speed: Double? = nil, etaSeconds: Double? = nil) {
+        self.fraction = fraction
+        self.speed = speed
+        self.etaSeconds = etaSeconds
+    }
+}
+
 /// Future-facing converter that shells out to FFmpeg (FR16). Execution is
 /// implemented but the UI exposes it as an opt-in advanced feature.
 public final class FFmpegConverter {
@@ -197,7 +213,7 @@ public final class FFmpegConverter {
         input: URL,
         output: URL,
         options: ConversionOptions,
-        progress: (@Sendable (Double) -> Void)? = nil
+        progress: (@Sendable (ConversionProgress) -> Void)? = nil
     ) throws {
         guard isAvailable else { throw ConverterError.ffmpegNotFound }
 
@@ -223,10 +239,15 @@ public final class FFmpegConverter {
         outPipe.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
             guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
-            for line in text.split(separator: "\n") where line.hasPrefix("out_time_us=") {
-                if let us = Double(line.dropFirst("out_time_us=".count)),
-                   let duration = state.duration, duration > 0 {
-                    progress?(min(1.0, us / 1_000_000.0 / duration))
+            for line in text.split(separator: "\n") {
+                if line.hasPrefix("out_time_us=") {
+                    state.setTime(Double(line.dropFirst("out_time_us=".count)))
+                } else if line.hasPrefix("speed=") {
+                    // e.g. "speed=3.12x"
+                    let raw = line.dropFirst("speed=".count).replacingOccurrences(of: "x", with: "")
+                    state.setSpeed(Double(raw.trimmingCharacters(in: .whitespaces)))
+                } else if line.hasPrefix("progress=") {
+                    if let p = state.snapshot() { progress?(p) }
                 }
             }
         }
@@ -239,7 +260,7 @@ public final class FFmpegConverter {
         if process.terminationStatus != 0 {
             throw ConverterError.conversionFailed(code: process.terminationStatus, message: state.errorText)
         }
-        progress?(1)
+        progress?(ConversionProgress(fraction: 1))
     }
 
     /// Parses an FFmpeg "Duration: HH:MM:SS.ss" line into seconds.
@@ -260,10 +281,32 @@ public final class FFmpegConverter {
         private let lock = NSLock()
         private var _duration: Double?
         private var _error = ""
-        var duration: Double? { lock.lock(); defer { lock.unlock() }; return _duration }
+        private var _timeUs: Double?
+        private var _speed: Double?
+
         var errorText: String { lock.lock(); defer { lock.unlock() }; return _error }
         func setDurationIfNeeded(_ d: Double) { lock.lock(); if _duration == nil { _duration = d }; lock.unlock() }
-        func appendError(_ s: String) { lock.lock(); _error += s; lock.unlock() }
+        func appendError(_ s: String) {
+            lock.lock()
+            _error += s
+            if _error.count > 20_000 { _error = String(_error.suffix(20_000)) }  // bound memory
+            lock.unlock()
+        }
+        func setTime(_ us: Double?) { lock.lock(); _timeUs = us; lock.unlock() }
+        func setSpeed(_ s: Double?) { lock.lock(); _speed = s; lock.unlock() }
+
+        /// Builds a progress snapshot from the latest time/speed/duration.
+        func snapshot() -> ConversionProgress? {
+            lock.lock(); defer { lock.unlock() }
+            guard let duration = _duration, duration > 0, let us = _timeUs else { return nil }
+            let seconds = us / 1_000_000.0
+            let fraction = min(1.0, max(0.0, seconds / duration))
+            var eta: Double?
+            if let speed = _speed, speed > 0 {
+                eta = max(0.0, (duration - seconds) / speed)
+            }
+            return ConversionProgress(fraction: fraction, speed: _speed, etaSeconds: eta)
+        }
     }
     #endif
 }

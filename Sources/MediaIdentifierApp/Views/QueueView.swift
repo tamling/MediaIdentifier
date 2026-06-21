@@ -85,13 +85,16 @@ struct QueueView: View {
         VStack(spacing: 0) {
             listHeader
             ScrollView {
-                LazyVStack(spacing: 4) {
+                LazyVStack(spacing: 4, pinnedViews: [.sectionHeaders]) {
                     ForEach(sections) { section in
-                        if let title = section.title {
-                            GroupHeader(title: title, count: section.items.count)
-                        }
-                        ForEach(section.items) { item in
-                            FileRowView(item: item)
+                        Section {
+                            ForEach(section.items) { item in
+                                FileRowView(item: item)
+                            }
+                        } header: {
+                            if let title = section.title {
+                                GroupHeader(title: title, count: section.items.count)
+                            }
                         }
                     }
                 }
@@ -276,7 +279,8 @@ private struct GroupHeader: View {
             Spacer()
         }
         .padding(.horizontal, 14)
-        .padding(.top, 12).padding(.bottom, 4)
+        .padding(.top, 12).padding(.bottom, 6)
+        .background(Theme.windowBg)
     }
 }
 

@@ -49,6 +49,15 @@ final class AppState: ObservableObject {
     @Published var conflictPolicy: ConflictPolicy = .ask
     @Published var outputMode: OutputMode = .inPlace { didSet { rebuildPlan() } }
 
+    // Final move into a library (movies always; series only when the season is
+    // complete). Off by default.
+    @Published var moveToLibrary = false {
+        didSet { UserDefaults.standard.set(moveToLibrary, forKey: Keys.moveToLibrary); rebuildPlan() }
+    }
+    @Published var libraryFolderPath = "" {
+        didSet { UserDefaults.standard.set(libraryFolderPath, forKey: Keys.libraryPath); rebuildPlan() }
+    }
+
     // Online metadata lookup (FR3). Disabled by default to stay fully local (FR18).
     @Published var onlineLookupEnabled = false {
         didSet { UserDefaults.standard.set(onlineLookupEnabled, forKey: Keys.onlineLookup) }
@@ -87,6 +96,7 @@ final class AppState: ObservableObject {
     @Published var isConverting = false
     @Published var convertProgress: Double = 0
     @Published var convertStatus: String?
+    @Published var convertDetail: String?
     @Published private(set) var convertLog: [String] = []
 
     // Watch folder (FR20). Auto-imports (and optionally auto-renames) finished
@@ -137,6 +147,8 @@ final class AppState: ObservableObject {
         static let useEmbedded = "useEmbeddedMetadata"
         static let useLocalDB = "useLocalDatabase"
         static let localDBPath = "localDatabasePath"
+        static let moveToLibrary = "moveToLibrary"
+        static let libraryPath = "libraryFolderPath"
     }
 
     /// Original scanned media, kept so the plan can be rebuilt when settings change.
@@ -159,6 +171,8 @@ final class AppState: ObservableObject {
         useEmbeddedMetadata = UserDefaults.standard.bool(forKey: Keys.useEmbedded)
         useLocalDatabase = UserDefaults.standard.bool(forKey: Keys.useLocalDB)
         localDatabasePath = UserDefaults.standard.string(forKey: Keys.localDBPath) ?? ""
+        moveToLibrary = UserDefaults.standard.bool(forKey: Keys.moveToLibrary)
+        libraryFolderPath = UserDefaults.standard.string(forKey: Keys.libraryPath) ?? ""
         if useLocalDatabase, !localDatabasePath.isEmpty { loadDatabase() }
         watchAutoRename = UserDefaults.standard.object(forKey: Keys.watchAuto) as? Bool ?? true
         watchFolderPath = UserDefaults.standard.string(forKey: Keys.watchPath) ?? ""
@@ -221,6 +235,13 @@ final class AppState: ObservableObject {
         case let .customFolder(url): return url
         }
     }
+
+    var libraryRoot: URL? {
+        guard moveToLibrary, !libraryFolderPath.isEmpty else { return nil }
+        return URL(fileURLWithPath: libraryFolderPath)
+    }
+
+    func setLibraryFolder(_ url: URL) { libraryFolderPath = url.path }
 
     private func sourcePath(_ item: RenameItem) -> String {
         item.mediaFile.url.standardizedFileURL.path
@@ -303,12 +324,13 @@ final class AppState: ObservableObject {
             let converter = FFmpegConverter(ffmpegPath: ffmpeg)
             var done = 0, failed = 0
             for (index, input) in files.enumerated() {
-                let output = AppState.conversionOutputURL(for: input, options: options)
+                let output = AppState.uniqueOutputURL(for: input, options: options)
                 await self?.appendConvertLog("⏳ \(input.lastPathComponent)")
                 do {
-                    try converter.convert(input: input, output: output, options: options) { frac in
+                    try converter.convert(input: input, output: output, options: options) { p in
                         Task { @MainActor [weak self] in
-                            self?.convertProgress = (Double(index) + frac) / Double(total)
+                            self?.convertProgress = (Double(index) + p.fraction) / Double(total)
+                            self?.convertDetail = AppState.progressDetail(p)
                         }
                     }
                     done += 1
@@ -330,6 +352,22 @@ final class AppState: ObservableObject {
         return input.deletingLastPathComponent().appendingPathComponent("\(stem).\(tag).mkv")
     }
 
+    /// Output path that does not overwrite an existing file (ffmpeg runs with -y).
+    nonisolated static func uniqueOutputURL(for input: URL, options: ConversionOptions) -> URL {
+        let base = conversionOutputURL(for: input, options: options)
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: base.path) else { return base }
+        let dir = base.deletingLastPathComponent()
+        let stem = base.deletingPathExtension().lastPathComponent
+        let ext = base.pathExtension
+        var n = 1
+        while true {
+            let candidate = dir.appendingPathComponent("\(stem) (\(n)).\(ext)")
+            if !fm.fileExists(atPath: candidate.path) { return candidate }
+            n += 1
+        }
+    }
+
     private func appendConvertLog(_ line: String) {
         let stamp = DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium)
         convertLog.insert("\(stamp)  \(line)", at: 0)
@@ -339,7 +377,19 @@ final class AppState: ObservableObject {
     private func finishConversion(done: Int, failed: Int) {
         isConverting = false
         convertProgress = 1
+        convertDetail = nil
         convertStatus = "Fertig: \(done) konvertiert, \(failed) fehlgeschlagen."
+    }
+
+    /// Formats speed/ETA for display, e.g. "3.1× · Rest ~12:34".
+    nonisolated static func progressDetail(_ p: ConversionProgress) -> String {
+        var parts: [String] = ["\(Int(p.fraction * 100)) %"]
+        if let speed = p.speed { parts.append(String(format: "%.1f×", speed)) }
+        if let eta = p.etaSeconds {
+            let total = Int(eta.rounded())
+            parts.append(String(format: "Rest ~%d:%02d", total / 60, total % 60))
+        }
+        return parts.joined(separator: " · ")
     }
 
     // MARK: Metadata enrichment (FR3)
@@ -487,7 +537,7 @@ final class AppState: ObservableObject {
             items.map { ($0.mediaFile.url, $0) },
             uniquingKeysWith: { first, _ in first }
         )
-        var rebuilt = planner.makePlan(for: scannedFiles, outputRoot: outputRoot)
+        var rebuilt = planner.makePlan(for: scannedFiles, outputRoot: outputRoot, libraryRoot: libraryRoot)
         for index in rebuilt.indices {
             if let previous = previousBySource[rebuilt[index].mediaFile.url] {
                 rebuilt[index].isAccepted = previous.isAccepted
