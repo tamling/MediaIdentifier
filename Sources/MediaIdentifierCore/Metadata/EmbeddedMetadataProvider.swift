@@ -7,10 +7,10 @@ import AVFoundation
 ///
 /// Covers AVFoundation-readable containers (MP4 / MOV / M4V). Matroska (MKV) is
 /// not parsed by AVFoundation, so for MKV this returns nil and the chain falls
-/// through to the next provider (ffprobe support is a planned follow-up). Many
-/// scene releases carry no embedded tags either, in which case it also returns
-/// nil. When a title *is* present it is authoritative, so this provider runs
-/// first in the local chain.
+/// through to `FFprobeMetadataProvider`, which understands MKV. Many scene
+/// releases carry no embedded tags either, in which case it also returns nil.
+/// When a title *is* present it is authoritative, so this provider runs first in
+/// the local chain.
 public struct EmbeddedMetadataProvider: MetadataProvider {
     public init() {}
 

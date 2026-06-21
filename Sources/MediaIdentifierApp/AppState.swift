@@ -12,14 +12,6 @@ private final class ProcessBox: @unchecked Sendable {
     func terminate() { lock.lock(); process?.terminate(); lock.unlock() }
 }
 
-/// Where renamed files should be written.
-enum OutputMode: Equatable {
-    /// Rename in place, relative to each file's own folder (FR18, default).
-    case inPlace
-    /// Move everything under a chosen library root.
-    case customFolder(URL)
-}
-
 /// Sidebar destinations (matches the design: Warteschlange / Filme / Serien /
 /// Konvertieren / Protokoll).
 enum SidebarSection: Hashable {
@@ -56,7 +48,16 @@ final class AppState: ObservableObject {
     // Settings.
     @Published var namingOptions: NamingOptions = .default { didSet { rebuildPlan() } }
     @Published var conflictPolicy: ConflictPolicy = .ask
-    @Published var outputMode: OutputMode = .inPlace { didSet { rebuildPlan() } }
+
+    // Free output folder for renaming (FR18). When off, files are renamed in
+    // place relative to each file's own folder (default). When on, the whole
+    // Jellyfin layout is written under the chosen folder.
+    @Published var outputToFolder = false {
+        didSet { UserDefaults.standard.set(outputToFolder, forKey: Keys.outputToFolder); rebuildPlan() }
+    }
+    @Published var outputFolderPath = "" {
+        didSet { UserDefaults.standard.set(outputFolderPath, forKey: Keys.outputFolderPath); rebuildPlan() }
+    }
 
     // Final move into a library (movies always; series only when the season is
     // complete). Off by default.
@@ -165,6 +166,8 @@ final class AppState: ObservableObject {
         static let localDBPath = "localDatabasePath"
         static let moveToLibrary = "moveToLibrary"
         static let libraryPath = "libraryFolderPath"
+        static let outputToFolder = "outputToFolder"
+        static let outputFolderPath = "outputFolderPath"
     }
 
     /// Original scanned media, kept so the plan can be rebuilt when settings change.
@@ -189,6 +192,8 @@ final class AppState: ObservableObject {
         localDatabasePath = UserDefaults.standard.string(forKey: Keys.localDBPath) ?? ""
         moveToLibrary = UserDefaults.standard.bool(forKey: Keys.moveToLibrary)
         libraryFolderPath = UserDefaults.standard.string(forKey: Keys.libraryPath) ?? ""
+        outputToFolder = UserDefaults.standard.bool(forKey: Keys.outputToFolder)
+        outputFolderPath = UserDefaults.standard.string(forKey: Keys.outputFolderPath) ?? ""
         if useLocalDatabase, !localDatabasePath.isEmpty { loadDatabase() }
         watchAutoRename = UserDefaults.standard.object(forKey: Keys.watchAuto) as? Bool ?? true
         watchFolderPath = UserDefaults.standard.string(forKey: Keys.watchPath) ?? ""
@@ -246,10 +251,8 @@ final class AppState: ObservableObject {
     private var planner: RenamePlanner { RenamePlanner(namer: namer) }
 
     private var outputRoot: URL? {
-        switch outputMode {
-        case .inPlace: return nil
-        case let .customFolder(url): return url
-        }
+        guard outputToFolder, !outputFolderPath.isEmpty else { return nil }
+        return URL(fileURLWithPath: outputFolderPath)
     }
 
     var libraryRoot: URL? {
@@ -258,6 +261,7 @@ final class AppState: ObservableObject {
     }
 
     func setLibraryFolder(_ url: URL) { libraryFolderPath = url.path }
+    func setOutputFolder(_ url: URL) { outputFolderPath = url.path }
 
     private func sourcePath(_ item: RenameItem) -> String {
         item.mediaFile.url.standardizedFileURL.path
@@ -540,6 +544,13 @@ final class AppState: ObservableObject {
         var providers: [MetadataProvider] = []
         #if canImport(AVFoundation)
         if useEmbeddedMetadata { providers.append(EmbeddedMetadataProvider()) }
+        #endif
+        // ffprobe covers MKV (which AVFoundation cannot read). Runs after the
+        // AVFoundation reader so native containers stay fast.
+        #if os(macOS)
+        if useEmbeddedMetadata, let ffprobe = FFprobeMetadataProvider.defaultPath() {
+            providers.append(FFprobeMetadataProvider(ffprobePath: ffprobe))
+        }
         #endif
         if useLocalDatabase, let db = localDatabase {
             providers.append(LocalDatabaseMetadataProvider(database: db))

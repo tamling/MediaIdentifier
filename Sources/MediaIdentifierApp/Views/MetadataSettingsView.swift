@@ -26,6 +26,24 @@ struct MetadataSettingsView: View {
                 ))
             }
 
+            // Free output folder for renaming (FR18)
+            group("Ausgabeordner") {
+                Toggle("Umbenannte Dateien in eigenen Ordner schreiben", isOn: $state.outputToFolder)
+                HStack(spacing: 10) {
+                    Image(systemName: "folder").foregroundStyle(Theme.textSecondary)
+                    Text(state.outputFolderPath.isEmpty ? "Kein Ordner gewählt" : state.outputFolderPath)
+                        .font(.system(size: 12, design: .monospaced))
+                        .foregroundStyle(state.outputFolderPath.isEmpty ? Theme.textTertiary : Theme.textRow)
+                        .lineLimit(1).truncationMode(.middle)
+                    Spacer()
+                    Button("Ordner wählen…", action: chooseOutput)
+                }
+                .disabled(!state.outputToFolder)
+                Text("Aus ist die Voreinstellung: Dateien werden am Ort umbenannt. Ist die Option an, wird das gesamte Jellyfin-Layout unter dem gewählten Ordner angelegt — anschließend kann von dort konvertiert werden.")
+                    .font(.caption).foregroundStyle(Theme.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             // Library move (complete seasons / movies)
             group("Bibliothek") {
                 Toggle("Fertige Dateien in Bibliothek verschieben", isOn: $state.moveToLibrary)
@@ -160,6 +178,17 @@ struct MetadataSettingsView: View {
         panel.prompt = "Wählen"
         if panel.runModal() == .OK, let url = panel.url {
             state.setLibraryFolder(url)
+        }
+    }
+
+    private func chooseOutput() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Wählen"
+        if panel.runModal() == .OK, let url = panel.url {
+            state.setOutputFolder(url)
         }
     }
 
