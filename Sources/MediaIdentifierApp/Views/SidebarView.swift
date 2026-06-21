@@ -8,17 +8,19 @@ struct SidebarView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            sectionLabel("Library")
-            SidebarRow(title: "Queue", systemImage: "tray.and.arrow.down.fill",
+            SidebarRow(title: "Overview", systemImage: "gauge", section: .overview)
+
+            sectionLabel("Tasks").padding(.top, 14)
+            SidebarRow(title: "Rename", systemImage: "tray.and.arrow.down.fill",
                        section: .queue,
                        badge: state.hasFiles ? "\(state.items.count)" : nil,
                        active: state.isProcessing)
-
-            sectionLabel("Tools").padding(.top, 14)
             SidebarRow(title: "Convert", systemImage: "arrow.triangle.2.circlepath",
                        section: .convert,
                        trailingTag: state.isConverting ? nil : "FFmpeg",
                        active: state.isConverting)
+
+            sectionLabel("Automation").padding(.top, 14)
             SidebarRow(title: "Watch folder", systemImage: "eye",
                        section: .watch,
                        trailingTag: state.watchEnabled ? "ON" : nil,
@@ -29,8 +31,6 @@ struct SidebarView: View {
                        section: .log, badge: state.logEntries.isEmpty ? nil : "\(state.logEntries.count)")
 
             Spacer()
-
-            SidebarRow(title: "Overview", systemImage: "gauge", section: .overview)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 14)

@@ -64,7 +64,7 @@ struct WatchView: View {
     private var header: some View {
         HStack {
             VStack(alignment: .leading, spacing: 1) {
-                Text("Watch folder").font(.system(size: 15, weight: .bold))
+                Text("Watch folder · auto-rename").font(.system(size: 15, weight: .bold))
                     .foregroundStyle(Theme.textPrimary)
                 Text("Automatic background processing").font(.system(size: 11.5))
                     .foregroundStyle(Theme.textSecondary)

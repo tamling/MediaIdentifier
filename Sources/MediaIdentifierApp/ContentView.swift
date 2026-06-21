@@ -44,7 +44,7 @@ private struct TitleBar: View {
 
     var body: some View {
         ZStack {
-            Text("Jellyfin Renamer")
+            Text("Mediafin")
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(Color(hex: 0xD7D7DA))
             HStack {
@@ -147,7 +147,7 @@ private struct MainArea: View {
         case .overview:
             OverviewView()
         case .queue:
-            QueueView(section: .queue, title: "Queue")
+            QueueView(section: .queue, title: "Rename")
         case .movies:
             QueueView(section: .movies, title: "Movies")
         case .series:

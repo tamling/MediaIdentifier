@@ -82,7 +82,7 @@ Sources/
     Undo/                     RenameJournal (FR13)
     Metadata/                 MetadataProvider (+ offline & TMDb implementations)
     Conversion/               FFmpeg argument builder + converter (FR16/FR17)
-  MediaIdentifierApp/         SwiftUI macOS front-end (dark "Jellyfin Renamer" design)
+  MediaIdentifierApp/         SwiftUI macOS front-end (dark "Mediafin" design)
     AppState.swift            View model wiring Core to the UI
     Theme.swift               Colour palette + reusable chips/controls
     ContentView.swift         Title bar + sidebar + main area

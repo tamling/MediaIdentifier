@@ -77,7 +77,7 @@ if [ -z "$APP" ]; then
 <plist version="1.0">
 <dict>
 	<key>CFBundleName</key><string>$NAME</string>
-	<key>CFBundleDisplayName</key><string>Jellyfin Renamer</string>
+	<key>CFBundleDisplayName</key><string>Mediafin</string>
 	<key>CFBundleExecutable</key><string>$NAME</string>
 	<key>CFBundleIdentifier</key><string>$BUNDLE_ID</string>
 	<key>CFBundlePackageType</key><string>APPL</string>

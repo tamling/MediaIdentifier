@@ -46,13 +46,13 @@ struct MediaIdentifierApp: App {
 
         // Menu-bar item: keep the app reachable from the status bar when the
         // window is minimized/closed (Show / Quit, with a live status line).
-        MenuBarExtra("MediaIdentifier", systemImage: "film.stack") {
+        MenuBarExtra("Mediafin", systemImage: "film.stack") {
             Text(menuBarStatus)
             Divider()
-            Button("Show MediaIdentifier") { showMainWindow() }
+            Button("Show Mediafin") { showMainWindow() }
             Button("Settings…") { showMainWindow(); state.showingSettings = true }
             Divider()
-            Button("Quit MediaIdentifier") { NSApplication.shared.terminate(nil) }
+            Button("Quit Mediafin") { NSApplication.shared.terminate(nil) }
                 .keyboardShortcut("q", modifiers: [.command])
         }
     }

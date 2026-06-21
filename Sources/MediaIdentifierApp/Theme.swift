@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Colour palette and reusable styling lifted from the "Jellyfin Renamer" design.
+/// Colour palette and reusable styling for the Mediafin design.
 enum Theme {
     // Surfaces
     static let windowBg      = Color(hex: 0x1B1B1D)
