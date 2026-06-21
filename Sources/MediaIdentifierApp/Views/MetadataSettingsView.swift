@@ -150,6 +150,31 @@ struct MetadataSettingsView: View {
                 }
             }
 
+            // Jellyfin connector (FR20)
+            group("Jellyfin-Server (nach Umbenennen aktualisieren)") {
+                Toggle("Jellyfin-Bibliothek automatisch aktualisieren", isOn: $state.jellyfinEnabled)
+                TextField("Server-URL, z. B. http://localhost:8096", text: $state.jellyfinServerURL)
+                    .textFieldStyle(.roundedBorder)
+                    .disabled(!state.jellyfinEnabled)
+                SecureField("API-Schlüssel (Dashboard → API-Schlüssel)", text: $state.jellyfinAPIKey)
+                    .textFieldStyle(.roundedBorder)
+                    .disabled(!state.jellyfinEnabled)
+                Text("Nach dem Umbenennen wird Jellyfin gebeten, die Bibliothek neu einzulesen, sodass die Dateien automatisch übernommen werden. Es werden keine Mediendateien gesendet — nur ein Scan-Befehl. Schlüssel im Jellyfin-Dashboard unter „API-Schlüssel“ erstellen.")
+                    .font(.caption).foregroundStyle(Theme.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack {
+                    Button("Verbindung testen") { state.testJellyfin() }
+                        .disabled(!state.jellyfinEnabled || state.jellyfinServerURL.isEmpty || state.jellyfinAPIKey.isEmpty)
+                    Spacer()
+                }
+                if let result = state.jellyfinTestResult {
+                    Text(result)
+                        .font(.caption)
+                        .foregroundStyle(result.hasPrefix("✓") ? Theme.accentBright : Theme.warn)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
             HStack {
                 Spacer()
                 Button("Fertig") { dismiss() }

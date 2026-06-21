@@ -77,6 +77,20 @@ final class AppState: ObservableObject {
     }
     @Published var isLookingUp = false
 
+    // Jellyfin library connector (FR20). After a successful rename/move, ask the
+    // local Jellyfin server to rescan so the files are exported into the library
+    // automatically.
+    @Published var jellyfinEnabled = false {
+        didSet { UserDefaults.standard.set(jellyfinEnabled, forKey: Keys.jellyfinEnabled) }
+    }
+    @Published var jellyfinServerURL = "" {
+        didSet { UserDefaults.standard.set(jellyfinServerURL, forKey: Keys.jellyfinServer) }
+    }
+    @Published var jellyfinAPIKey = "" {
+        didSet { KeychainStore.set(jellyfinAPIKey, for: Keys.jellyfinKey) }
+    }
+    @Published var jellyfinTestResult: String?
+
     // On-device Apple Intelligence identification (FR3, local — FR18).
     @Published var useAppleIntelligence = false {
         didSet { UserDefaults.standard.set(useAppleIntelligence, forKey: Keys.useAI) }
@@ -168,6 +182,9 @@ final class AppState: ObservableObject {
         static let libraryPath = "libraryFolderPath"
         static let outputToFolder = "outputToFolder"
         static let outputFolderPath = "outputFolderPath"
+        static let jellyfinEnabled = "jellyfinEnabled"
+        static let jellyfinServer = "jellyfinServerURL"
+        static let jellyfinKey = "jellyfinAPIKey"
     }
 
     /// Original scanned media, kept so the plan can be rebuilt when settings change.
@@ -194,6 +211,9 @@ final class AppState: ObservableObject {
         libraryFolderPath = UserDefaults.standard.string(forKey: Keys.libraryPath) ?? ""
         outputToFolder = UserDefaults.standard.bool(forKey: Keys.outputToFolder)
         outputFolderPath = UserDefaults.standard.string(forKey: Keys.outputFolderPath) ?? ""
+        jellyfinEnabled = UserDefaults.standard.bool(forKey: Keys.jellyfinEnabled)
+        jellyfinServerURL = UserDefaults.standard.string(forKey: Keys.jellyfinServer) ?? ""
+        jellyfinAPIKey = KeychainStore.get(Keys.jellyfinKey)
         if useLocalDatabase, !localDatabasePath.isEmpty { loadDatabase() }
         watchAutoRename = UserDefaults.standard.object(forKey: Keys.watchAuto) as? Bool ?? true
         watchFolderPath = UserDefaults.standard.string(forKey: Keys.watchPath) ?? ""
@@ -539,6 +559,56 @@ final class AppState: ObservableObject {
         }
     }
 
+    // MARK: Jellyfin connector (FR20)
+
+    var jellyfinConfigured: Bool { jellyfinEnabled && !jellyfinServerURL.isEmpty && !jellyfinAPIKey.isEmpty }
+
+    private func makeJellyfinConnector() -> JellyfinConnector? {
+        guard jellyfinConfigured else { return nil }
+        return try? JellyfinConnector(serverURL: jellyfinServerURL, apiKey: jellyfinAPIKey)
+    }
+
+    /// Verifies the Jellyfin connection and reports clear feedback.
+    func testJellyfin() {
+        guard jellyfinEnabled, !jellyfinServerURL.isEmpty, !jellyfinAPIKey.isEmpty else {
+            jellyfinTestResult = "Server-URL und API-Schlüssel eingeben."
+            return
+        }
+        guard let connector = makeJellyfinConnector() else {
+            jellyfinTestResult = "✗ Ungültige Server-URL (z. B. http://localhost:8096)."
+            return
+        }
+        jellyfinTestResult = "Teste Verbindung …"
+        Task { [weak self] in
+            do {
+                let status = try await connector.verify()
+                switch status {
+                case 200:
+                    self?.jellyfinTestResult = "✓ Verbunden – API-Schlüssel gültig."
+                case 401, 403:
+                    self?.jellyfinTestResult = "✗ API-Schlüssel ungültig (\(status))."
+                default:
+                    self?.jellyfinTestResult = "Jellyfin antwortete mit Status \(status)."
+                }
+            } catch {
+                self?.jellyfinTestResult = "✗ Keine Verbindung: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    /// Triggers a Jellyfin library rescan (after a rename/move). Fire-and-forget.
+    private func refreshJellyfinIfNeeded() {
+        guard let connector = makeJellyfinConnector() else { return }
+        Task { [weak self] in
+            do {
+                try await connector.refresh()
+                self?.logActivity("Jellyfin-Bibliothek wird aktualisiert …")
+            } catch {
+                self?.logActivity("Jellyfin-Aktualisierung fehlgeschlagen: \(error.localizedDescription)")
+            }
+        }
+    }
+
     /// Builds the active provider chain from the enabled identification options.
     private func currentEnrichmentProvider() -> MetadataProvider? {
         var providers: [MetadataProvider] = []
@@ -843,6 +913,8 @@ final class AppState: ObservableObject {
         logEntries = log.entries
         canUndo = journal.canUndo
         lastResult = "Fertig: \(outcome.succeeded) umbenannt, \(outcome.skipped) übersprungen, \(outcome.failed) fehlgeschlagen."
+        // Tell Jellyfin to rescan so the renamed files are exported (FR20).
+        if outcome.succeeded > 0 { refreshJellyfinIfNeeded() }
     }
 
     func undoLast() {

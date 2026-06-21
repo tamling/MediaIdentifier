@@ -151,6 +151,15 @@ struct OverviewView: View {
             actionLabel: state.watchActive ? nil : "Öffnen",
             action: { state.section = .watch }))
 
+        // Jellyfin connector
+        list.append(Check(
+            icon: "play.rectangle.on.rectangle", title: "Jellyfin-Server",
+            detail: state.jellyfinConfigured ? "Verbunden – Bibliothek wird nach dem Umbenennen aktualisiert."
+                                             : "Optional – nicht konfiguriert.",
+            level: state.jellyfinConfigured ? .ok : .neutral,
+            actionLabel: state.jellyfinConfigured ? nil : "Einrichten",
+            action: { state.showingSettings = true }))
+
         return list
     }
 }
