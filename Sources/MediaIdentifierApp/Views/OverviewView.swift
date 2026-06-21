@@ -123,8 +123,10 @@ struct OverviewView: View {
         list.append(Check(
             icon: "film", title: "FFmpeg (Konvertierung)",
             detail: state.ffmpegAvailable ? "Gefunden – Transkodierung verfügbar."
-                                          : "Nicht gefunden. Installieren mit:  brew install ffmpeg",
-            level: state.ffmpegAvailable ? .ok : .missing))
+                                          : "Nicht gefunden. Installieren (brew install ffmpeg) oder Datei wählen.",
+            level: state.ffmpegAvailable ? .ok : .missing,
+            actionLabel: state.ffmpegAvailable ? nil : "Einrichten",
+            action: { state.section = .convert }))
 
         // TMDb
         list.append(Check(

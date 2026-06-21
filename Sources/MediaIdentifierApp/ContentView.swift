@@ -9,6 +9,7 @@ struct ContentView: View {
     var body: some View {
         VStack(spacing: 0) {
             TitleBar()
+            ActivityBar()
             HStack(spacing: 0) {
                 SidebarView()
                 Divider().overlay(Theme.hairline)
@@ -77,6 +78,57 @@ private struct TitleBar: View {
         .background(color.opacity(0.14), in: RoundedRectangle(cornerRadius: 6))
         .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(color.opacity(0.3), lineWidth: 0.5))
         .help(help)
+    }
+}
+
+/// Slim, always-visible strip showing what is currently running across the app
+/// (renaming, converting, identifying) plus a steady watch-folder indicator.
+private struct ActivityBar: View {
+    @EnvironmentObject private var state: AppState
+
+    private var active: Bool { state.isProcessing || state.isConverting || state.isLookingUp }
+
+    var body: some View {
+        if active {
+            HStack(spacing: 16) {
+                if state.isProcessing {
+                    item("Umbenennen", "\(Int(state.progress * 100)) %")
+                }
+                if state.isConverting {
+                    item("Konvertieren", convertLabel)
+                }
+                if state.isLookingUp {
+                    item("Erkennung", "läuft …")
+                }
+                Spacer()
+                if state.watchActive {
+                    HStack(spacing: 6) {
+                        Circle().fill(Theme.accentBright).frame(width: 6, height: 6)
+                        Text("Watch aktiv").font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(Theme.textSecondary)
+                    }
+                }
+            }
+            .padding(.horizontal, 16)
+            .frame(height: 26)
+            .background(Theme.titleBarBot)
+            .overlay(Theme.hairline.frame(height: 0.5), alignment: .bottom)
+        }
+    }
+
+    private var convertLabel: String {
+        let name = state.currentConvert?.lastPathComponent ?? ""
+        return "\(name) · \(Int(state.convertProgress * 100)) %"
+    }
+
+    private func item(_ title: String, _ detail: String) -> some View {
+        HStack(spacing: 7) {
+            ProgressView().controlSize(.small).scaleEffect(0.7)
+            Text(title).font(.system(size: 11, weight: .bold)).foregroundStyle(Theme.textRow)
+            Text(detail).font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(Theme.accentBright)
+                .lineLimit(1).truncationMode(.middle)
+        }
     }
 }
 

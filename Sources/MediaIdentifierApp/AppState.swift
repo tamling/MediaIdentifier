@@ -209,6 +209,7 @@ final class AppState: ObservableObject {
         static let webEnabled = "webEnabled"
         static let webPort = "webPort"
         static let webLocalOnly = "webLocalOnly"
+        static let ffmpegPath = "customFFmpegPath"
     }
 
     /// Original scanned media, kept so the plan can be rebuilt when settings change.
@@ -241,6 +242,7 @@ final class AppState: ObservableObject {
         webPort = UserDefaults.standard.object(forKey: Keys.webPort) as? Int ?? 8765
         webLocalOnly = UserDefaults.standard.bool(forKey: Keys.webLocalOnly)
         webEnabled = UserDefaults.standard.bool(forKey: Keys.webEnabled)
+        customFFmpegPath = UserDefaults.standard.string(forKey: Keys.ffmpegPath) ?? ""
         if useLocalDatabase, !localDatabasePath.isEmpty { loadDatabase() }
         watchAutoRename = UserDefaults.standard.object(forKey: Keys.watchAuto) as? Bool ?? true
         watchFolderPath = UserDefaults.standard.string(forKey: Keys.watchPath) ?? ""
@@ -596,12 +598,22 @@ final class AppState: ObservableObject {
         return false
     }
 
-    /// First FFmpeg binary found in a common location (FR16).
+    /// A user-chosen FFmpeg binary, used when the auto-search finds nothing (FR16).
+    @Published var customFFmpegPath = "" {
+        didSet { UserDefaults.standard.set(customFFmpegPath, forKey: Keys.ffmpegPath) }
+    }
+
+    /// FFmpeg binary: a valid custom path wins, else the first common location.
     var ffmpegPath: String? {
-        ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/usr/bin/ffmpeg"]
+        if !customFFmpegPath.isEmpty, FileManager.default.isExecutableFile(atPath: customFFmpegPath) {
+            return customFFmpegPath
+        }
+        return ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/usr/bin/ffmpeg"]
             .first { FileManager.default.isExecutableFile(atPath: $0) }
     }
     var ffmpegAvailable: Bool { ffmpegPath != nil }
+
+    func setFFmpegPath(_ url: URL) { customFFmpegPath = url.path }
 
     var watchActive: Bool { watchEnabled && watchFolderURL != nil }
     var tmdbConfigured: Bool { onlineLookupEnabled && !tmdbAPIKey.isEmpty }
@@ -715,6 +727,17 @@ final class AppState: ObservableObject {
         }
         guard !providers.isEmpty else { return nil }
         return providers.count == 1 ? providers[0] : CompositeMetadataProvider(providers)
+    }
+
+    /// Whether any identification source is configured (drives "Erneut erkennen").
+    var hasEnrichmentProvider: Bool { currentEnrichmentProvider() != nil }
+    var canReIdentify: Bool { hasFiles && hasEnrichmentProvider && !isLookingUp }
+
+    /// Re-runs the identification chain over the already-imported files, without
+    /// requiring a re-import — e.g. after changing the metadata source (FR3).
+    func reIdentify() {
+        guard let provider = currentEnrichmentProvider() else { return }
+        enrich(with: provider)
     }
 
     // MARK: Local title database (FR3)

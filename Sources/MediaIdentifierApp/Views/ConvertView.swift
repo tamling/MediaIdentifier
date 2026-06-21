@@ -38,6 +38,7 @@ struct ConvertView: View {
             }
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
+                    if !state.ffmpegAvailable { ffmpegMissingCard }
                     filesCard
                     videoCard
                     audioCard
@@ -100,6 +101,56 @@ struct ConvertView: View {
         .padding(.horizontal, 18)
         .frame(height: 54)
         .overlay(Theme.hairline.frame(height: 0.5), alignment: .bottom)
+    }
+
+    // MARK: FFmpeg onboarding (FR16)
+
+    private var ffmpegMissingCard: some View {
+        card("FFmpeg einrichten") {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 13)).foregroundStyle(Theme.warn)
+                Text("FFmpeg wurde nicht gefunden. Zum Konvertieren entweder installieren oder eine vorhandene FFmpeg-Datei auswählen.")
+                    .font(.caption).foregroundStyle(Theme.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer()
+            }
+            HStack(spacing: 8) {
+                Text("brew install ffmpeg")
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundStyle(Theme.textRow)
+                    .padding(.horizontal, 8).padding(.vertical, 5)
+                    .background(Color.black.opacity(0.25), in: RoundedRectangle(cornerRadius: 6))
+                    .textSelection(.enabled)
+                Button("Befehl kopieren", action: copyInstallCommand).controlSize(.small)
+                Spacer()
+            }
+            HStack(spacing: 8) {
+                Button("FFmpeg-Datei wählen…", action: chooseFFmpeg).controlSize(.small)
+                if !state.customFFmpegPath.isEmpty {
+                    Text(state.customFFmpegPath)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(Theme.textTertiary)
+                        .lineLimit(1).truncationMode(.middle)
+                }
+                Spacer()
+            }
+        }
+    }
+
+    private func copyInstallCommand() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString("brew install ffmpeg", forType: .string)
+    }
+
+    private func chooseFFmpeg() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Auswählen"
+        panel.message = "Wähle die FFmpeg-Programmdatei (z. B. /opt/homebrew/bin/ffmpeg)."
+        if panel.runModal() == .OK, let url = panel.url { state.setFFmpegPath(url) }
     }
 
     // MARK: Files
