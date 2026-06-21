@@ -221,6 +221,29 @@ struct MetadataSettingsView: View {
                 }
             }
 
+            // Read-only status web page (FR20)
+            group("Status-Webseite (nur Ansicht)") {
+                Toggle("Status-Webseite aktivieren", isOn: $state.webEnabled)
+                HStack {
+                    Text("Port")
+                    TextField("Port", value: $state.webPort, format: .number)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 90)
+                        .disabled(!state.webEnabled)
+                    Spacer()
+                }
+                if state.webEnabled {
+                    Text("Geöffnet: \(state.webURL)  ·  JSON: \(state.webURL)api/status")
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(Theme.accentBright)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Text("Stellt eine reine Ansichts-Seite mit dem aktuellen Stand bereit. In Uptime Kuma einen „HTTP(s) – JSON query“-Monitor anlegen, URL …/api/status, Query „busy“, erwarteter Wert „false“ → Kuma meldet, sobald ein Lauf startet (down) und wieder fertig ist (up). Es werden keine Befehle entgegengenommen, keine Tokens angezeigt.")
+                    .font(.caption).foregroundStyle(Theme.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             // Watch folder lives in its own sidebar section; point users there.
             group("Watch-Ordner") {
                 Text("Die automatische Überwachung eines Download-Ordners wird im Bereich „Watch-Ordner“ in der Seitenleiste konfiguriert.")

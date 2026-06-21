@@ -160,6 +160,15 @@ struct OverviewView: View {
             actionLabel: state.jellyfinConfigured ? nil : "Einrichten",
             action: { state.showingSettings = true }))
 
+        // Status web page
+        list.append(Check(
+            icon: "globe.badge.chevron.backward", title: "Status-Webseite",
+            detail: state.webEnabled ? "Aktiv – \(state.webURL)"
+                                     : "Optional – für Uptime Kuma o. Ä. aktivierbar.",
+            level: state.webEnabled ? .ok : .neutral,
+            actionLabel: state.webEnabled ? nil : "Einrichten",
+            action: { state.showingSettings = true }))
+
         return list
     }
 }

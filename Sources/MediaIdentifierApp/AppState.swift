@@ -81,6 +81,17 @@ final class AppState: ObservableObject {
     }
     @Published var isLookingUp = false
 
+    // Read-only status web page (FR20). Lets external monitors like Uptime Kuma
+    // poll progress and notify when a run finishes. Off by default.
+    @Published var webEnabled = false {
+        didSet { UserDefaults.standard.set(webEnabled, forKey: Keys.webEnabled); restartWebServer() }
+    }
+    @Published var webPort = 8765 {
+        didSet { UserDefaults.standard.set(webPort, forKey: Keys.webPort); restartWebServer() }
+    }
+    private let webServer = StatusWebServer()
+    private var webTimer: Timer?
+
     // Jellyfin library connector (FR20). After a successful rename/move, ask the
     // local Jellyfin server to rescan so the files are exported into the library
     // automatically.
@@ -189,6 +200,8 @@ final class AppState: ObservableObject {
         static let jellyfinEnabled = "jellyfinEnabled"
         static let jellyfinServer = "jellyfinServerURL"
         static let jellyfinKey = "jellyfinAPIKey"
+        static let webEnabled = "webEnabled"
+        static let webPort = "webPort"
     }
 
     /// Original scanned media, kept so the plan can be rebuilt when settings change.
@@ -218,12 +231,59 @@ final class AppState: ObservableObject {
         jellyfinEnabled = UserDefaults.standard.bool(forKey: Keys.jellyfinEnabled)
         jellyfinServerURL = UserDefaults.standard.string(forKey: Keys.jellyfinServer) ?? ""
         jellyfinAPIKey = KeychainStore.get(Keys.jellyfinKey)
+        webPort = UserDefaults.standard.object(forKey: Keys.webPort) as? Int ?? 8765
+        webEnabled = UserDefaults.standard.bool(forKey: Keys.webEnabled)
         if useLocalDatabase, !localDatabasePath.isEmpty { loadDatabase() }
         watchAutoRename = UserDefaults.standard.object(forKey: Keys.watchAuto) as? Bool ?? true
         watchFolderPath = UserDefaults.standard.string(forKey: Keys.watchPath) ?? ""
         watchEnabled = UserDefaults.standard.bool(forKey: Keys.watchEnabled)
         // didSet does not fire during init, so start the watcher explicitly.
         restartWatch()
+        restartWebServer()
+    }
+
+    // MARK: Status web server (FR20)
+
+    /// Hostname-based URL shown in Settings (reachable on the LAN via mDNS).
+    var webURL: String { "http://\(ProcessInfo.processInfo.hostName):\(webPort)/" }
+
+    private func restartWebServer() {
+        webTimer?.invalidate()
+        webTimer = nil
+        webServer.stop()
+        guard webEnabled else { return }
+        guard webServer.start(port: webPort) else {
+            lastResult = "Status-Webseite: Port \(webPort) konnte nicht geöffnet werden."
+            return
+        }
+        publishStatus()
+        // Refresh the served snapshot once a second while enabled.
+        let timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in
+            Task { @MainActor [weak self] in self?.publishStatus() }
+        }
+        webTimer = timer
+    }
+
+    private func publishStatus() {
+        guard webEnabled else { return }
+        webServer.update(StatusSnapshot(
+            updated: Date(),
+            busy: isProcessing || isConverting,
+            renaming: isProcessing,
+            renameProgress: progress,
+            converting: isConverting,
+            convertProgress: convertProgress,
+            currentFile: currentConvert?.lastPathComponent,
+            convertStatus: convertStatus,
+            convertDetail: convertDetail,
+            pendingConversions: convertFiles.count,
+            totalItems: items.count,
+            ready: readyCount,
+            done: doneCount,
+            lastResult: lastResult,
+            watchActive: watchActive,
+            jellyfinConfigured: jellyfinConfigured
+        ))
     }
 
     // MARK: Watch folder (FR20)
