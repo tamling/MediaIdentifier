@@ -36,13 +36,20 @@ jobs:
             -scheme MediaIdentifier \
             -configuration Release \
             -derivedDataPath build \
+            -destination 'generic/platform=macOS' \
+            ARCHS="arm64 x86_64" ONLY_ACTIVE_ARCH=NO \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
             build
       - name: Package .app
         run: |
           APP=$(find build/Build/Products/Release -maxdepth 1 -name '*.app' | head -1)
           echo "Built: $APP"
-          echo "Architectures:"; lipo -archs "$APP/Contents/MacOS/MediaIdentifier" || true
+          ARCHS_OUT=$(lipo -archs "$APP/Contents/MacOS/MediaIdentifier")
+          echo "Architectures: $ARCHS_OUT"
+          case "$ARCHS_OUT" in
+            *arm64*x86_64*|*x86_64*arm64*) echo "Universal binary OK." ;;
+            *) echo "::error::Expected a universal binary but got: $ARCHS_OUT"; exit 1 ;;
+          esac
           # Ad-hoc sign so the unsigned universal app is not rejected as "damaged".
           codesign --force --deep --sign - "$APP"
           ditto -c -k --keepParent "$APP" MediaIdentifier.app.zip
