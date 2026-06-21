@@ -35,6 +35,15 @@ struct FileRowView: View {
 
             main
 
+            Button(action: { state.revealInFinder(item) }) {
+                Image(systemName: "folder")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(Theme.textSecondary)
+            }
+            .buttonStyle(.borderless)
+            .help("Ordner im Finder öffnen")
+            .padding(.top, 2)
+
             statusBadge
         }
         .padding(.horizontal, 14)
@@ -62,19 +71,23 @@ struct FileRowView: View {
 
     private var main: some View {
         VStack(alignment: .leading, spacing: 5) {
-            // New path (folder + file).
-            HStack(spacing: 8) {
-                if !folderPath.isEmpty {
-                    Text(folderPath)
-                        .font(Theme.monoFont)
-                        .foregroundStyle(Color(hex: 0x7E7E85))
-                        .lineLimit(1).truncationMode(.middle)
+            // New path (folder + file) — click to reveal in Finder.
+            Button(action: { state.revealInFinder(item) }) {
+                HStack(spacing: 8) {
+                    if !folderPath.isEmpty {
+                        Text(folderPath)
+                            .font(Theme.monoFont)
+                            .foregroundStyle(Color(hex: 0x7E7E85))
+                            .lineLimit(1).truncationMode(.middle)
+                    }
+                    Text(newFile)
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundStyle(Theme.textPrimary)
+                        .lineLimit(1)
                 }
-                Text(newFile)
-                    .font(.system(size: 14, weight: .bold))
-                    .foregroundStyle(Theme.textPrimary)
-                    .lineLimit(1)
             }
+            .buttonStyle(.plain)
+            .help("Im Finder anzeigen")
 
             // Original name.
             HStack(spacing: 9) {

@@ -46,6 +46,8 @@ struct QueueView: View {
             }
             Spacer()
 
+            ToolbarButton(title: "Aufräumen…", systemImage: "wand.and.stars",
+                          action: state.chooseFoldersToOrganize)
             if state.hasFiles {
                 ToolbarButton(title: "Liste leeren", action: state.clear)
             }

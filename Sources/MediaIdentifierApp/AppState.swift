@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import AppKit
 import MediaIdentifierCore
 
 /// Where renamed files should be written.
@@ -236,6 +237,31 @@ final class AppState: ObservableObject {
         if let provider = currentEnrichmentProvider() {
             enrich(with: provider)
         }
+    }
+
+    // MARK: Finder & organising
+
+    /// Reveals the item in Finder — the renamed file once done, otherwise the
+    /// source — so clicking a result opens its folder.
+    func revealInFinder(_ item: RenameItem) {
+        let url = status(for: item) == .done ? item.primaryDestination : item.mediaFile.url
+        let target = FileManager.default.fileExists(atPath: url.path)
+            ? url : url.deletingLastPathComponent()
+        NSWorkspace.shared.activateFileViewerSelecting([target])
+    }
+
+    /// "Aufräumen": pick folder(s) and import them so their contents are sorted
+    /// into the Jellyfin layout (Show/Season XX, Movie (Year)). The Season split
+    /// is produced by `JellyfinNamer`; ensure movie folders are on for tidiness.
+    func chooseFoldersToOrganize() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = true
+        panel.allowsMultipleSelection = true
+        panel.prompt = "Aufräumen"
+        guard panel.runModal() == .OK, !panel.urls.isEmpty else { return }
+        if !namingOptions.useMovieFolders { namingOptions.useMovieFolders = true }
+        importURLs(panel.urls)
     }
 
     // MARK: Metadata enrichment (FR3)
