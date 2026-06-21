@@ -38,24 +38,26 @@ public final class RenameExecutor {
     ///   - plan: the items to apply. Items with `isAccepted == false` are ignored (FR9).
     ///   - policy: how to resolve conflicts (FR11).
     ///   - askResolution: invoked for each conflicting move when `policy == .ask`.
-    ///   - progress: called as (completed, total) for the progress bar (FR19).
+    ///   - progress: overall completion fraction 0...1, updated continuously so
+    ///     slow cross-volume moves show real progress (FR19).
     @discardableResult
     public func execute(
         plan: [RenameItem],
         policy: ConflictPolicy,
         askResolution: ((PlannedMove) -> ConflictPolicy)? = nil,
-        progress: ((Int, Int) -> Void)? = nil
+        progress: ((Double) -> Void)? = nil
     ) -> RenameOutcome {
         let moves = plan.filter { $0.isAccepted }.flatMap { $0.allMoves }
         let total = moves.count
         var completed = 0
         var outcome = RenameOutcome()
         var performed: [RenameTransaction.Move] = []
+        progress?(0)
 
         for move in moves {
             defer {
                 completed += 1
-                progress?(completed, total)
+                progress?(total == 0 ? 1 : Double(completed) / Double(total))
             }
 
             // No-op: source already at destination.
@@ -87,7 +89,8 @@ public final class RenameExecutor {
                 }
 
                 let createdDirs = try ensureParentDirectory(for: resolution.destination)
-                try fileManager.moveItem(at: move.source, to: resolution.destination)
+                try moveWithProgress(from: move.source, to: resolution.destination,
+                                     base: completed, total: total, progress: progress)
 
                 performed.append(.init(from: move.source, to: resolution.destination, createdDirectories: createdDirs))
                 outcome.succeeded += 1
@@ -149,6 +152,27 @@ public final class RenameExecutor {
             }
         }
         return restored
+    }
+
+    /// Moves a file while reporting fine-grained progress. FileManager publishes
+    /// progress into the current `Progress` for cross-volume copies, so slow
+    /// moves animate; same-volume renames complete instantly.
+    private func moveWithProgress(
+        from source: URL, to destination: URL,
+        base: Int, total: Int, progress: ((Double) -> Void)?
+    ) throws {
+        guard let progress, total > 0 else {
+            try fileManager.moveItem(at: source, to: destination)
+            return
+        }
+        let parent = Progress(totalUnitCount: 100)
+        let observation = parent.observe(\.fractionCompleted) { p, _ in
+            progress((Double(base) + p.fractionCompleted) / Double(total))
+        }
+        defer { observation.invalidate() }
+        parent.becomeCurrent(withPendingUnitCount: 100)
+        defer { parent.resignCurrent() }
+        try fileManager.moveItem(at: source, to: destination)
     }
 
     // MARK: Helpers

@@ -35,6 +35,17 @@ struct FileRowView: View {
 
             main
 
+            if isDone {
+                Button(action: { state.convert(item) }) {
+                    Image(systemName: "arrow.right.circle")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(Theme.accentBright)
+                }
+                .buttonStyle(.borderless)
+                .help("Diese Datei konvertieren")
+                .padding(.top, 2)
+            }
+
             Button(action: { state.revealInFinder(item) }) {
                 Image(systemName: "folder")
                     .font(.system(size: 12, weight: .medium))

@@ -622,6 +622,23 @@ final class AppState: ObservableObject {
         items.removeAll { $0.id == item.id }
     }
 
+    /// True once at least one item has been renamed (so it can be converted).
+    var hasConvertibleResults: Bool { doneCount > 0 }
+
+    /// Sends all renamed files into the conversion queue and switches view.
+    func convertCompleted() {
+        let urls = items.filter { status(for: $0) == .done }.map { $0.primaryDestination }
+        guard !urls.isEmpty else { return }
+        addConvertFiles(urls)
+        section = .convert
+    }
+
+    /// Sends one renamed file into the conversion queue and switches view.
+    func convert(_ item: RenameItem) {
+        addConvertFiles([item.primaryDestination])
+        section = .convert
+    }
+
     /// Recomputes the plan from scanned files, preserving user acceptance where possible.
     private func rebuildPlan() {
         let previousBySource = Dictionary(
@@ -795,10 +812,8 @@ final class AppState: ObservableObject {
                 askResolution: { move in
                     resolutions[move.source.standardizedFileURL.path] ?? .skip
                 },
-                progress: { completed, total in
-                    Task { @MainActor [weak self] in
-                        self?.progress = total == 0 ? 1 : Double(completed) / Double(total)
-                    }
+                progress: { fraction in
+                    Task { @MainActor [weak self] in self?.progress = fraction }
                 }
             )
             await self?.finish(outcome: outcome)

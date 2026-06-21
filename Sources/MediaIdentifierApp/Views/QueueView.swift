@@ -51,6 +51,10 @@ struct QueueView: View {
             if state.hasFiles {
                 ToolbarButton(title: "Liste leeren", action: state.clear)
             }
+            if state.hasConvertibleResults && !state.isProcessing {
+                ToolbarButton(title: "Konvertieren", systemImage: "arrow.right.circle",
+                              action: state.convertCompleted)
+            }
             if state.showUndo {
                 ToolbarButton(title: "Rückgängig", systemImage: "arrow.uturn.backward",
                               action: state.undoLast)
