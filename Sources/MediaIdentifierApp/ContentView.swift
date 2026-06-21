@@ -43,7 +43,7 @@ private struct TitleBar: View {
     var body: some View {
         ZStack {
             Text("Jellyfin Renamer")
-                .font(.system(size: 12.5, weight: .semibold))
+                .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(Color(hex: 0xD7D7DA))
             HStack {
                 Spacer()
@@ -51,8 +51,8 @@ private struct TitleBar: View {
             }
             .padding(.trailing, 12)
         }
-        .frame(height: 36)
-        .frame(maxWidth: .infinity)
+        .frame(height: 28)          // match the standard title-bar height so the
+        .frame(maxWidth: .infinity) // title sits on one line with the traffic lights
         .background(
             LinearGradient(colors: [Theme.titleBarTop, Theme.titleBarBot], startPoint: .top, endPoint: .bottom)
         )

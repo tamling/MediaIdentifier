@@ -10,11 +10,11 @@ struct MediaIdentifierApp: App {
         WindowGroup {
             ContentView()
                 .environmentObject(state)
-                .frame(minWidth: 960, minHeight: 640)
+                .frame(minWidth: 900, idealWidth: 1180, maxWidth: .infinity,
+                       minHeight: 600, idealHeight: 760, maxHeight: .infinity)
                 .preferredColorScheme(.dark)
         }
         .windowStyle(.hiddenTitleBar)
-        .windowResizability(.contentMinSize)
         .commands {
             CommandGroup(after: .pasteboard) {
                 Button("Umbenennung rückgängig") { state.undoLast() }
