@@ -6,6 +6,8 @@ struct FileRowView: View {
     @EnvironmentObject private var state: AppState
     let item: RenameItem
     @State private var hovering = false
+    @State private var editing = false
+    @State private var draft = ""
 
     private var parsed: ParsedRelease { item.mediaFile.parsed }
     private var isSeries: Bool { parsed.kind == .episode }
@@ -43,6 +45,15 @@ struct FileRowView: View {
                 }
                 .buttonStyle(.borderless)
                 .help("Diese Datei konvertieren")
+                .padding(.top, 2)
+            } else {
+                Button(action: beginEdit) {
+                    Image(systemName: "pencil")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(editing ? Theme.accentBright : Theme.textSecondary)
+                }
+                .buttonStyle(.borderless)
+                .help("Zielnamen bearbeiten")
                 .padding(.top, 2)
             }
 
@@ -82,23 +93,44 @@ struct FileRowView: View {
 
     private var main: some View {
         VStack(alignment: .leading, spacing: 5) {
-            // New path (folder + file) — click to reveal in Finder.
-            Button(action: { state.revealInFinder(item) }) {
-                HStack(spacing: 8) {
+            // New path (folder + file). Click reveals in Finder; the pencil
+            // switches to an inline editor for the target file name (FR9).
+            if editing {
+                HStack(spacing: 6) {
                     if !folderPath.isEmpty {
                         Text(folderPath)
                             .font(Theme.monoFont)
                             .foregroundStyle(Color(hex: 0x7E7E85))
                             .lineLimit(1).truncationMode(.middle)
                     }
-                    Text(newFile)
-                        .font(.system(size: 14, weight: .bold))
-                        .foregroundStyle(Theme.textPrimary)
-                        .lineLimit(1)
+                    TextField("Dateiname", text: $draft)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(size: 13, weight: .semibold))
+                        .frame(maxWidth: 340)
+                        .onSubmit(commitEdit)
+                    Button("Sichern", action: commitEdit)
+                        .controlSize(.small)
+                    Button("Abbrechen") { editing = false }
+                        .controlSize(.small)
                 }
+            } else {
+                Button(action: { state.revealInFinder(item) }) {
+                    HStack(spacing: 8) {
+                        if !folderPath.isEmpty {
+                            Text(folderPath)
+                                .font(Theme.monoFont)
+                                .foregroundStyle(Color(hex: 0x7E7E85))
+                                .lineLimit(1).truncationMode(.middle)
+                        }
+                        Text(newFile)
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundStyle(Theme.textPrimary)
+                            .lineLimit(1)
+                    }
+                }
+                .buttonStyle(.plain)
+                .help("Im Finder anzeigen")
             }
-            .buttonStyle(.plain)
-            .help("Im Finder anzeigen")
 
             // Original name.
             HStack(spacing: 9) {
@@ -128,6 +160,10 @@ struct FileRowView: View {
                     Chip(text: subLabel(sub), fg: Theme.series,
                          bg: Color(hex: 0x966EFF).opacity(0.13), systemImage: "captions.bubble")
                 }
+                ForEach(extraCompanions, id: \.label) { extra in
+                    Chip(text: extra.label, fg: Theme.movie,
+                         bg: Color(hex: 0x508CFF).opacity(0.10), systemImage: extra.icon)
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -145,6 +181,47 @@ struct FileRowView: View {
     private func subLabel(_ sub: CompanionFile) -> String {
         if let tag = sub.languageTag, !tag.isEmpty { return tag.uppercased() }
         return sub.url.pathExtension.uppercased()
+    }
+
+    // MARK: Companion (extra) files (FR15)
+
+    private struct ExtraChip { let label: String; let icon: String }
+
+    /// One chip per non-subtitle companion type, so the user sees that NFO /
+    /// cover / sample files travel with the rename (FR15).
+    private var extraCompanions: [ExtraChip] {
+        var counts: [CompanionFile.Role: Int] = [:]
+        for companion in item.mediaFile.companions where companion.role != .subtitle {
+            counts[companion.role, default: 0] += 1
+        }
+        let order: [CompanionFile.Role] = [.nfo, .image, .sample, .other]
+        return order.compactMap { role in
+            guard let count = counts[role] else { return nil }
+            let suffix = count > 1 ? " ×\(count)" : ""
+            switch role {
+            case .nfo:    return ExtraChip(label: "+NFO\(suffix)", icon: "doc.text")
+            case .image:  return ExtraChip(label: "+Cover\(suffix)", icon: "photo")
+            case .sample: return ExtraChip(label: "+Sample\(suffix)", icon: "film.stack")
+            case .other:  return ExtraChip(label: "+Datei\(suffix)", icon: "paperclip")
+            case .subtitle: return nil
+            }
+        }
+    }
+
+    // MARK: Inline rename (FR9)
+
+    private func beginEdit() {
+        draft = newFile
+        editing = true
+    }
+
+    private func commitEdit() {
+        let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        defer { editing = false }
+        guard !trimmed.isEmpty, trimmed != newFile else { return }
+        let dir = (item.proposedRelativePath as NSString).deletingLastPathComponent
+        let newPath = dir.isEmpty ? trimmed : dir + "/" + trimmed
+        state.updateProposedPath(newPath, for: item.id)
     }
 
     // MARK: Status

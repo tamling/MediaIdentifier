@@ -9,11 +9,49 @@ struct MetadataSettingsView: View {
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: 14) {
             Text("Einstellungen")
                 .font(.system(size: 16, weight: .bold))
                 .foregroundStyle(Theme.textPrimary)
 
+            TabView {
+                tab { namingTab }
+                    .tabItem { Label("Benennung & Ausgabe", systemImage: "textformat") }
+                tab { detectionTab }
+                    .tabItem { Label("Erkennung", systemImage: "sparkles") }
+                tab { serverTab }
+                    .tabItem { Label("Server & Automatik", systemImage: "server.rack") }
+            }
+            .frame(height: 430)
+
+            HStack {
+                Spacer()
+                Button("Fertig") { dismiss() }
+                    .keyboardShortcut(.defaultAction)
+                    .buttonStyle(.borderedProminent)
+            }
+        }
+        .padding(20)
+        .frame(width: 470)
+        .background(Theme.windowBg)
+        .tint(Theme.accent)
+    }
+
+    /// Wraps a tab's groups in a scroll view so long content stays reachable.
+    private func tab<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                content()
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 8)
+            .padding(.horizontal, 2)
+        }
+    }
+
+    // MARK: Tab 1 — Benennung & Ausgabe
+
+    @ViewBuilder private var namingTab: some View {
             // Naming (FR7)
             group("Benennung") {
                 Toggle("Filme in eigenen Ordner legen", isOn: Binding(
@@ -73,7 +111,11 @@ struct MetadataSettingsView: View {
                 .pickerStyle(.segmented)
                 .labelsHidden()
             }
+    }
 
+    // MARK: Tab 2 — Erkennung
+
+    @ViewBuilder private var detectionTab: some View {
             // On-device Apple Intelligence (FR3, local)
             group("Erkennung – Apple Intelligence (lokal)") {
                 Toggle("Titel mit Apple Intelligence erkennen (on-device)",
@@ -149,7 +191,11 @@ struct MetadataSettingsView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
+    }
 
+    // MARK: Tab 3 — Server & Automatik
+
+    @ViewBuilder private var serverTab: some View {
             // Jellyfin connector (FR20)
             group("Jellyfin-Server (nach Umbenennen aktualisieren)") {
                 Toggle("Jellyfin-Bibliothek automatisch aktualisieren", isOn: $state.jellyfinEnabled)
@@ -175,17 +221,12 @@ struct MetadataSettingsView: View {
                 }
             }
 
-            HStack {
-                Spacer()
-                Button("Fertig") { dismiss() }
-                    .keyboardShortcut(.defaultAction)
-                    .buttonStyle(.borderedProminent)
+            // Watch folder lives in its own sidebar section; point users there.
+            group("Watch-Ordner") {
+                Text("Die automatische Überwachung eines Download-Ordners wird im Bereich „Watch-Ordner“ in der Seitenleiste konfiguriert.")
+                    .font(.caption).foregroundStyle(Theme.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-        }
-        .padding(20)
-        .frame(width: 440)
-        .background(Theme.windowBg)
-        .tint(Theme.accent)
     }
 
     private var databaseStatus: String {
