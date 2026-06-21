@@ -33,13 +33,14 @@ jobs:
         run: |
           APP=$(find build/Build/Products/Release -maxdepth 1 -name '*.app' | head -1)
           echo "Built: $APP"
-          # Ad-hoc sign so the unsigned arm64 app is not rejected as "damaged".
+          echo "Architectures:"; lipo -archs "$APP/Contents/MacOS/MediaIdentifier" || true
+          # Ad-hoc sign so the unsigned universal app is not rejected as "damaged".
           codesign --force --deep --sign - "$APP"
           ditto -c -k --keepParent "$APP" MediaIdentifier.app.zip
       - name: Publish to "latest" release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest
-          name: Latest build
+          name: Latest build (Universal — Apple Silicon & Intel)
           prerelease: true
           files: MediaIdentifier.app.zip

@@ -42,7 +42,8 @@ jobs:
         run: |
           APP=$(find build/Build/Products/Release -maxdepth 1 -name '*.app' | head -1)
           echo "Built: $APP"
-          # Ad-hoc sign so the unsigned arm64 app is not rejected as "damaged".
+          echo "Architectures:"; lipo -archs "$APP/Contents/MacOS/MediaIdentifier" || true
+          # Ad-hoc sign so the unsigned universal app is not rejected as "damaged".
           codesign --force --deep --sign - "$APP"
           ditto -c -k --keepParent "$APP" MediaIdentifier.app.zip
       - name: Upload .app artifact
