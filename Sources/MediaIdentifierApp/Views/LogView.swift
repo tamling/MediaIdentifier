@@ -16,14 +16,14 @@ struct LogView: View {
         VStack(spacing: 0) {
             HStack {
                 VStack(alignment: .leading, spacing: 1) {
-                    Text("Protokoll").font(.system(size: 15, weight: .bold))
+                    Text("Log").font(.system(size: 15, weight: .bold))
                         .foregroundStyle(Theme.textPrimary)
-                    Text("\(state.logEntries.count) Einträge · alt → neu · Zeit · Status")
+                    Text("\(state.logEntries.count) entries · old → new · time · status")
                         .font(.system(size: 11.5)).foregroundStyle(Theme.textSecondary)
                 }
                 Spacer()
                 if !state.logEntries.isEmpty {
-                    ToolbarButton(title: "Protokoll leeren", action: state.clearLog)
+                    ToolbarButton(title: "Clear log", action: state.clearLog)
                 }
             }
             .padding(.horizontal, 18)
@@ -36,7 +36,7 @@ struct LogView: View {
                     Image(systemName: "clock.arrow.circlepath")
                         .font(.system(size: 38, weight: .light))
                         .foregroundStyle(Theme.textTertiary)
-                    Text("Noch keine Vorgänge protokolliert.")
+                    Text("No operations logged yet.")
                         .foregroundStyle(Theme.textSecondary)
                 }
                 Spacer()

@@ -138,7 +138,7 @@ public struct LocalDatabaseMetadataProvider: MetadataProvider {
             title: entry.title,
             year: entry.year ?? parsed.year,
             kind: entry.kind == .unknown ? parsed.kind : entry.kind,
-            source: "Lokale DB"
+            source: "Local DB"
         )
     }
 }

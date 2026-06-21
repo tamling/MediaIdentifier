@@ -15,8 +15,8 @@ public enum LocalTitleDatabaseLoader {
 
         public var errorDescription: String? {
             switch self {
-            case .unreadable: return "Die Datenbankdatei konnte nicht gelesen werden."
-            case .empty: return "Die Datenbankdatei enthält keine verwertbaren Einträge."
+            case .unreadable: return "The database file could not be read."
+            case .empty: return "The database file contains no usable entries."
             }
         }
     }

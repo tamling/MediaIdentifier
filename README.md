@@ -5,9 +5,8 @@
 A native **macOS (Apple Silicon)** app that analyses downloaded media files and
 renames them into a **Jellyfin-compatible** layout — by drag-and-drop, with a
 preview before anything touches the disk. Built with SwiftUI on top of a pure,
-fully unit-tested domain core.
-
-> Beschreibung auf Deutsch weiter unten unter [Funktionsabdeckung](#funktionsabdeckung-fr1fr20).
+fully unit-tested domain core. Ships as a **universal binary** (Apple Silicon
+and Intel).
 
 ---
 
@@ -110,31 +109,37 @@ can be added by conforming to the `MetadataProvider` protocol (FR20).
 Silicon and Apple Intelligence enabled, `AppleIntelligenceProvider` can identify
 titles using the built-in Foundation Models language model — fully on-device, so
 it stays consistent with FR18. It takes priority over TMDb and falls back to the
-heuristic parser when unavailable. Enable it under Einstellungen → "Apple
-Intelligence". (Requires the Foundation Models framework; guarded behind
+heuristic parser when unavailable. Enable it under Settings → Identification.
+(Requires the Foundation Models framework; guarded behind
 `#if canImport(FoundationModels)` so older SDKs still build.)
 
 **Embedded container tags (local):** `EmbeddedMetadataProvider` reads title/year
-tags stored inside MP4/MOV/M4V files via AVFoundation. (MKV is not read by
-AVFoundation — it falls through to the next provider; ffprobe support is a
-planned follow-up.)
+tags stored inside MP4/MOV/M4V files via AVFoundation. For MKV (which
+AVFoundation cannot read) `FFprobeMetadataProvider` reads the container tags via
+`ffprobe`.
 
 **Local title database (local after one download):** `LocalTitleDatabase` +
 `LocalTitleDatabaseLoader` build an offline index from a downloaded TMDb data
 export (`files.tmdb.org/p/exports/`, the `movie_ids` / `tv_series_ids` NDJSON
 files, plain or `.gz`) — or any JSON array of `{title, year, kind}`. Parsed
 titles are matched offline (exact + fuzzy/Levenshtein, ranked by kind, year and
-popularity). Pick the file under Einstellungen → "Lokale Titel-Datenbank".
+popularity). Pick the file under Settings → Identification.
 
 The active identification chain is **embedded tags → local DB → Apple
 Intelligence → TMDb**; each step falls through to the next when it has no
 confident match (`CompositeMetadataProvider`). Everything except TMDb is fully
 local (FR18).
 
-**Enabling TMDb in the app:** click the **Online** button in the toolbar, toggle
-"Look up official titles online" and paste a TMDb API key (key + toggle are
-persisted in `UserDefaults`). When enabled, imports are enriched automatically,
-and "Look Up Now" re-runs the lookup on demand.
+**Enabling TMDb in the app:** open **Settings → Identification**, toggle "Look up
+official titles online" and paste a TMDb API key (v3 key or v4 token). The key is
+stored in the Keychain. When enabled, imports are enriched automatically, and
+"Look up now" re-runs the lookup on demand.
+
+**Library connector & monitoring (FR20):** a `JellyfinConnector` asks a local
+Jellyfin server to rescan its library after a successful rename/move (only a scan
+command is sent, no media). A read-only status web page (`/`, `/api/status`,
+`/healthz`) lets external monitors such as Uptime Kuma watch progress and be
+notified when a run finishes.
 
 ### Conflict handling (FR11)
 
@@ -142,40 +147,39 @@ The conflict policy is chosen in the toolbar: **Ask · Skip · Rename · Replace
 With **Ask**, pressing Start opens a resolution sheet listing every collision so
 you can decide per file (or apply one choice to all) before anything is moved.
 
-## Funktionsabdeckung (FR1–FR20)
+## Feature coverage (FR1–FR20)
 
-| FR | Thema | Status | Umsetzung |
-|----|-------|--------|-----------|
-| FR1 | Import per Drag-and-Drop (Dateien/Ordner) | ✅ | `ContentView` Drop + `MediaScanner` |
-| FR2 | Analyse von Release-Namen | ✅ | `ReleaseNameParser` |
-| FR3 | Identifikation über Metadatenquellen | ✅ | `MetadataProvider`, `TMDbMetadataProvider` (offline default) |
-| FR4 | Offizielle Titelbestimmung | ✅ | `ReleaseNameParser` / `MetadataEnricher` |
-| FR5 | Erscheinungsjahr | ✅ | `ReleaseNameParser` (Mehrjahr-Heuristik) |
-| FR6 | Staffel/Episode (S01E01, 1x05, Episode 07, Multi-Episode) | ✅ | `ReleaseNameParser` |
-| FR7 | Jellyfin-konforme Umbenennung | ✅ | `JellyfinNamer` |
-| FR8 | Vorschau der Änderungen | ✅ | `PreviewTable` |
-| FR9 | Bestätigen / Ablehnen / manuell anpassen | ✅ | `PreviewTable`, `AppState` |
-| FR10 | Mehrere Dateien gleichzeitig | ✅ | `MediaScanner`, `RenamePlanner` |
-| FR11 | Konflikterkennung (Skip/Rename/Replace/Ask) | ✅ | `RenamePlanner`, `RenameExecutor` |
-| FR12 | Protokollierung | ✅ | `RenameLog` |
-| FR13 | Rückgängig-Funktion | ✅ | `RenameJournal`, `RenameExecutor.undoLast` |
-| FR14 | Untertitel (SRT/ASS/SUB) mit umbenennen | ✅ | `MediaScanner`, `RenamePlanner` |
-| FR15 | Zusätzliche Dateien (NFO/Cover/Sample) | ✅ | `VideoFileTypes`, `RenamePlanner` |
-| FR16 | Konvertierung via FFmpeg | ✅ | `FFmpegConverter` + „Konvertieren"-Ansicht (Drop, Start, Verlauf) |
-| FR17 | Hardwarebeschleunigung (VideoToolbox) | ✅ | `ConversionOptions.useHardwareAcceleration` |
-| FR18 | Lokale Verarbeitung (keine Cloud-Uploads) | ✅ | Offline default, keine Medien-Uploads |
-| FR19 | Grafische Oberfläche (Drop, Vorschau, Fortschritt, Start, Log) | ✅ | SwiftUI Views |
-| FR20 | Erweiterbarkeit (Plex/Emby/Sonarr, Watch-Folder …) | ✅ Basis | Protokoll-basierte Provider/Konverter |
+| FR | Topic | Status | Implementation |
+|----|-------|--------|----------------|
+| FR1 | Import via drag-and-drop (files/folders) | ✅ | `ContentView` drop + `MediaScanner` |
+| FR2 | Release-name analysis | ✅ | `ReleaseNameParser` |
+| FR3 | Identification via metadata sources | ✅ | `MetadataProvider`, embedded/ffprobe/local DB/Apple Intelligence/TMDb |
+| FR4 | Official title resolution | ✅ | `MetadataEnricher` (provenance shown in the row) |
+| FR5 | Release year | ✅ | `ReleaseNameParser` (multi-year heuristic) |
+| FR6 | Season/episode (S01E01, 1x05, Episode 07, multi-episode) | ✅ | `ReleaseNameParser` |
+| FR7 | Jellyfin-conformant renaming | ✅ | `JellyfinNamer` |
+| FR8 | Preview of changes | ✅ | `QueueView` / `FileRowView` |
+| FR9 | Accept / reject / hand-edit (inline) | ✅ | `FileRowView`, `AppState` |
+| FR10 | Multiple files at once | ✅ | `MediaScanner`, `RenamePlanner` |
+| FR11 | Conflict detection (Skip/Rename/Replace/Ask) | ✅ | `RenamePlanner`, `RenameExecutor` |
+| FR12 | Logging (exportable) | ✅ | `RenameLog` |
+| FR13 | Undo | ✅ | `RenameJournal`, `RenameExecutor.undoLast` |
+| FR14 | Subtitles (SRT/ASS/SUB) renamed alongside | ✅ | `MediaScanner`, `RenamePlanner` |
+| FR15 | Extra files (NFO/cover/sample) | ✅ | `VideoFileTypes`, `RenamePlanner` |
+| FR16 | Conversion via FFmpeg | ✅ | `FFmpegConverter` + Convert view (queue, RF, progress, history) |
+| FR17 | Hardware acceleration (VideoToolbox) | ✅ | `ConversionOptions.useHardwareAcceleration` |
+| FR18 | Local processing (no cloud uploads) | ✅ | Offline default, no media uploads |
+| FR19 | Graphical interface (drop, preview, progress, start, log) | ✅ | SwiftUI views |
+| FR20 | Extensibility (Jellyfin connector, watch folder, status web page) | ✅ | `LibraryConnector`/`JellyfinConnector`, `WatchFolderScanner`, `StatusWebServer` |
 
-**Legende:** ✅ implementiert · 🧩 Gerüst vorhanden (geplante Erweiterung gemäß FR16/FR17).
+**Legend:** ✅ implemented.
 
 ## Roadmap / future work
 
-FR16 and FR17 (conversion + VideoToolbox) ship as a tested argument builder and
-an execution wrapper, ready to be surfaced in the UI. FR20 extension points
-(Plex/Emby naming profiles, Sonarr/Radarr hooks, watch-folders, background
-batch processing) build naturally on the `MetadataProvider` and naming
-abstractions.
+Further FR20 connectors (Emby, Sonarr/Radarr) build naturally on the
+`LibraryConnector` protocol. Optional Developer ID signing + notarisation is
+wired into the release workflow (see `docs/SIGNING.md`); without secrets the
+release ships an ad-hoc-signed universal `.app`.
 
 ## Security
 

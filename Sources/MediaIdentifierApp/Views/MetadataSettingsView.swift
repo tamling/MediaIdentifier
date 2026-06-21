@@ -10,23 +10,23 @@ struct MetadataSettingsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Einstellungen")
+            Text("Settings")
                 .font(.system(size: 16, weight: .bold))
                 .foregroundStyle(Theme.textPrimary)
 
             TabView {
                 tab { namingTab }
-                    .tabItem { Label("Benennung & Ausgabe", systemImage: "textformat") }
+                    .tabItem { Label("Naming & output", systemImage: "textformat") }
                 tab { detectionTab }
-                    .tabItem { Label("Erkennung", systemImage: "sparkles") }
+                    .tabItem { Label("Identification", systemImage: "sparkles") }
                 tab { serverTab }
-                    .tabItem { Label("Server & Automatik", systemImage: "server.rack") }
+                    .tabItem { Label("Server & automation", systemImage: "server.rack") }
             }
             .frame(height: 430)
 
             HStack {
                 Spacer()
-                Button("Fertig") { dismiss() }
+                Button("Done") { dismiss() }
                     .keyboardShortcut(.defaultAction)
                     .buttonStyle(.borderedProminent)
             }
@@ -53,60 +53,60 @@ struct MetadataSettingsView: View {
 
     @ViewBuilder private var namingTab: some View {
             // Naming (FR7)
-            group("Benennung") {
-                Toggle("Filme in eigenen Ordner legen", isOn: Binding(
+            group("Naming") {
+                Toggle("Place movies in their own folder", isOn: Binding(
                     get: { state.namingOptions.useMovieFolders },
                     set: { state.namingOptions.useMovieFolders = $0 }
                 ))
-                Toggle("Jahr im Serienordner anzeigen", isOn: Binding(
+                Toggle("Show year in series folder", isOn: Binding(
                     get: { state.namingOptions.includeSeriesYear },
                     set: { state.namingOptions.includeSeriesYear = $0 }
                 ))
             }
 
             // Free output folder for renaming (FR18)
-            group("Ausgabeordner") {
-                Toggle("Umbenannte Dateien in eigenen Ordner schreiben", isOn: $state.outputToFolder)
+            group("Output folder") {
+                Toggle("Write renamed files to a dedicated folder", isOn: $state.outputToFolder)
                 HStack(spacing: 10) {
                     Image(systemName: "folder").foregroundStyle(Theme.textSecondary)
-                    Text(state.outputFolderPath.isEmpty ? "Kein Ordner gewählt" : state.outputFolderPath)
+                    Text(state.outputFolderPath.isEmpty ? "No folder chosen" : state.outputFolderPath)
                         .font(.system(size: 12, design: .monospaced))
                         .foregroundStyle(state.outputFolderPath.isEmpty ? Theme.textTertiary : Theme.textRow)
                         .lineLimit(1).truncationMode(.middle)
                     Spacer()
-                    Button("Ordner wählen…", action: chooseOutput)
+                    Button("Choose folder…", action: chooseOutput)
                 }
                 .disabled(!state.outputToFolder)
-                Text("Aus ist die Voreinstellung: Dateien werden am Ort umbenannt. Ist die Option an, wird das gesamte Jellyfin-Layout unter dem gewählten Ordner angelegt — anschließend kann von dort konvertiert werden.")
+                Text("Off is the default: files are renamed in place. When on, the entire Jellyfin layout is created under the chosen folder — you can then convert from there.")
                     .font(.caption).foregroundStyle(Theme.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
             // Library move (complete seasons / movies)
-            group("Bibliothek") {
-                Toggle("Fertige Dateien in Bibliothek verschieben", isOn: $state.moveToLibrary)
+            group("Library") {
+                Toggle("Move finished files to library", isOn: $state.moveToLibrary)
                 HStack(spacing: 10) {
                     Image(systemName: "books.vertical").foregroundStyle(Theme.textSecondary)
-                    Text(state.libraryFolderPath.isEmpty ? "Kein Ordner gewählt" : state.libraryFolderPath)
+                    Text(state.libraryFolderPath.isEmpty ? "No folder chosen" : state.libraryFolderPath)
                         .font(.system(size: 12, design: .monospaced))
                         .foregroundStyle(state.libraryFolderPath.isEmpty ? Theme.textTertiary : Theme.textRow)
                         .lineLimit(1).truncationMode(.middle)
                     Spacer()
-                    Button("Ordner wählen…", action: chooseLibrary)
+                    Button("Choose folder…", action: chooseLibrary)
                 }
                 .disabled(!state.moveToLibrary)
-                Text("Filme werden immer verschoben; Serien nur, wenn die Staffel komplett ist (Episoden 1…N lückenlos). Unvollständige Staffeln bleiben am Ort.")
+                Text("Movies are always moved; series only when the season is complete (episodes 1…N without gaps). Incomplete seasons stay in place.")
                     .font(.caption).foregroundStyle(Theme.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
             // Conflicts (FR11)
-            group("Bei Konflikt") {
+            group("On conflict") {
                 Picker("", selection: $state.conflictPolicy) {
-                    Text("Fragen").tag(ConflictPolicy.ask)
-                    Text("Überspringen").tag(ConflictPolicy.skip)
-                    Text("Umbenennen").tag(ConflictPolicy.rename)
-                    Text("Ersetzen").tag(ConflictPolicy.replace)
+                    Text("Ask").tag(ConflictPolicy.ask)
+                    Text("Skip").tag(ConflictPolicy.skip)
+                    Text("Rename").tag(ConflictPolicy.rename)
+                    Text("Replace").tag(ConflictPolicy.replace)
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
@@ -117,30 +117,30 @@ struct MetadataSettingsView: View {
 
     @ViewBuilder private var detectionTab: some View {
             // On-device Apple Intelligence (FR3, local)
-            group("Erkennung – Apple Intelligence (lokal)") {
-                Toggle("Titel mit Apple Intelligence erkennen (on-device)",
+            group("Identification – Apple Intelligence (local)") {
+                Toggle("Identify titles with Apple Intelligence (on-device)",
                        isOn: $state.useAppleIntelligence)
                     .disabled(!state.appleIntelligenceSupported)
                 Text(state.appleIntelligenceSupported
-                     ? "Nutzt das geräteinterne Sprachmodell. Läuft komplett lokal — es werden keine Daten gesendet. Hat Vorrang vor TMDb."
-                     : "Nicht verfügbar: benötigt macOS 26+, Apple Silicon und aktiviertes Apple Intelligence.")
+                     ? "Uses the on-device language model. Runs entirely locally — no data is sent. Takes precedence over TMDb."
+                     : "Not available: requires macOS 26+, Apple Silicon and enabled Apple Intelligence.")
                     .font(.caption)
                     .foregroundStyle(Theme.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
             // Embedded container tags (FR3, local)
-            group("Eingebettete Metadaten (lokal)") {
-                Toggle("Titel/Jahr aus der Datei (MKV/MP4) lesen",
+            group("Embedded metadata (local)") {
+                Toggle("Read title/year from the file (MKV/MP4)",
                        isOn: $state.useEmbeddedMetadata)
-                Text("Liest im Container gespeicherte Tags via AVFoundation. Greift nur, wenn die Datei solche Tags enthält.")
+                Text("Reads tags stored in the container via AVFoundation. Only applies if the file contains such tags.")
                     .font(.caption).foregroundStyle(Theme.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
             // Local offline title database (FR3)
-            group("Lokale Titel-Datenbank (lokal)") {
-                Toggle("Offline-Datenbank verwenden", isOn: $state.useLocalDatabase)
+            group("Local title database (local)") {
+                Toggle("Use offline database", isOn: $state.useLocalDatabase)
                 HStack(spacing: 10) {
                     Image(systemName: "externaldrive").foregroundStyle(Theme.textSecondary)
                     Text(databaseStatus)
@@ -151,21 +151,21 @@ struct MetadataSettingsView: View {
                     if state.isLoadingDatabase {
                         ProgressView().controlSize(.small)
                     } else {
-                        Button("Datei wählen…", action: chooseDatabase)
+                        Button("Choose file…", action: chooseDatabase)
                     }
                 }
-                Text("Einmalig den TMDb-Export von files.tmdb.org/p/exports laden (movie_ids / tv_series_ids, .json/.jsonl, auch .gz). Danach erfolgt der Abgleich offline.")
+                Text("Download the TMDb export once from files.tmdb.org/p/exports (movie_ids / tv_series_ids, .json/.jsonl, also .gz). After that, matching happens offline.")
                     .font(.caption).foregroundStyle(Theme.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
             // Online metadata (FR3)
-            group("Online-Metadaten (TMDb)") {
-                Toggle("Offizielle Titel online nachschlagen", isOn: $state.onlineLookupEnabled)
-                SecureField("TMDb v3-Schlüssel oder v4 Read Access Token", text: $state.tmdbAPIKey)
+            group("Online metadata (TMDb)") {
+                Toggle("Look up official titles online", isOn: $state.onlineLookupEnabled)
+                SecureField("TMDb v3 key or v4 Read Access Token", text: $state.tmdbAPIKey)
                     .textFieldStyle(.roundedBorder)
                     .disabled(!state.onlineLookupEnabled)
-                Text("Schlüssel/Token auf themoviedb.org → Einstellungen → API holen. v3-Key und v4-Token werden automatisch erkannt. Es werden nur Titel und Jahr gesendet — niemals eine Mediendatei.")
+                Text("Get the key/token on themoviedb.org → Settings → API. v3 key and v4 token are detected automatically. Only title and year are sent — never a media file.")
                     .font(.caption)
                     .foregroundStyle(Theme.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -176,11 +176,11 @@ struct MetadataSettingsView: View {
                         if state.isLookingUp {
                             ProgressView().controlSize(.small)
                         } else {
-                            Text("Jetzt nachschlagen")
+                            Text("Look up now")
                         }
                     }
                     .disabled(!state.canLookUpOnline || state.isLookingUp)
-                    Button("Verbindung testen") { state.testTMDb() }
+                    Button("Test connection") { state.testTMDb() }
                         .disabled(state.tmdbAPIKey.isEmpty)
                     Spacer()
                 }
@@ -192,19 +192,19 @@ struct MetadataSettingsView: View {
 
     @ViewBuilder private var serverTab: some View {
             // Jellyfin connector (FR20)
-            group("Jellyfin-Server (nach Umbenennen aktualisieren)") {
-                Toggle("Jellyfin-Bibliothek automatisch aktualisieren", isOn: $state.jellyfinEnabled)
-                TextField("Server-URL, z. B. http://localhost:8096", text: $state.jellyfinServerURL)
+            group("Jellyfin server (refresh after renaming)") {
+                Toggle("Refresh Jellyfin library automatically", isOn: $state.jellyfinEnabled)
+                TextField("Server URL, e.g. http://localhost:8096", text: $state.jellyfinServerURL)
                     .textFieldStyle(.roundedBorder)
                     .disabled(!state.jellyfinEnabled)
-                SecureField("API-Schlüssel (Dashboard → API-Schlüssel)", text: $state.jellyfinAPIKey)
+                SecureField("API key (Dashboard → API Keys)", text: $state.jellyfinAPIKey)
                     .textFieldStyle(.roundedBorder)
                     .disabled(!state.jellyfinEnabled)
-                Text("Nach dem Umbenennen wird Jellyfin gebeten, die Bibliothek neu einzulesen, sodass die Dateien automatisch übernommen werden. Es werden keine Mediendateien gesendet — nur ein Scan-Befehl. Schlüssel im Jellyfin-Dashboard unter „API-Schlüssel“ erstellen.")
+                Text("After renaming, Jellyfin is asked to rescan the library so the files are picked up automatically. No media files are sent — only a scan command. Create a key in the Jellyfin dashboard under 'API Keys'.")
                     .font(.caption).foregroundStyle(Theme.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
                 HStack {
-                    Button("Verbindung testen") { state.testJellyfin() }
+                    Button("Test connection") { state.testJellyfin() }
                         .disabled(!state.jellyfinEnabled || state.jellyfinServerURL.isEmpty || state.jellyfinAPIKey.isEmpty)
                     Spacer()
                 }
@@ -212,8 +212,8 @@ struct MetadataSettingsView: View {
             }
 
             // Read-only status web page (FR20)
-            group("Status-Webseite (nur Ansicht)") {
-                Toggle("Status-Webseite aktivieren", isOn: $state.webEnabled)
+            group("Status web page (view only)") {
+                Toggle("Enable status web page", isOn: $state.webEnabled)
                 HStack {
                     Text("Port")
                     TextField("Port", value: $state.webPort, format: .number)
@@ -222,23 +222,23 @@ struct MetadataSettingsView: View {
                         .disabled(!state.webEnabled)
                     Spacer()
                 }
-                Toggle("Nur lokal erreichbar (127.0.0.1)", isOn: $state.webLocalOnly)
+                Toggle("Local only (127.0.0.1)", isOn: $state.webLocalOnly)
                     .disabled(!state.webEnabled)
                 if state.webEnabled {
-                    Text("Geöffnet: \(state.webURL)  ·  JSON: \(state.webURL)api/status")
+                    Text("Open: \(state.webURL)  ·  JSON: \(state.webURL)api/status")
                         .font(.system(size: 11, design: .monospaced))
                         .foregroundStyle(Theme.accentBright)
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                Text("Stellt eine reine Ansichts-Seite mit dem aktuellen Stand bereit. Einfaches Erreichbarkeits-Monitoring: in Uptime Kuma einen normalen HTTP-Monitor auf …/healthz mit akzeptiertem Status 200 anlegen → 200 = fertig (100 %), 503 = läuft noch, 500 = Fehler; Kuma meldet damit Abschluss und Fehler. Alternativ JSON: …/api/status mit Feld „busy“. „Nur lokal“ einschalten, wenn Kuma auf demselben Mac läuft (sonst im LAN erreichbar). Es werden keine Befehle entgegengenommen, keine Tokens oder vollständigen Pfade angezeigt.")
+                Text("Provides a view-only page with the current state. Simple reachability monitoring: in Uptime Kuma set up a regular HTTP monitor on …/healthz accepting status 200 → 200 = done (100 %), 503 = still running, 500 = error; Kuma thus reports completion and errors. Alternatively JSON: …/api/status with field 'busy'. Turn on 'Local only' if Kuma runs on the same Mac (otherwise reachable on the LAN). No commands are accepted, and no tokens or full paths are shown.")
                     .font(.caption).foregroundStyle(Theme.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
             // Watch folder lives in its own sidebar section; point users there.
-            group("Watch-Ordner") {
-                Text("Die automatische Überwachung eines Download-Ordners wird im Bereich „Watch-Ordner“ in der Seitenleiste konfiguriert.")
+            group("Watch folder") {
+                Text("Automatic monitoring of a download folder is configured in the 'Watch folder' section in the sidebar.")
                     .font(.caption).foregroundStyle(Theme.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -246,9 +246,9 @@ struct MetadataSettingsView: View {
 
     private var databaseStatus: String {
         if let error = state.databaseError { return error }
-        if state.isLoadingDatabase { return "Wird geladen …" }
-        if state.localDatabaseCount > 0 { return "\(state.localDatabaseCount) Titel geladen" }
-        return state.localDatabasePath.isEmpty ? "Keine Datei gewählt" : "Nicht geladen"
+        if state.isLoadingDatabase { return "Loading …" }
+        if state.localDatabaseCount > 0 { return "\(state.localDatabaseCount) titles loaded" }
+        return state.localDatabasePath.isEmpty ? "No file chosen" : "Not loaded"
     }
 
     private func chooseLibrary() { chooseFolder(apply: state.setLibraryFolder) }
@@ -260,7 +260,7 @@ struct MetadataSettingsView: View {
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
-        panel.prompt = "Wählen"
+        panel.prompt = "Choose"
         if panel.runModal() == .OK, let url = panel.url { apply(url) }
     }
 
@@ -269,7 +269,7 @@ struct MetadataSettingsView: View {
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
-        panel.prompt = "Laden"
+        panel.prompt = "Load"
         if panel.runModal() == .OK, let url = panel.url {
             state.setLocalDatabaseFile(url)
         }

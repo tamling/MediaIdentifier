@@ -17,32 +17,32 @@ struct MediaIdentifierApp: App {
         .windowStyle(.hiddenTitleBar)
         .commands {
             CommandGroup(replacing: .appSettings) {
-                Button("Einstellungen…") { state.showingSettings = true }
+                Button("Settings…") { state.showingSettings = true }
                     .keyboardShortcut(",", modifiers: [.command])
             }
             CommandGroup(after: .pasteboard) {
-                Button("Umbenennung rückgängig") { state.undoLast() }
+                Button("Undo rename") { state.undoLast() }
                     .keyboardShortcut("z", modifiers: [.command])
                     .disabled(!state.showUndo)
-                Button("Liste leeren") { state.clear() }
+                Button("Clear list") { state.clear() }
                     .keyboardShortcut(.delete, modifiers: [.command])
                     .disabled(!state.hasFiles)
             }
             // Jump between sidebar sections with ⌘1…⌘7.
             CommandGroup(after: .sidebar) {
-                Button("Warteschlange") { state.section = .queue }
+                Button("Queue") { state.section = .queue }
                     .keyboardShortcut("1", modifiers: [.command])
-                Button("Filme") { state.section = .movies }
+                Button("Movies") { state.section = .movies }
                     .keyboardShortcut("2", modifiers: [.command])
-                Button("Serien") { state.section = .series }
+                Button("Series") { state.section = .series }
                     .keyboardShortcut("3", modifiers: [.command])
-                Button("Konvertieren") { state.section = .convert }
+                Button("Convert") { state.section = .convert }
                     .keyboardShortcut("4", modifiers: [.command])
-                Button("Watch-Ordner") { state.section = .watch }
+                Button("Watch folder") { state.section = .watch }
                     .keyboardShortcut("5", modifiers: [.command])
-                Button("Protokoll") { state.section = .log }
+                Button("Log") { state.section = .log }
                     .keyboardShortcut("6", modifiers: [.command])
-                Button("Übersicht") { state.section = .overview }
+                Button("Overview") { state.section = .overview }
                     .keyboardShortcut("7", modifiers: [.command])
             }
         }

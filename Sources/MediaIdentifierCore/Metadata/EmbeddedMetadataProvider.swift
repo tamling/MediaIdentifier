@@ -31,7 +31,7 @@ public struct EmbeddedMetadataProvider: MetadataProvider {
             title: trimmedTitle,
             year: year ?? parsed.year,
             kind: parsed.kind == .unknown ? .movie : parsed.kind,
-            source: "Datei-Tags"
+            source: "File tags"
         )
     }
 

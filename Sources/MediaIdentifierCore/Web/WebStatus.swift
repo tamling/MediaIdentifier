@@ -155,7 +155,7 @@ public enum StatusHTTP {
     /// while running or on error and recovers ("up") when a run completes cleanly.
     public static func health(_ s: StatusSnapshot) -> (status: String, body: String) {
         if s.hasError {
-            return ("500 Internal Server Error", "error: \(s.lastResult ?? "letzter Lauf fehlgeschlagen")")
+            return ("500 Internal Server Error", "error: \(s.lastResult ?? "last run failed")")
         }
         if s.busy {
             return ("503 Service Unavailable", "busy \(s.activePercent)%")
@@ -165,7 +165,7 @@ public enum StatusHTTP {
 
     /// Minimal read-only dashboard with a 2s auto-refresh.
     public static func html(_ s: StatusSnapshot) -> String {
-        let stateLabel = s.hasError ? "Fehler" : (s.busy ? "Beschäftigt (\(s.activePercent) %)" : "Bereit")
+        let stateLabel = s.hasError ? "Error" : (s.busy ? "Busy (\(s.activePercent) %)" : "Ready")
         let stateColor = s.hasError ? "#e05a4f" : (s.busy ? "#f0a020" : "#36c98d")
         func esc(_ value: String) -> String {
             value.replacingOccurrences(of: "&", with: "&amp;")
@@ -177,25 +177,25 @@ public enum StatusHTTP {
             rows += "<tr><td class='k'>\(esc(label))</td><td class='v'>\(esc(value))</td></tr>"
         }
         if s.renaming {
-            row("Umbenennen", "\(Int(s.renameProgress * 100)) %")
+            row("Rename", "\(Int(s.renameProgress * 100)) %")
         }
         if s.converting {
-            row("Konvertieren", s.convertDetail ?? "\(Int(s.convertProgress * 100)) %")
-            if let file = s.currentFile { row("Aktuelle Datei", file) }
-            row("Warteschlange", "\(s.pendingConversions) wartend")
+            row("Convert", s.convertDetail ?? "\(Int(s.convertProgress * 100)) %")
+            if let file = s.currentFile { row("Current file", file) }
+            row("Queue", "\(s.pendingConversions) waiting")
         }
         if let status = s.convertStatus { row("Status", status) }
-        if let last = s.lastResult { row("Letztes Ergebnis", last) }
-        row("Dateien", "\(s.totalItems) gesamt · \(s.ready) bereit · \(s.done) fertig")
-        row("Watch-Ordner", s.watchActive ? "aktiv" : "aus")
-        row("Jellyfin", s.jellyfinConfigured ? "verbunden" : "nicht konfiguriert")
+        if let last = s.lastResult { row("Last result", last) }
+        row("Files", "\(s.totalItems) total · \(s.ready) ready · \(s.done) done")
+        row("Watch folder", s.watchActive ? "active" : "off")
+        row("Jellyfin", s.jellyfinConfigured ? "connected" : "not configured")
         let formatter = DateFormatter()
         formatter.dateStyle = .medium; formatter.timeStyle = .medium
         let updated = formatter.string(from: s.updated)
 
         return """
         <!DOCTYPE html>
-        <html lang="de"><head>
+        <html lang="en"><head>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <meta http-equiv="refresh" content="2">
@@ -218,10 +218,10 @@ public enum StatusHTTP {
         </style></head>
         <body><div class="card">
           <h1>MediaIdentifier</h1>
-          <div class="sub">Status-Übersicht (nur Ansicht)</div>
+          <div class="sub">Status overview (view only)</div>
           <span class="badge">\(stateLabel)</span>
           <table>\(rows)</table>
-          <div class="foot">Aktualisiert: \(esc(updated)) · JSON: <code>/api/status</code></div>
+          <div class="foot">Updated: \(esc(updated)) · JSON: <code>/api/status</code></div>
         </div></body></html>
         """
     }
