@@ -88,6 +88,26 @@ public enum StatusHTTP {
         return parts[1].split(separator: "?").first.map(String.init) ?? "/"
     }
 
+    /// Extracts the HTTP method (e.g. "GET"). Falls back to "GET".
+    public static func method(from request: String) -> String {
+        guard let firstLine = request.split(whereSeparator: { $0 == "\r" || $0 == "\n" }).first,
+              let verb = firstLine.split(separator: " ").first else { return "GET" }
+        return verb.uppercased()
+    }
+
+    /// Top-level handler for a raw request: enforces read-only methods, then
+    /// routes by path. Anything other than GET/HEAD is rejected (405) since the
+    /// server only ever serves status and never mutates state.
+    public static func respond(toRawRequest request: String, snapshot: StatusSnapshot) -> Data {
+        let verb = method(from: request)
+        guard verb == "GET" || verb == "HEAD" else {
+            return response(status: "405 Method Not Allowed",
+                            contentType: "text/plain; charset=utf-8",
+                            body: Data("method not allowed".utf8))
+        }
+        return route(path(from: request), snapshot: snapshot)
+    }
+
     /// JSON body for `/api/status`. Optional fields are omitted when nil.
     public static func json(_ snapshot: StatusSnapshot) -> Data {
         let encoder = JSONEncoder()

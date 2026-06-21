@@ -65,8 +65,7 @@ final class StatusWebServer: @unchecked Sendable {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 8192) { [weak self] data, _, _, _ in
             guard let self else { connection.cancel(); return }
             let request = data.flatMap { String(data: $0, encoding: .utf8) } ?? ""
-            let path = StatusHTTP.path(from: request)
-            let response = StatusHTTP.route(path, snapshot: self.box.get())
+            let response = StatusHTTP.respond(toRawRequest: request, snapshot: self.box.get())
             connection.send(content: response, completion: .contentProcessed { _ in
                 connection.cancel()
             })
