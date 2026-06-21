@@ -72,7 +72,18 @@ struct ConvertView: View {
             if !state.ffmpegAvailable {
                 Chip(text: "FFmpeg fehlt", fg: Theme.warn, bg: Theme.warn.opacity(0.14))
             }
-            if !state.convertFiles.isEmpty && !state.isConverting {
+            if state.isConverting {
+                Button(action: state.stopConversion) {
+                    HStack(spacing: 7) {
+                        Image(systemName: "stop.fill").font(.system(size: 12, weight: .bold))
+                        Text("Stoppen").font(.system(size: 12.5, weight: .bold))
+                    }
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 15).padding(.vertical, 7)
+                    .background(Theme.warn, in: RoundedRectangle(cornerRadius: 8))
+                }
+                .buttonStyle(.plain)
+            } else if !state.convertFiles.isEmpty {
                 Button(action: state.startConversion) {
                     HStack(spacing: 7) {
                         Image(systemName: "bolt.fill").font(.system(size: 12, weight: .bold))
@@ -94,11 +105,26 @@ struct ConvertView: View {
     // MARK: Files
 
     private var filesCard: some View {
-        card("Dateien") {
-            if state.convertFiles.isEmpty {
+        card("Warteschlange") {
+            if state.currentConvert == nil && state.convertFiles.isEmpty {
                 dropZone
             } else {
                 VStack(spacing: 6) {
+                    if let current = state.currentConvert {
+                        HStack(spacing: 8) {
+                            ProgressView().controlSize(.small)
+                            Text(current.lastPathComponent)
+                                .font(.system(size: 12.5, design: .monospaced))
+                                .foregroundStyle(Theme.accentBright)
+                                .lineLimit(1).truncationMode(.middle)
+                            Spacer()
+                            Button(role: .destructive) { state.removeConvertFile(current) } label: {
+                                Image(systemName: "xmark.circle.fill").foregroundStyle(Theme.textTertiary)
+                            }
+                            .buttonStyle(.borderless)
+                            .help("Aktuelle Konvertierung abbrechen")
+                        }
+                    }
                     ForEach(state.convertFiles, id: \.self) { url in
                         HStack(spacing: 8) {
                             Image(systemName: "film").foregroundStyle(Theme.movie)
@@ -115,9 +141,11 @@ struct ConvertView: View {
                     }
                     HStack {
                         Button("Dateien hinzufügen…", action: chooseFiles).controlSize(.small)
-                        Button("Leeren", action: state.clearConvertFiles).controlSize(.small)
+                        if !state.convertFiles.isEmpty {
+                            Button("Wartende leeren", action: state.clearConvertFiles).controlSize(.small)
+                        }
                         Spacer()
-                        Text("\(state.convertFiles.count) Datei(en)")
+                        Text("\(state.convertFiles.count) wartend")
                             .font(.caption).foregroundStyle(Theme.textSecondary)
                     }
                     .padding(.top, 2)

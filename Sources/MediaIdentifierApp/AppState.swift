@@ -3,6 +3,15 @@ import SwiftUI
 import AppKit
 import MediaIdentifierCore
 
+/// Thread-safe holder for the currently running FFmpeg process so it can be
+/// terminated (Stop / remove current) from the main actor.
+private final class ProcessBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var process: Process?
+    func set(_ p: Process?) { lock.lock(); process = p; lock.unlock() }
+    func terminate() { lock.lock(); process?.terminate(); lock.unlock() }
+}
+
 /// Where renamed files should be written.
 enum OutputMode: Equatable {
     /// Rename in place, relative to each file's own folder (FR18, default).
@@ -91,13 +100,19 @@ final class AppState: ObservableObject {
 
     // Conversion options (FR16/FR17 scaffold).
     @Published var conversionOptions = ConversionOptions()
-    // Conversion queue & progress (FR16).
+    // Conversion queue & progress (FR16). convertFiles is the live pending
+    // queue; currentConvert is the file being processed right now.
     @Published var convertFiles: [URL] = []
+    @Published var currentConvert: URL?
     @Published var isConverting = false
     @Published var convertProgress: Double = 0
     @Published var convertStatus: String?
     @Published var convertDetail: String?
     @Published private(set) var convertLog: [String] = []
+    private var cancelRequested = false
+    private var convDone = 0
+    private var convFailed = 0
+    private let processBox = ProcessBox()
 
     // Watch folder (FR20). Auto-imports (and optionally auto-renames) finished
     // downloads dropped into a chosen folder.
@@ -293,57 +308,107 @@ final class AppState: ObservableObject {
         importURLs(panel.urls)
     }
 
-    // MARK: Conversion (FR16/FR17)
+    // MARK: Conversion (FR16/FR17) — dynamic queue
 
     func addConvertFiles(_ urls: [URL]) {
         let found = scanner.scan(urls: urls).map { $0.url }
         var seen = Set(convertFiles.map { $0.standardizedFileURL.path })
+        if let current = currentConvert { seen.insert(current.standardizedFileURL.path) }
         for url in found where seen.insert(url.standardizedFileURL.path).inserted {
             convertFiles.append(url)
         }
     }
 
-    func removeConvertFile(_ url: URL) { convertFiles.removeAll { $0 == url } }
-    func clearConvertFiles() { convertFiles.removeAll(); convertProgress = 0; convertStatus = nil }
+    func removeConvertFile(_ url: URL) {
+        convertFiles.removeAll { $0 == url }
+        // Removing the file currently being converted cancels it and moves on.
+        if currentConvert == url { processBox.terminate() }
+    }
+
+    func clearConvertFiles() {
+        convertFiles.removeAll()
+        if !isConverting { convertProgress = 0; convertStatus = nil; convertDetail = nil }
+    }
 
     func startConversion() {
         guard !isConverting, !convertFiles.isEmpty else { return }
-        guard let ffmpeg = ffmpegPath else {
+        guard ffmpegPath != nil else {
             convertStatus = "FFmpeg nicht gefunden – installieren mit: brew install ffmpeg"
             return
         }
         isConverting = true
+        cancelRequested = false
+        convDone = 0
+        convFailed = 0
         convertProgress = 0
         convertStatus = "Konvertiere…"
+        processNext()
+    }
 
-        let files = convertFiles
+    func stopConversion() {
+        guard isConverting else { return }
+        cancelRequested = true
+        processBox.terminate()
+        convertStatus = "Wird gestoppt…"
+    }
+
+    /// Pops the next file from the (live) queue and converts it, then recurses —
+    /// so files added during conversion are picked up and removed ones skipped.
+    private func processNext() {
+        guard !cancelRequested, !convertFiles.isEmpty, let ffmpeg = ffmpegPath else {
+            finishConversion()
+            return
+        }
+        let input = convertFiles.removeFirst()
+        currentConvert = input
+        convertProgress = 0
+        convertDetail = nil
         let options = conversionOptions
-        let total = files.count
+        let box = processBox
+        appendConvertLog("⏳ \(input.lastPathComponent)")
 
         Task.detached(priority: .userInitiated) { [weak self] in
             let converter = FFmpegConverter(ffmpegPath: ffmpeg)
-            var done = 0, failed = 0
-            for (index, input) in files.enumerated() {
-                let output = AppState.uniqueOutputURL(for: input, options: options)
-                await self?.appendConvertLog("⏳ \(input.lastPathComponent)")
-                do {
-                    try converter.convert(input: input, output: output, options: options) { p in
+            let output = AppState.uniqueOutputURL(for: input, options: options)
+            var ok = false
+            var message: String
+            do {
+                try converter.convert(
+                    input: input, output: output, options: options,
+                    onStart: { proc in box.set(proc) },
+                    progress: { p in
                         Task { @MainActor [weak self] in
-                            self?.convertProgress = (Double(index) + p.fraction) / Double(total)
+                            self?.convertProgress = p.fraction
                             self?.convertDetail = AppState.progressDetail(p)
                         }
                     }
-                    done += 1
-                    await self?.appendConvertLog("✓ \(output.lastPathComponent)")
-                } catch {
-                    failed += 1
-                    await self?.appendConvertLog("✗ \(input.lastPathComponent): \(error.localizedDescription)")
-                }
-                let progress = Double(index + 1) / Double(total)
-                await MainActor.run { [weak self] in self?.convertProgress = progress }
+                )
+                ok = true
+                message = "✓ \(output.lastPathComponent)"
+            } catch {
+                message = "✗ \(input.lastPathComponent): \(error.localizedDescription)"
             }
-            await self?.finishConversion(done: done, failed: failed)
+            box.set(nil)
+            await self?.fileFinished(ok: ok, message: message)
         }
+    }
+
+    private func fileFinished(ok: Bool, message: String) {
+        if ok { convDone += 1 } else { convFailed += 1 }
+        appendConvertLog(message)
+        currentConvert = nil
+        processNext()
+    }
+
+    private func finishConversion() {
+        let stopped = cancelRequested
+        isConverting = false
+        cancelRequested = false
+        currentConvert = nil
+        convertProgress = stopped ? 0 : 1
+        convertDetail = nil
+        convertStatus = (stopped ? "Gestoppt" : "Fertig")
+            + ": \(convDone) konvertiert, \(convFailed) fehlgeschlagen."
     }
 
     nonisolated static func conversionOutputURL(for input: URL, options: ConversionOptions) -> URL {
@@ -372,13 +437,6 @@ final class AppState: ObservableObject {
         let stamp = DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium)
         convertLog.insert("\(stamp)  \(line)", at: 0)
         if convertLog.count > 200 { convertLog.removeLast() }
-    }
-
-    private func finishConversion(done: Int, failed: Int) {
-        isConverting = false
-        convertProgress = 1
-        convertDetail = nil
-        convertStatus = "Fertig: \(done) konvertiert, \(failed) fehlgeschlagen."
     }
 
     /// Formats speed/ETA for display, e.g. "3.1× · Rest ~12:34".

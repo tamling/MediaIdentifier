@@ -213,6 +213,7 @@ public final class FFmpegConverter {
         input: URL,
         output: URL,
         options: ConversionOptions,
+        onStart: ((Process) -> Void)? = nil,
         progress: (@Sendable (ConversionProgress) -> Void)? = nil
     ) throws {
         guard isAvailable else { throw ConverterError.ffmpegNotFound }
@@ -252,6 +253,7 @@ public final class FFmpegConverter {
             }
         }
 
+        onStart?(process)
         try process.run()
         process.waitUntilExit()
         outPipe.fileHandleForReading.readabilityHandler = nil
