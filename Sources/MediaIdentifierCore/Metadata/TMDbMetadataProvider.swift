@@ -4,26 +4,32 @@ import Foundation
 /// are sent to TMDb to look up the official name — never any media file, which
 /// keeps it consistent with FR18 (no media uploaded to the cloud).
 ///
-/// Requires a free TMDb API key. Disabled by default; the app uses
-/// `OfflineMetadataProvider` unless a key is supplied.
+/// Supports both auth styles automatically:
+/// - **v3** API key (32-hex) → sent as the `api_key` query parameter.
+/// - **v4** Read Access Token (JWT, contains dots) → sent as
+///   `Authorization: Bearer …`.
 public struct TMDbMetadataProvider: MetadataProvider {
-    private let apiKey: String
+    private let credential: String
     private let session: URLSession
     private let baseURL = URL(string: "https://api.themoviedb.org/3")!
 
+    /// True when the credential is a v4 Read Access Token (JWT) rather than a
+    /// v3 key. JWTs contain dots; v3 keys are 32 hex characters.
+    private var usesBearer: Bool { credential.contains(".") }
+
     public init(apiKey: String, session: URLSession? = nil) {
-        self.apiKey = apiKey
-        // Default to an ephemeral session so the API key (carried in the URL
-        // query, per TMDb v3) is not persisted in the shared URL cache.
+        self.credential = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Ephemeral session so a v3 key (carried in the URL query) is not
+        // persisted in the shared URL cache.
         self.session = session ?? URLSession(configuration: .ephemeral)
     }
 
-    /// Validates the API key against TMDb's `/configuration` endpoint and returns
-    /// the HTTP status code (200 = valid v3 key, 401 = invalid). Used by the
+    /// Validates the credential against TMDb's `/configuration` endpoint and
+    /// returns the HTTP status code (200 = valid, 401 = invalid). Used by the
     /// app's "Verbindung testen" action so users get clear feedback.
     public func verify() async throws -> Int {
-        let url = try makeURL(path: "/configuration", queryItems: [])
-        let (_, response) = try await session.data(from: url)
+        let request = try makeRequest(path: "/configuration", queryItems: [])
+        let (_, response) = try await session.data(for: request)
         return (response as? HTTPURLResponse)?.statusCode ?? -1
     }
 
@@ -32,16 +38,13 @@ public struct TMDbMetadataProvider: MetadataProvider {
         let isMovie = parsed.kind != .episode
         let path = isMovie ? "/search/movie" : "/search/tv"
 
-        var query = [
-            URLQueryItem(name: "api_key", value: apiKey),
-            URLQueryItem(name: "query", value: parsed.title)
-        ]
+        var query = [URLQueryItem(name: "query", value: parsed.title)]
         if let year = parsed.year {
             query.append(URLQueryItem(name: isMovie ? "year" : "first_air_date_year", value: String(year)))
         }
-        let url = try makeURL(path: path, queryItems: query)
+        let request = try makeRequest(path: path, queryItems: query)
 
-        let (data, response) = try await session.data(from: url)
+        let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { return nil }
 
         let decoded = try JSONDecoder().decode(SearchResponse.self, from: data)
@@ -59,17 +62,27 @@ public struct TMDbMetadataProvider: MetadataProvider {
         )
     }
 
-    /// Builds a request URL, throwing instead of force-unwrapping.
-    private func makeURL(path: String, queryItems: [URLQueryItem]) throws -> URL {
+    /// Builds a request with the right auth (v3 query param vs. v4 Bearer header).
+    private func makeRequest(path: String, queryItems: [URLQueryItem]) throws -> URLRequest {
         guard var components = URLComponents(
             url: baseURL.appendingPathComponent(path),
             resolvingAgainstBaseURL: false
         ) else {
             throw URLError(.badURL)
         }
-        if !queryItems.isEmpty { components.queryItems = queryItems }
+        var items = queryItems
+        if !usesBearer {
+            items.insert(URLQueryItem(name: "api_key", value: credential), at: 0)
+        }
+        if !items.isEmpty { components.queryItems = items }
         guard let url = components.url else { throw URLError(.badURL) }
-        return url
+
+        var request = URLRequest(url: url)
+        if usesBearer {
+            request.setValue("Bearer \(credential)", forHTTPHeaderField: "Authorization")
+            request.setValue("application/json", forHTTPHeaderField: "accept")
+        }
+        return request
     }
 
     // MARK: TMDb response model

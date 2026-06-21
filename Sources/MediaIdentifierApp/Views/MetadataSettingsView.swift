@@ -102,10 +102,10 @@ struct MetadataSettingsView: View {
             // Online metadata (FR3)
             group("Online-Metadaten (TMDb)") {
                 Toggle("Offizielle Titel online nachschlagen", isOn: $state.onlineLookupEnabled)
-                SecureField("TMDb API-Schlüssel", text: $state.tmdbAPIKey)
+                SecureField("TMDb v3-Schlüssel oder v4 Read Access Token", text: $state.tmdbAPIKey)
                     .textFieldStyle(.roundedBorder)
                     .disabled(!state.onlineLookupEnabled)
-                Text("Kostenlosen Schlüssel auf themoviedb.org → Einstellungen → API holen. Es werden nur Titel und Jahr gesendet — niemals eine Mediendatei.")
+                Text("Schlüssel/Token auf themoviedb.org → Einstellungen → API holen. v3-Key und v4-Token werden automatisch erkannt. Es werden nur Titel und Jahr gesendet — niemals eine Mediendatei.")
                     .font(.caption)
                     .foregroundStyle(Theme.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
