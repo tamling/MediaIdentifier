@@ -1092,4 +1092,14 @@ final class AppState: ObservableObject {
         log.clear()
         logEntries = []
     }
+
+    /// Deletes all locally stored history: the rename log and the undo journal
+    /// (incl. their files under Application Support). Undo is no longer possible
+    /// afterwards. Nothing here is ever sent anywhere — this is purely local.
+    func clearHistory() {
+        log.clear()
+        journal.clear()
+        logEntries = []
+        canUndo = false
+    }
 }

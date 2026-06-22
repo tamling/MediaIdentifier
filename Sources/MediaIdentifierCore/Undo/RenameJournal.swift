@@ -59,6 +59,15 @@ public final class RenameJournal: @unchecked Sendable {
         }
     }
 
+    /// Forgets all recorded transactions and removes the on-disk journal file.
+    /// Undo is no longer possible afterwards.
+    public func clear() {
+        queue.sync {
+            transactions.removeAll()
+            try? FileManager.default.removeItem(at: url)
+        }
+    }
+
     // MARK: Persistence
 
     private func load() {

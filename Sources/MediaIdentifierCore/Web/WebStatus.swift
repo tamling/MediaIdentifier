@@ -199,7 +199,7 @@ public enum StatusHTTP {
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <meta http-equiv="refresh" content="2">
-        <title>MediaIdentifier – Status</title>
+        <title>Mediafin – Status</title>
         <style>
           :root { color-scheme: dark; }
           body { font-family: -apple-system, system-ui, sans-serif; background:#16161a; color:#e6e6ea;
@@ -217,7 +217,7 @@ public enum StatusHTTP {
           .foot { color:#6a6a72; font-size:12px; margin-top:18px; }
         </style></head>
         <body><div class="card">
-          <h1>MediaIdentifier</h1>
+          <h1>Mediafin</h1>
           <div class="sub">Status overview (view only)</div>
           <span class="badge">\(stateLabel)</span>
           <table>\(rows)</table>

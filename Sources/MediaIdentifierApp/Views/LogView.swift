@@ -5,6 +5,7 @@ import MediaIdentifierCore
 /// The persisted rename log (FR12), styled to match the design.
 struct LogView: View {
     @EnvironmentObject private var state: AppState
+    @State private var showClearConfirm = false
 
     private static let formatter: DateFormatter = {
         let f = DateFormatter()
@@ -26,7 +27,10 @@ struct LogView: View {
                 if !state.logEntries.isEmpty {
                     ToolbarButton(title: "Export…", systemImage: "square.and.arrow.up",
                                   action: exportLog)
-                    ToolbarButton(title: "Clear log", action: state.clearLog)
+                }
+                if !state.logEntries.isEmpty || state.canUndo {
+                    ToolbarButton(title: "Clear history", systemImage: "trash",
+                                  action: { showClearConfirm = true })
                 }
             }
             .padding(.horizontal, 18)
@@ -62,11 +66,18 @@ struct LogView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Theme.windowBg)
+        .confirmationDialog("Clear all local history?",
+                            isPresented: $showClearConfirm, titleVisibility: .visible) {
+            Button("Clear log & undo journal", role: .destructive) { state.clearHistory() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Deletes the rename log and the undo journal from this Mac. Undo will no longer be available afterwards. Nothing is sent anywhere — this only removes locally stored history.")
+        }
     }
 
     private func exportLog() {
         let panel = NSSavePanel()
-        panel.nameFieldStringValue = "MediaIdentifier-log.txt"
+        panel.nameFieldStringValue = "Mediafin-log.txt"
         panel.prompt = "Export"
         guard panel.runModal() == .OK, let url = panel.url else { return }
         try? state.logExportText.write(to: url, atomically: true, encoding: .utf8)
