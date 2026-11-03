@@ -183,12 +183,14 @@ final class LocalLLMProviderDynamicTests: XCTestCase {
 
     func testGarbageBodyYieldsNil() async throws {
         Stub.shared.respond { _, _ in (200, Data("not json".utf8)) }
-        XCTAssertNil(try await makeProvider().identify(parsed("Dune.2021.mkv"), at: nil))
+        let result = try await makeProvider().identify(parsed("Dune.2021.mkv"), at: nil)
+        XCTAssertNil(result)
     }
 
     func testModelProseWithoutJSONYieldsNil() async throws {
         Stub.shared.respond { _, _ in (200, self.chatReply("I am not sure what this file is.")) }
-        XCTAssertNil(try await makeProvider().identify(parsed("Dune.2021.mkv"), at: nil))
+        let result = try await makeProvider().identify(parsed("Dune.2021.mkv"), at: nil)
+        XCTAssertNil(result)
     }
 
     func testEmptyModelNameSkipsNetworkEntirely() async throws {
@@ -201,7 +203,8 @@ final class LocalLLMProviderDynamicTests: XCTestCase {
                 return c
             }())
         )
-        XCTAssertNil(try await provider.identify(parsed("Dune.2021.mkv"), at: nil))
+        let result = try await provider.identify(parsed("Dune.2021.mkv"), at: nil)
+        XCTAssertNil(result)
         XCTAssertNil(Stub.shared.lastURL, "no request should be sent without a model")
     }
 

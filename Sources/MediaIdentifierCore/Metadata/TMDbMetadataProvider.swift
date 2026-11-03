@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 /// TMDb-backed metadata provider (FR3). Only the parsed *title and year text*
 /// are sent to TMDb to look up the official name — never any media file, which

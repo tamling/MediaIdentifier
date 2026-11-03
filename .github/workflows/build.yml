@@ -16,6 +16,21 @@ jobs:
       - name: Run Swift tests
         run: swift test
 
+  # Linux is a target platform: the portable Core (and later the web UI) must
+  # build and pass its tests there, not just on macOS.
+  linux:
+    name: Linux Core tests
+    runs-on: ubuntu-latest
+    container: swift:6.0-jammy
+    steps:
+      - uses: actions/checkout@v4
+      - name: Swift version
+        run: swift --version
+      - name: Build
+        run: swift build
+      - name: Run Swift tests
+        run: swift test
+
   app:
     name: Build .app
     runs-on: macos-15

@@ -1,4 +1,4 @@
-#if os(macOS)
+#if os(macOS) || os(Linux)
 import Foundation
 
 /// Reads title / year tags embedded in a media container using `ffprobe` —

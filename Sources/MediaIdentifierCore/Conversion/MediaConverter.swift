@@ -212,7 +212,7 @@ public final class FFmpegConverter {
         FileManager.default.isExecutableFile(atPath: ffmpegPath)
     }
 
-    #if os(macOS)
+    #if os(macOS) || os(Linux)
     /// Runs a conversion synchronously. Intended to be called off the main
     /// thread. `progress` reports this file's completion fraction (0...1),
     /// parsed live from FFmpeg's `-progress` output.

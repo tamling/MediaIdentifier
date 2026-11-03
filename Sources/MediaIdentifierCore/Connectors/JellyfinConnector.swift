@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 /// Tells a local Jellyfin server to rescan its library after files were renamed
 /// or moved, so they are exported into the library automatically (FR20).

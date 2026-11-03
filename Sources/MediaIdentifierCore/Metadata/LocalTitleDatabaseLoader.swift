@@ -106,7 +106,7 @@ public enum LocalTitleDatabaseLoader {
     }
 
     private static func gunzip(_ url: URL) throws -> Data {
-        #if os(macOS)
+        #if os(macOS) || os(Linux)
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/gunzip")
         process.arguments = ["-c", url.path]
