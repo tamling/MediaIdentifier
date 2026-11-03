@@ -164,7 +164,11 @@ NoNewPrivileges=yes
 PrivateTmp=yes
 PrivateDevices=yes
 ProtectSystem=full
-ProtectHome=read-only
+# Not ProtectHome: someone who overrides User= to themselves usually has the
+# library under their home directory, and a read-only /home would make every
+# rename fail for a reason that is hard to see from the interface. Tighten it
+# in an override if your media lives elsewhere.
+ProtectHome=no
 ProtectControlGroups=yes
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
@@ -180,10 +184,19 @@ EOF
 chmod 644 "$STAGE/lib/systemd/system/mediafin.service"
 
 echo "==> Resolving dependencies from the binary"
-# dpkg-shlibdeps insists on a debian/ directory next to the cwd.
-SHLIBS_DIR="$STAGE/.shlibdeps"
+# Outside the staging tree: anything under $STAGE ends up inside the package.
+SHLIBS_DIR="$(mktemp -d)"
+trap 'rm -rf "$STAGE" "$SHLIBS_DIR"' EXIT
+# dpkg-shlibdeps wants a debian/control it can parse, not just a file that
+# exists.
 install -d "$SHLIBS_DIR/debian"
-: > "$SHLIBS_DIR/debian/control"
+cat > "$SHLIBS_DIR/debian/control" <<'CONTROL'
+Source: mediafin
+
+Package: mediafin
+Architecture: any
+Description: placeholder for dpkg-shlibdeps
+CONTROL
 ( cd "$SHLIBS_DIR" && dpkg-shlibdeps -O --ignore-missing-info \
     "$STAGE/usr/bin/mediafin" > shlibdeps.out 2>shlibdeps.err ) || {
   echo "FAIL: dpkg-shlibdeps could not resolve the libraries:" >&2
@@ -195,7 +208,7 @@ SHLIB_DEPENDS="$(sed -n 's/^shlibs:Depends=//p' "$SHLIBS_DIR/shlibdeps.out")"
 [ -n "$SHLIB_DEPENDS" ] || { echo "FAIL: no dependencies resolved" >&2; exit 1; }
 echo "    $SHLIB_DEPENDS"
 
-INSTALLED_SIZE="$(du -ks "$STAGE" | cut -f1)"
+INSTALLED_SIZE="$(du -ks --exclude=DEBIAN "$STAGE" | cut -f1)"
 
 cat > "$STAGE/DEBIAN/control" <<EOF
 Package: mediafin
