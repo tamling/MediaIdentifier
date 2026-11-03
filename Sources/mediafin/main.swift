@@ -116,6 +116,7 @@ let router = WebRouter(
     settings: { coordinator.settings },
     configuredSecrets: { coordinator.configuredSecrets },
     items: { coordinator.items },
+    logEntries: { coordinator.logEntries },
     commands: coordinator,
     snapshot: { coordinator.snapshot }
 )

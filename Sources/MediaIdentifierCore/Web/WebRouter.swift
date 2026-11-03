@@ -18,6 +18,7 @@ public struct WebRouter: Sendable {
     private let settings: @Sendable () -> WebSettings
     private let configuredSecrets: @Sendable () -> Set<SecretKey>
     private let items: @Sendable () -> [RenameItem]
+    private let logEntries: @Sendable () -> [RenameLogEntry]
     private let commands: WebCommandSink?
 
     public init(policy: WebSecurityPolicy,
@@ -26,6 +27,7 @@ public struct WebRouter: Sendable {
                 settings: @escaping @Sendable () -> WebSettings = { WebSettings() },
                 configuredSecrets: @escaping @Sendable () -> Set<SecretKey> = { [] },
                 items: @escaping @Sendable () -> [RenameItem] = { [] },
+                logEntries: @escaping @Sendable () -> [RenameLogEntry] = { [] },
                 commands: WebCommandSink? = nil,
                 snapshot: @escaping @Sendable () -> StatusSnapshot) {
         self.policy = policy
@@ -34,6 +36,7 @@ public struct WebRouter: Sendable {
         self.settings = settings
         self.configuredSecrets = configuredSecrets
         self.items = items
+        self.logEntries = logEntries
         self.commands = commands
         self.snapshot = snapshot
     }
@@ -88,6 +91,10 @@ public struct WebRouter: Sendable {
             return overviewPage()
         case "/settings":
             return settingsPage(settings(), notice: Self.notice(for: request.query))
+        case "/history":
+            return historyPage()
+        case "/history/export":
+            return exportedLog()
         case "/api/status", "/api/status/":
             return .json(StatusHTTP.json(snapshot()))
         case "/healthz":
@@ -359,6 +366,85 @@ public struct WebRouter: Sendable {
         """)
     }
 
+    /// What has been renamed, newest first, with a download of the whole log.
+    func historyPage() -> HTTPResponse {
+        let entries = logEntries()
+        let formatter = DateFormatter()
+        formatter.dateStyle = .short
+        formatter.timeStyle = .medium
+
+        var rows = ""
+        for entry in entries.reversed() {
+            let status: String
+            switch entry.status {
+            case .success: status = "<span class=\"ok-text\">renamed</span>"
+            case .skipped: status = "<span class=\"flag\">skipped</span>"
+            case .failure: status = "<span class=\"bad-text\">failed</span>"
+            }
+            let detail = entry.errorDescription.map {
+                "<div class=\"hint\">\(Self.escape($0))</div>"
+            } ?? ""
+            rows += """
+            <tr>
+              <td>
+                <div class="from">\(Self.escape(entry.oldName))</div>
+                <div class="to">→ \(Self.escape(entry.newName))</div>
+                \(detail)
+              </td>
+              <td class="right-cell">\(status)<div class="hint">\
+            \(Self.escape(formatter.string(from: entry.date)))</div></td>
+            </tr>
+            """
+        }
+
+        let body = entries.isEmpty
+            ? "<p class=\"hint\">Nothing has been renamed yet.</p>"
+            : "<table>\(rows)</table>"
+
+        return .html("""
+        <!DOCTYPE html>
+        <html lang="en"><head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>Mediafin – History</title>
+        \(Self.styles)
+        </head>
+        <body>
+        <div class="page">
+          \(Self.navigation(current: "/history"))
+          <div class="card">
+            <h1>History</h1>
+            <p class="sub">\(entries.count) entr\(entries.count == 1 ? "y" : "ies")</p>
+            \(body)
+          </div>
+          <div class="card actions">
+            <a class="button" href="/history/export">Download as text</a>
+            <form method="post" action="/history/clear">
+              \(csrf.hiddenField)
+              <button type="submit"\(entries.isEmpty ? " disabled" : "")>Clear the history</button>
+            </form>
+          </div>
+        </div>
+        </body></html>
+        """)
+    }
+
+    /// The whole log as a plain-text download, so it can be kept or sent on.
+    func exportedLog() -> HTTPResponse {
+        var text = "Mediafin rename log\n\n"
+        let formatter = ISO8601DateFormatter()
+        for entry in logEntries() {
+            text += formatter.string(from: entry.date)
+            text += "\t\(entry.status.rawValue)\t\(entry.oldName)\t→\t\(entry.newName)"
+            if let detail = entry.errorDescription { text += "\t\(detail)" }
+            text += "\n"
+        }
+        var response = HTTPResponse.text(text)
+        // A fixed file name: nothing from the log reaches this header.
+        response.headers["Content-Disposition"] = "attachment; filename=\"mediafin-log.txt\""
+        return response
+    }
+
     /// Login form. No JavaScript, and the token field is a password field so it
     /// is not shown on screen or kept by autofill history.
     func loginPage(status: Int = 200, message: String? = nil) -> HTTPResponse {
@@ -508,7 +594,7 @@ public struct WebRouter: Sendable {
 
     /// Links shared by the pages.
     static func navigation(current: String) -> String {
-        let items = [("/", "Overview"), ("/settings", "Settings")]
+        let items = [("/", "Overview"), ("/history", "History"), ("/settings", "Settings")]
         let links = items.map { path, title in
             path == current
                 ? "<span class=\"here\">\(title)</span>"
@@ -570,6 +656,12 @@ public struct WebRouter: Sendable {
       .actions button { margin-top:0; width:auto; }
       button[disabled] { background:#2a2a32; color:#6a6a72; }
       a { color:#8aa4ff; }
+      a.button { display:inline-block; padding:11px 18px; border-radius:10px;
+                 background:#4f7cff; color:#fff; font-size:14px; font-weight:600;
+                 text-decoration:none; }
+      .right-cell { text-align:right; white-space:nowrap; width:1%; }
+      .ok-text { color:#36c98d; font-size:13px; }
+      .bad-text { color:#e05a4f; font-size:13px; }
     </style>
     """
 
