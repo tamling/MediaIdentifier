@@ -30,11 +30,16 @@ public struct LocalLLMMetadataProvider: MetadataProvider {
     }
 
     private let config: Config
-    private let session: URLSession
+    private let transport: HTTPTransport
 
     public init(config: Config, session: URLSession? = nil) {
+        self.init(config: config, transport: URLSessionTransport(session: session))
+    }
+
+    /// Injection point for tests (see `HTTPTransport`).
+    public init(config: Config, transport: HTTPTransport) {
         self.config = config
-        self.session = session ?? URLSession(configuration: .ephemeral)
+        self.transport = transport
     }
 
     // MARK: Identification
@@ -53,8 +58,8 @@ public struct LocalLLMMetadataProvider: MetadataProvider {
         }
         request.httpBody = Self.requestBody(model: config.model, fileName: name)
 
-        let (data, response) = try await session.data(for: request)
-        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { return nil }
+        let (data, response) = try await transport.send(request)
+        guard let http = response, http.statusCode == 200 else { return nil }
         guard let content = Self.content(fromChatResponse: data),
               let guess = Self.parseGuess(from: content) else { return nil }
 
@@ -77,8 +82,8 @@ public struct LocalLLMMetadataProvider: MetadataProvider {
         if !config.apiKey.isEmpty {
             request.setValue("Bearer \(config.apiKey)", forHTTPHeaderField: "Authorization")
         }
-        let (_, response) = try await session.data(for: request)
-        return (response as? HTTPURLResponse)?.statusCode ?? -1
+        let (_, response) = try await transport.send(request)
+        return response?.statusCode ?? -1
     }
 
     // MARK: URL building (pure, testable)
