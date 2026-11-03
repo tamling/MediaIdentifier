@@ -179,8 +179,13 @@ jobs:
           mediafin --help > /dev/null
           echo "--- the man page is installed ---"
           test -f /usr/share/man/man1/mediafin.1.gz
+          echo "--- what the package actually installed ---"
+          dpkg -L mediafin
           echo "--- the service exists but must not be enabled ---"
-          test -f /lib/systemd/system/mediafin.service
+          # /lib is a symlink to /usr/lib on a usr-merged system, so accept
+          # either spelling rather than depend on which one dpkg chose.
+          test -f /usr/lib/systemd/system/mediafin.service \
+            || test -f /lib/systemd/system/mediafin.service
           echo "--- the state directory belongs to the service user ---"
           stat -c '%U %G %a' /var/lib/mediafin
           test "$(stat -c '%U %a' /var/lib/mediafin)" = "mediafin 700"

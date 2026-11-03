@@ -45,7 +45,7 @@ self-signed certificate; both come in as dependencies. `ffmpeg` is a
 *recommendation*, needed only for re-encoding. The package also installs
 `man mediafin` and a systemd unit, which it deliberately does **not** enable:
 starting a server that exposes your library should be your decision. See the
-comments at the top of `/lib/systemd/system/mediafin.service` before
+comments at the top of `/usr/lib/systemd/system/mediafin.service` before
 `systemctl enable --now mediafin`.
 
 Elsewhere, take the tarball — same binary, no package management:

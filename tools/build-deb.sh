@@ -125,8 +125,8 @@ EOF
 gzip -9n "$STAGE/usr/share/man/man1/mediafin.1"
 
 echo "==> Writing the systemd unit"
-install -d -m 755 "$STAGE/lib/systemd/system"
-cat > "$STAGE/lib/systemd/system/mediafin.service" <<'EOF'
+install -d -m 755 "$STAGE/usr/lib/systemd/system"
+cat > "$STAGE/usr/lib/systemd/system/mediafin.service" <<'EOF'
 # Deliberately NOT enabled on install: starting a server that exposes your
 # media library is your decision, not the package's.
 #
@@ -181,7 +181,7 @@ StateDirectoryMode=0700
 [Install]
 WantedBy=multi-user.target
 EOF
-chmod 644 "$STAGE/lib/systemd/system/mediafin.service"
+chmod 644 "$STAGE/usr/lib/systemd/system/mediafin.service"
 
 echo "==> Resolving dependencies from the binary"
 # Outside the staging tree: anything under $STAGE ends up inside the package.
@@ -253,7 +253,7 @@ case "$1" in
       systemctl daemon-reload || true
     fi
     # Not enabled and not started on purpose: see the comment at the top of
-    # /lib/systemd/system/mediafin.service.
+    # /usr/lib/systemd/system/mediafin.service.
     ;;
 esac
 EOF
