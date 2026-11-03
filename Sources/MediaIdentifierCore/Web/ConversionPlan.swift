@@ -91,6 +91,17 @@ public struct WebConversionSettings: Codable, Sendable, Equatable {
     /// Where FFmpeg is, when it is not in one of the usual places.
     public var ffmpegPath: String
 
+    /// Set when a submitted height could not be read as a number, so
+    /// `problems()` can say so instead of the value quietly becoming "keep the
+    /// source resolution". It describes one submission rather than a stored
+    /// setting, so it is deliberately left out of `CodingKeys` and never
+    /// written to disk.
+    public var targetHeightWasUnreadable: Bool = false
+
+    private enum CodingKeys: String, CodingKey {
+        case videoCodec, quality, preset, targetHeight, audioMode, stripSubtitles, ffmpegPath
+    }
+
     public init(videoCodec: ConversionOptions.VideoCodec = .h265,
                 quality: Int = 21,
                 preset: ConversionOptions.Preset = .slow,
@@ -101,10 +112,36 @@ public struct WebConversionSettings: Codable, Sendable, Equatable {
         self.videoCodec = videoCodec
         self.quality = min(max(quality, 0), 51)
         self.preset = preset
-        self.targetHeight = targetHeight
+        // A height outside what any encoder will accept is treated as "keep
+        // the source resolution". Dropping it is the one choice that cannot
+        // damage anything: the alternative, passing it to FFmpeg, fails the
+        // encode with a message no one can act on.
+        self.targetHeight = targetHeight.flatMap { (120...8192).contains($0) ? $0 : nil }
         self.audioMode = audioMode
         self.stripSubtitles = stripSubtitles
         self.ffmpegPath = ffmpegPath
+    }
+
+    /// Decoded through the memberwise initialiser so a hand-edited or
+    /// older settings file gets the same clamping as a form submission.
+    /// The synthesised conformance would not: it assigns the stored
+    /// properties directly, and `quality: 999` from the file would reach
+    /// FFmpeg as `-crf 999`.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let defaults = WebConversionSettings()
+        func value<T: Decodable>(_ key: CodingKeys, _ fallback: T) -> T {
+            (try? container.decodeIfPresent(T.self, forKey: key)) ?? fallback
+        }
+        self.init(
+            videoCodec: value(.videoCodec, defaults.videoCodec),
+            quality: value(.quality, defaults.quality),
+            preset: value(.preset, defaults.preset),
+            targetHeight: try? container.decodeIfPresent(Int.self, forKey: .targetHeight),
+            audioMode: value(.audioMode, defaults.audioMode),
+            stripSubtitles: value(.stripSubtitles, defaults.stripSubtitles),
+            ffmpegPath: value(.ffmpegPath, defaults.ffmpegPath)
+        )
     }
 
     /// The library options these settings describe.
@@ -143,8 +180,19 @@ public struct WebConversionSettings: Codable, Sendable, Equatable {
         }
         if let raw = fields["targetHeight"] {
             let trimmed = raw.trimmingCharacters(in: .whitespaces)
-            // "Keep the source resolution" is the empty choice.
-            settings.targetHeight = trimmed.isEmpty ? nil : Int(trimmed)
+            // "Keep the source resolution" is the empty choice. Anything else
+            // that is not a number is an error, not a third way of saying it:
+            // mapping it to nil would save silently and leave the user
+            // believing they had configured a downscale that never happens.
+            if trimmed.isEmpty {
+                settings.targetHeight = nil
+                settings.targetHeightWasUnreadable = false
+            } else if let height = Int(trimmed) {
+                settings.targetHeight = height
+                settings.targetHeightWasUnreadable = false
+            } else {
+                settings.targetHeightWasUnreadable = true
+            }
         }
         if fields["conversionFormPresent"] != nil {
             settings.stripSubtitles = fields["stripSubtitles"] != nil
@@ -157,6 +205,11 @@ public struct WebConversionSettings: Codable, Sendable, Equatable {
 
     public func problems() -> [WebSettings.Problem] {
         var found: [WebSettings.Problem] = []
+        if targetHeightWasUnreadable {
+            found.append(.init(field: "targetHeight",
+                               message: "The height must be a number, or empty to keep the "
+                                   + "source resolution."))
+        }
         if let height = targetHeight, height < 120 || height > 8192 {
             found.append(.init(field: "targetHeight",
                                message: "The height must be between 120 and 8192."))

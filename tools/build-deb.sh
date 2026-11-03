@@ -298,9 +298,12 @@ case "$1" in
 
     if [ -d /run/systemd/system ]; then
       systemctl daemon-reload || true
+      # Bring back a service that was already running before an upgrade.
+      # try-restart does nothing at all when the unit is stopped, so a fresh
+      # install still starts nothing: exposing your media library remains your
+      # decision, see the comment at the top of the unit file.
+      systemctl try-restart mediafin.service || true
     fi
-    # Not enabled and not started on purpose: see the comment at the top of
-    # /usr/lib/systemd/system/mediafin.service.
     ;;
 esac
 EOF
@@ -309,9 +312,18 @@ chmod 755 "$STAGE/DEBIAN/postinst"
 cat > "$STAGE/DEBIAN/prerm" <<'EOF'
 #!/bin/sh
 set -e
-if [ -d /run/systemd/system ]; then
-  systemctl stop mediafin.service || true
-fi
+
+# Only when the package is going away. dpkg calls prerm with "upgrade" too,
+# and stopping there would leave the service down for good: postinst
+# deliberately never starts anything, so nothing would bring it back after a
+# routine `apt upgrade`.
+case "$1" in
+  remove|deconfigure)
+    if [ -d /run/systemd/system ]; then
+      systemctl stop mediafin.service || true
+    fi
+    ;;
+esac
 EOF
 chmod 755 "$STAGE/DEBIAN/prerm"
 

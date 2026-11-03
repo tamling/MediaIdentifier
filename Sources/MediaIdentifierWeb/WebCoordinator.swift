@@ -54,7 +54,16 @@ public final class WebCoordinator: WebCommandSink, @unchecked Sendable {
     private var _items: [RenameItem] = []
     private var _convertible: [ConversionCandidate] = []
     /// Set while a conversion run should stop after the file in flight.
+    ///
+    /// Deliberately not cleared when a run starts. The queue is serial, so a
+    /// convert command can wait behind a scan for a long time, and a cancel
+    /// pressed during that wait arrives first — clearing the flag at the start
+    /// of the run would discard it and convert everything after the interface
+    /// had already confirmed it was stopping.
     private var _cancelConversions = false
+    /// Convert commands submitted but not yet taken off the queue, so a cancel
+    /// can tell "stop the run that is coming" from "there is nothing to stop".
+    private var _queuedConversionRuns = 0
     /// The running FFmpeg, so a cancel can end it.
     private var _runningConversion: Process?
 
@@ -126,6 +135,12 @@ public final class WebCoordinator: WebCommandSink, @unchecked Sendable {
             cancelConversions()
             return
         }
+        // Counted here rather than when the run starts, so a cancel issued
+        // while the command is still waiting its turn is not mistaken for a
+        // cancel with nothing to cancel.
+        if case .convertFiles = command {
+            lock.lock(); _queuedConversionRuns += 1; lock.unlock()
+        }
         queue.async { [weak self] in self?.execute(command) }
     }
 
@@ -133,6 +148,25 @@ public final class WebCoordinator: WebCommandSink, @unchecked Sendable {
     /// call this, or it would block on the work.
     func executeForTesting(_ command: WebCommand) {
         queue.sync { self.execute(command) }
+    }
+
+    /// Holds the serial queue until `release` is signalled. Only for tests:
+    /// it is what makes "a cancel arrives while the run is still waiting its
+    /// turn" reproducible instead of a race that passes by luck.
+    func blockQueueForTesting(until release: DispatchSemaphore) {
+        queue.async { release.wait() }
+    }
+
+    /// Waits for everything already on the queue to finish. Only for tests.
+    func drainForTesting() {
+        queue.sync {}
+    }
+
+    /// Whether a cancel is currently armed. Only for tests: the end-to-end
+    /// path needs FFmpeg, which CI does not install, so the flag's own rules
+    /// are checked directly.
+    var cancelIsArmedForTesting: Bool {
+        lock.lock(); defer { lock.unlock() }; return _cancelConversions
     }
 
     // MARK: Execution
@@ -452,15 +486,19 @@ public final class WebCoordinator: WebCommandSink, @unchecked Sendable {
     /// re-encode is lossy and slow, so a bad result has to be undoable by
     /// deleting the new file. Nothing starts without this command.
     private func convertFiles(accepting: Set<UUID>) {
+        // This run is no longer queued, whatever happens below.
+        lock.lock(); _queuedConversionRuns = max(0, _queuedConversionRuns - 1); lock.unlock()
         let all = convertible
         let pending = all.filter { accepting.contains($0.id) }
         guard !pending.isEmpty else {
+            clearCancelRequest()
             update { $0.lastResult = "No files were ticked, so nothing was converted." }
             return
         }
         let options = settings.conversion.options
         let converter = FFmpegConverter(ffmpegPath: ffmpegPath)
         guard converter.isAvailable else {
+            clearCancelRequest()
             update {
                 $0.lastResult = FFmpegConverter.ConverterError.ffmpegNotFound
                     .errorDescription ?? "FFmpeg was not found."
@@ -468,7 +506,10 @@ public final class WebCoordinator: WebCommandSink, @unchecked Sendable {
             return
         }
 
-        lock.lock(); _cancelConversions = false; lock.unlock()
+        // The flag is NOT cleared here. A cancel that arrived while this
+        // command was still queued is meant for this run, and clearing it now
+        // would be exactly the bug: the interface says it is stopping and then
+        // converts everything.
         var done = 0
         var failed = 0
 
@@ -552,12 +593,31 @@ public final class WebCoordinator: WebCommandSink, @unchecked Sendable {
 
     private func cancelConversions() {
         lock.lock()
-        _cancelConversions = true
+        // Only arm the flag when there is something it can apply to: a run in
+        // flight, or one waiting on the queue. Otherwise a stray press while
+        // idle would sit there and stop the next run the user asks for.
+        let hasTarget = _runningConversion != nil || _queuedConversionRuns > 0
+        if hasTarget { _cancelConversions = true }
         let process = _runningConversion
         lock.unlock()
+
+        guard hasTarget else {
+            update { $0.lastResult = "Nothing is converting." }
+            return
+        }
         // End the encoder now rather than waiting out a long file.
         process?.terminate()
-        update { $0.lastResult = "Stopping after the current file." }
+        update {
+            $0.lastResult = process == nil
+                ? "Stopping before the next file."
+                : "Stopping after the current file."
+        }
+    }
+
+    /// Drops a cancel that has nothing left to act on, so it cannot carry over
+    /// into the next run.
+    private func clearCancelRequest() {
+        lock.lock(); _cancelConversions = false; lock.unlock()
     }
 
     static func describe(_ error: Error) -> String {

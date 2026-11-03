@@ -128,13 +128,40 @@ final class WebSettingsRouteTests: XCTestCase {
 
     func testSameOriginPostIsAccepted() {
         let router = makeRouter()
+        // What a browser on https://localhost:8720 actually sends: the Origin
+        // carries the port. An earlier version of this test left the port off
+        // and so only passed because the check was throwing it away.
         let request = authorizedPost("/library/scan", [:], router: router, extraHeaders: [
             "host": "localhost:8720",
-            "origin": "https://localhost",
+            "origin": "https://localhost:8720",
             "sec-fetch-site": "same-origin",
         ])
         XCTAssertEqual(router.respond(to: request).status, 303)
         XCTAssertEqual(sink.commands, [.scanSourceFolder])
+    }
+
+    /// The case the port used to be stripped for. Another service on the same
+    /// machine is a different origin, and its cookies reach us anyway because
+    /// SameSite is port-blind — so this check is what has to tell them apart.
+    func testAnotherPortOnTheSameHostIsRefused() {
+        let router = makeRouter()
+        let request = authorizedPost("/library/apply", [:], router: router, extraHeaders: [
+            "host": "localhost:8720",
+            "origin": "http://localhost:8096",
+            "sec-fetch-site": "same-site",
+        ])
+        XCTAssertEqual(router.respond(to: request).status, 403)
+        XCTAssertTrue(sink.commands.isEmpty, "a cross-origin POST must change nothing")
+    }
+
+    /// `same-site` is reported for a different port, so it cannot be treated
+    /// as proof of a same-origin request.
+    func testSameSiteFetchMetadataAloneIsRefused() {
+        let router = makeRouter()
+        let request = authorizedPost("/library/apply", [:], router: router,
+                                     extraHeaders: ["sec-fetch-site": "same-site"])
+        XCTAssertEqual(router.respond(to: request).status, 403)
+        XCTAssertTrue(sink.commands.isEmpty)
     }
 
     func testCrossSiteFetchMetadataIsRefused() {
@@ -142,6 +169,58 @@ final class WebSettingsRouteTests: XCTestCase {
         let request = authorizedPost("/library/apply", [:], router: router,
                                      extraHeaders: ["sec-fetch-site": "cross-site"])
         XCTAssertEqual(router.respond(to: request).status, 403)
+    }
+
+    /// An unticked checkbox sends nothing at all, so for the clear-secret
+    /// flags the body has no value to override a query parameter with. They
+    /// are therefore read from the body alone: otherwise posting the settings
+    /// form to a URL carrying ?clear-tmdbAPIKey=1 would wipe a stored key
+    /// while reporting an ordinary successful save.
+    func testAQueryParameterCannotClearAStoredSecret() {
+        let router = makeRouter()
+        var request = authorizedPost("/settings", validFields(), router: router)
+        request.query = ["clear-tmdbAPIKey": "1"]
+
+        XCTAssertEqual(router.respond(to: request).status, 303)
+        XCTAssertFalse(
+            sink.commands.contains(.setSecret(.tmdbAPIKey, "")),
+            "a query parameter must not be able to delete a stored credential"
+        )
+    }
+
+    /// The ticked checkbox, in the body, still works.
+    func testTheClearCheckboxInTheBodyStillClearsTheSecret() {
+        let router = makeRouter()
+        var fields = validFields()
+        fields["clear-tmdbAPIKey"] = "1"
+        let request = authorizedPost("/settings", fields, router: router)
+
+        XCTAssertEqual(router.respond(to: request).status, 303)
+        XCTAssertTrue(sink.commands.contains(.setSecret(.tmdbAPIKey, "")))
+    }
+
+    /// And a secret submitted in the body is still stored.
+    func testASecretInTheBodyIsStored() {
+        let router = makeRouter()
+        var fields = validFields()
+        fields["jellyfinToken"] = "s3cret-value"
+        let request = authorizedPost("/settings", fields, router: router)
+
+        XCTAssertEqual(router.respond(to: request).status, 303)
+        XCTAssertTrue(sink.commands.contains(.setSecret(.jellyfinToken, "s3cret-value")))
+    }
+
+    /// A credential must not be settable from a URL either — those end up in
+    /// logs, shell history and bookmarks.
+    func testAQueryParameterCannotSetASecret() {
+        let router = makeRouter()
+        var request = authorizedPost("/settings", validFields(), router: router)
+        request.query = ["jellyfinToken": "leaked-through-the-url"]
+
+        XCTAssertEqual(router.respond(to: request).status, 303)
+        XCTAssertFalse(
+            sink.commands.contains(.setSecret(.jellyfinToken, "leaked-through-the-url"))
+        )
     }
 
     /// A POST to a route that is not meant to change anything is refused

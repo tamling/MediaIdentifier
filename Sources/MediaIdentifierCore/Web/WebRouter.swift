@@ -94,7 +94,7 @@ public struct WebRouter: Sendable {
         if request.method == "POST" {
             // Checked before the credentials: a cross-site request must not be
             // able to spend login attempts and lock the real user out.
-            guard RequestOrigin.isSameSite(request) else {
+            guard RequestOrigin.isSameSite(request, isTLS: policy.isTLS) else {
                 return .text("cross-site request refused", status: 403)
             }
             let fields = Self.formFields(of: request)
@@ -194,7 +194,7 @@ public struct WebRouter: Sendable {
         case "/logout":
             return redirect(to: "/login", setCookie: policy.clearedCookie())
         case "/settings":
-            return saveSettings(fields)
+            return saveSettings(fields, body: Self.bodyFields(of: request))
         case "/settings/test-llm":
             submit(.testLocalLLMConnection)
             return redirect(to: "/settings?tested=llm")
@@ -228,7 +228,13 @@ public struct WebRouter: Sendable {
         }
     }
 
-    private func saveSettings(_ fields: [String: String]) -> HTTPResponse {
+    /// - Parameter body: the POST body alone, without the query string merged
+    ///   in. The clear-secret flags are read from this rather than from
+    ///   `fields`: an unticked checkbox sends nothing at all, so for those
+    ///   fields the body cannot override a query parameter and a crafted URL
+    ///   would wipe a stored key on an ordinary save.
+    private func saveSettings(_ fields: [String: String],
+                              body: [String: String]) -> HTTPResponse {
         let submitted = WebSettings.fromForm(fields, current: settings())
         let problems = submitted.problems()
         guard problems.isEmpty else {
@@ -244,11 +250,11 @@ public struct WebRouter: Sendable {
         // field means "leave it alone", so a saved key is not wiped by someone
         // saving the page without retyping it.
         for key in SecretKey.allCases {
-            if fields["clear-\(key.formField)"] != nil {
+            if body["clear-\(key.formField)"] != nil {
                 submit(.setSecret(key, ""))
                 continue
             }
-            if let value = fields[key.formField], !value.isEmpty {
+            if let value = body[key.formField], !value.isEmpty {
                 submit(.setSecret(key, value))
             }
         }
@@ -305,15 +311,22 @@ public struct WebRouter: Sendable {
     static let selectionField = "items"
     static let selectionPresentField = "itemsPresent"
 
-    /// Form fields of a POST, from the body and the query string. The body wins
-    /// so a link cannot pre-set a field the form also carries.
+    /// Form fields of a POST, from the body and the query string. The body
+    /// wins, so a link cannot pre-set a field the form also carries.
+    ///
+    /// Note what that does *not* cover: a checkbox sends nothing when it is
+    /// unticked, so for a field that is absent-when-off the body has no value
+    /// to win with and the query survives. Anything acting on mere presence —
+    /// the clear-secret flags — must read `bodyFields` instead.
     static func formFields(of request: HTTPRequest) -> [String: String] {
         var fields = request.query
-        let body = HTTPRequestParser.parseFormEncoded(
-            String(decoding: request.body, as: UTF8.self)
-        )
-        for (name, value) in body { fields[name] = value }
+        for (name, value) in bodyFields(of: request) { fields[name] = value }
         return fields
+    }
+
+    /// The POST body alone, with no query parameters merged in.
+    static func bodyFields(of request: HTTPRequest) -> [String: String] {
+        HTTPRequestParser.parseFormEncoded(String(decoding: request.body, as: UTF8.self))
     }
 
     // MARK: Pages
@@ -903,12 +916,8 @@ public struct WebRouter: Sendable {
         }
     }
 
-    /// Minimal HTML escaping for text interpolated into a page.
-    static func escape(_ value: String) -> String {
-        value.replacingOccurrences(of: "&", with: "&amp;")
-            .replacingOccurrences(of: "<", with: "&lt;")
-            .replacingOccurrences(of: ">", with: "&gt;")
-            .replacingOccurrences(of: "\"", with: "&quot;")
-            .replacingOccurrences(of: "'", with: "&#39;")
-    }
+    /// HTML escaping for text interpolated into a page. Kept as a name the
+    /// page builders already use; the implementation is shared with the status
+    /// page so the two cannot drift apart again.
+    static func escape(_ value: String) -> String { HTML.escape(value) }
 }

@@ -1,4 +1,11 @@
 import Foundation
+// For rename(2). Foundation does not re-export the C library on every
+// platform, so it is imported explicitly.
+#if canImport(Glibc)
+import Glibc
+#elseif canImport(Darwin)
+import Darwin
+#endif
 
 /// Reads and writes the settings file.
 ///
@@ -124,6 +131,17 @@ public struct SecretStore: Sendable {
 
 /// Writes a file without a window in which it is missing or world-readable.
 enum AtomicFile {
+    /// Writes `data` to `url`, replacing whatever is there in one step.
+    ///
+    /// The replacement is `rename(2)` rather than `FileManager.moveItem`.
+    /// `moveItem` refuses to overwrite, and the obvious workaround — delete the
+    /// destination first, then move — is what this function used to do. That
+    /// leaves a window in which neither file exists, and if the move then fails
+    /// (read-only directory, no space, the destination turning out to be a
+    /// directory) the old contents are gone for good. For `secrets.json` that
+    /// means every stored API key. `rename` replaces an existing file
+    /// atomically, so a reader sees either the old file or the new one and
+    /// never nothing, and a failure leaves the original exactly as it was.
     static func write(_ data: Data, to url: URL, permissions: Int) throws {
         let fileManager = FileManager.default
         let directory = url.deletingLastPathComponent()
@@ -131,7 +149,8 @@ enum AtomicFile {
                                         attributes: [.posixPermissions: 0o700])
 
         // Create with the permissions already applied, so the contents are
-        // never briefly readable by anyone else.
+        // never briefly readable by anyone else. In the same directory, because
+        // rename is only atomic within one filesystem.
         let temporary = directory.appendingPathComponent(".\(url.lastPathComponent).tmp")
         if fileManager.fileExists(atPath: temporary.path) {
             try? fileManager.removeItem(at: temporary)
@@ -141,13 +160,9 @@ enum AtomicFile {
         else {
             throw SettingsStore.Failure.notWritable(url.path)
         }
-        // The old file only disappears once the new one is complete on disk.
-        if fileManager.fileExists(atPath: url.path) {
-            try? fileManager.removeItem(at: url)
-        }
-        do {
-            try fileManager.moveItem(at: temporary, to: url)
-        } catch {
+
+        guard rename(temporary.path, url.path) == 0 else {
+            // The original is untouched; only the half-written replacement goes.
             try? fileManager.removeItem(at: temporary)
             throw SettingsStore.Failure.notWritable(url.path)
         }

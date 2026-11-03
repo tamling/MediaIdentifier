@@ -167,11 +167,11 @@ public enum StatusHTTP {
     public static func html(_ s: StatusSnapshot) -> String {
         let stateLabel = s.hasError ? "Error" : (s.busy ? "Busy (\(s.activePercent) %)" : "Ready")
         let stateColor = s.hasError ? "#e05a4f" : (s.busy ? "#f0a020" : "#36c98d")
-        func esc(_ value: String) -> String {
-            value.replacingOccurrences(of: "&", with: "&amp;")
-                .replacingOccurrences(of: "<", with: "&lt;")
-                .replacingOccurrences(of: ">", with: "&gt;")
-        }
+        // The shared escaper, not a local one. This page renders filenames and
+        // interpolates into attribute context elsewhere in the same template,
+        // so it needs quotes escaped too — which the local version it used to
+        // carry did not do.
+        let esc = HTML.escape
         var rows = ""
         func row(_ label: String, _ value: String) {
             rows += "<tr><td class='k'>\(esc(label))</td><td class='v'>\(esc(value))</td></tr>"

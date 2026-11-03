@@ -66,19 +66,53 @@ public enum RequestOrigin {
     /// Rejects a request whose `Origin` or `Sec-Fetch-Site` shows it came from
     /// somewhere else. A missing header is accepted: curl and older browsers
     /// send none, and the CSRF token still has to match.
-    public static func isSameSite(_ request: HTTPRequest) -> Bool {
+    ///
+    /// The comparison includes the port, and `Sec-Fetch-Site: same-site` is
+    /// **not** accepted. A "site" is port-blind, so a page served from another
+    /// port of the same machine — a Jellyfin at :8096, a dev server at :3000 —
+    /// reports `same-site` and shares a hostname while being a different
+    /// origin to every other part of the browser's security model. Its cookies
+    /// reach us too, for the same port-blind reason, so this check is the only
+    /// thing that can tell it apart from the real interface.
+    ///
+    /// - Parameter isTLS: how to fill in an absent port in `Host`, which omits
+    ///   it when it is the default for the scheme.
+    public static func isSameSite(_ request: HTTPRequest, isTLS: Bool = true) -> Bool {
         if let fetchSite = request.headers["sec-fetch-site"]?.lowercased() {
-            guard fetchSite == "same-origin" || fetchSite == "same-site" || fetchSite == "none"
-            else { return false }
+            guard fetchSite == "same-origin" || fetchSite == "none" else { return false }
         }
-        guard let origin = request.headers["origin"], !origin.isEmpty, origin != "null" else {
+        // A literal "null" origin is never this interface. It comes from
+        // sandboxed iframes and from redirects that cross an origin, so it is
+        // refused rather than treated as absent. An absent header still passes:
+        // curl and older browsers send none, and the CSRF token still has to
+        // match.
+        if let origin = request.headers["origin"], origin.lowercased() == "null" { return false }
+        guard let origin = request.headers["origin"], !origin.isEmpty else {
             return true
         }
         guard let host = request.headers["host"], !host.isEmpty,
-              let originHost = URL(string: origin)?.host
+              let url = URL(string: origin), let originHost = url.host
         else { return false }
-        // `Host` carries the port, `Origin`'s host does not.
-        let hostWithoutPort = host.split(separator: ":").first.map(String.init) ?? host
-        return originHost == hostWithoutPort
+
+        let originPort = url.port ?? (url.scheme?.lowercased() == "https" ? 443 : 80)
+        let target = authority(host, defaultPort: isTLS ? 443 : 80)
+        return originHost.lowercased() == target.host.lowercased() && originPort == target.port
+    }
+
+    /// Splits `host[:port]` into its parts, filling in `defaultPort` when the
+    /// port is absent. Handles the bracketed form IPv6 literals use,
+    /// `[::1]:8741`, whose colons would otherwise be read as separators.
+    static func authority(_ value: String, defaultPort: Int) -> (host: String, port: Int) {
+        if value.hasPrefix("["), let close = value.firstIndex(of: "]") {
+            // URL.host reports an IPv6 literal without its brackets, so this
+            // strips them to match.
+            let host = String(value[value.index(after: value.startIndex)..<close])
+            let rest = value[value.index(after: close)...]
+            if rest.hasPrefix(":"), let port = Int(rest.dropFirst()) { return (host, port) }
+            return (host, defaultPort)
+        }
+        let parts = value.split(separator: ":", maxSplits: 1)
+        if parts.count == 2, let port = Int(parts[1]) { return (String(parts[0]), port) }
+        return (String(parts.first ?? ""), defaultPort)
     }
 }

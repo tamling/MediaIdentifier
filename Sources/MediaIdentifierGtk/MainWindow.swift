@@ -27,8 +27,13 @@ struct MainWindow {
         let separator = gtk_separator_new(GTK_ORIENTATION_HORIZONTAL)!
         gtk_box_pack_start(Gtk.box(column), separator, 0, 0, 6)
 
-        for line in Self.coreFacts() {
-            gtk_box_pack_start(Gtk.box(column), Self.body(line), 0, 0, 0)
+        // Read once: coreFacts() probes the filesystem for FFmpeg.
+        let facts = Self.coreFacts()
+        for (index, line) in facts.enumerated() {
+            // The last line names the FFmpeg path, which is worth copying.
+            gtk_box_pack_start(Gtk.box(column),
+                               Self.body(line, copyable: index == facts.count - 1),
+                               0, 0, 0)
         }
 
         self.widget = window
@@ -62,11 +67,26 @@ struct MainWindow {
         return label
     }
 
-    private static func body(_ text: String) -> UnsafeMutablePointer<GtkWidget> {
+    /// - Parameter copyable: makes the text selectable, for values a user may
+    ///   want to paste elsewhere — a path, a token, a fingerprint.
+    ///
+    ///   Off by default. Making a label selectable also makes it focusable,
+    ///   GTK gives focus to the first focusable widget when the window opens,
+    ///   and a focused selectable label draws its text highlighted — so with
+    ///   every line selectable the window opened with one paragraph looking as
+    ///   though the user had dragged across it. Where selection is wanted,
+    ///   keyboard focus is switched back off so the mouse can still select but
+    ///   nothing is highlighted on open.
+    private static func body(_ text: String,
+                             copyable: Bool = false) -> UnsafeMutablePointer<GtkWidget> {
         let label = gtk_label_new(text)!
         gtk_label_set_xalign(Gtk.label(label), 0)
         gtk_label_set_line_wrap(Gtk.label(label), 1)
-        gtk_label_set_selectable(Gtk.label(label), 1)
+        if copyable {
+            gtk_label_set_selectable(Gtk.label(label), 1)
+            gtk_widget_set_can_focus(label, 0)
+            gtk_label_select_region(Gtk.label(label), 0, 0)
+        }
         return label
     }
 }
