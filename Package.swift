@@ -7,6 +7,8 @@ import PackageDescription
 var products: [Product] = [
     .library(name: "MediaIdentifierCore", targets: ["MediaIdentifierCore"]),
     .library(name: "MediaIdentifierWeb", targets: ["MediaIdentifierWeb"]),
+    // How Mediafin runs on Linux: a binary that serves the web interface.
+    .executable(name: "mediafin", targets: ["mediafin"]),
 ]
 
 var targets: [Target] = [
@@ -33,6 +35,11 @@ var targets: [Target] = [
             .product(name: "NIOSSL", package: "swift-nio-ssl"),
         ],
         path: "Sources/MediaIdentifierWeb"
+    ),
+    .executableTarget(
+        name: "mediafin",
+        dependencies: ["MediaIdentifierCore", "MediaIdentifierWeb"],
+        path: "Sources/mediafin"
     ),
     .testTarget(
         name: "MediaIdentifierWebTests",

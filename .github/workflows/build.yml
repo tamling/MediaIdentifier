@@ -58,6 +58,18 @@ jobs:
           grep -E ": error:|XCTAssert.* failed" test.log | head -60 || true
           echo "--- totals ---"
           grep -E "Executed [0-9]+ tests" test.log | tail -2 || true
+      # openssl creates the self-signed certificate on first start.
+      - name: Ensure openssl and curl are present
+        shell: bash
+        run: |
+          command -v openssl >/dev/null && command -v curl >/dev/null && exit 0
+          apt-get update -qq
+          apt-get install -y -qq openssl curl
+      # Runs the real binary against a real socket: HTTPS, the access gate and
+      # the refusal to answer plaintext on the TLS port.
+      - name: Smoke-test the mediafin binary
+        shell: bash
+        run: ./tools/smoke-mediafin.sh
 
   app:
     name: Build .app
