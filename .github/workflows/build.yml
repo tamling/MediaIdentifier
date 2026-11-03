@@ -83,7 +83,10 @@ jobs:
   app:
     name: Build .app
     runs-on: macos-15
-    timeout-minutes: 40
+    # The universal Release build compiles BoringSSL twice, once per
+    # architecture, and has taken over 25 minutes from cold. Generous enough
+    # not to kill a legitimate build, tight enough to catch a hang.
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
       - uses: maxim-lobanov/setup-xcode@v1
