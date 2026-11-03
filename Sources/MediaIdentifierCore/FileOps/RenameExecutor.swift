@@ -154,9 +154,13 @@ public final class RenameExecutor {
         return restored
     }
 
-    /// Moves a file while reporting fine-grained progress. FileManager publishes
-    /// progress into the current `Progress` for cross-volume copies, so slow
-    /// moves animate; same-volume renames complete instantly.
+    /// Moves a file while reporting progress.
+    ///
+    /// On Apple platforms FileManager publishes progress into the current
+    /// `Progress`, so slow cross-volume moves animate within a single file
+    /// (same-volume renames complete instantly). That relies on KVO, which the
+    /// Objective-C runtime provides; on Linux it does not exist, so there the
+    /// move is reported as one completed step.
     private func moveWithProgress(
         from source: URL, to destination: URL,
         base: Int, total: Int, progress: ((Double) -> Void)?
@@ -165,6 +169,7 @@ public final class RenameExecutor {
             try fileManager.moveItem(at: source, to: destination)
             return
         }
+        #if canImport(ObjectiveC)
         let parent = Progress(totalUnitCount: 100)
         let observation = parent.observe(\.fractionCompleted) { p, _ in
             progress((Double(base) + p.fractionCompleted) / Double(total))
@@ -173,6 +178,10 @@ public final class RenameExecutor {
         parent.becomeCurrent(withPendingUnitCount: 100)
         defer { parent.resignCurrent() }
         try fileManager.moveItem(at: source, to: destination)
+        #else
+        try fileManager.moveItem(at: source, to: destination)
+        progress(Double(base + 1) / Double(total))
+        #endif
     }
 
     // MARK: Helpers
