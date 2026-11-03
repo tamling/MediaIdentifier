@@ -23,6 +23,19 @@ final class AppWindow {
     private let moviesChooser: UnsafeMutablePointer<GtkWidget>
     private let seriesChooser: UnsafeMutablePointer<GtkWidget>
     private let scanButton: UnsafeMutablePointer<GtkWidget>
+    private let listColumn: UnsafeMutablePointer<GtkWidget>
+
+    /// The rows currently on screen, kept so they can be destroyed without
+    /// walking the container — which would mean another C callback.
+    private var rowWidgets: [UnsafeMutablePointer<GtkWidget>] = []
+    /// What the list was last built from. The refresh runs twice a second and
+    /// rebuilding every time would throw away the scroll position and burn
+    /// the CPU for nothing.
+    ///
+    /// Optional rather than an empty array: at startup there are no proposals
+    /// *and* nothing has been rendered, and comparing `[] == []` would skip
+    /// the first build and leave the empty-state line unwritten.
+    private var renderedItemIDs: [UUID]?
 
     init(coordinator: AppCoordinator) {
         self.coordinator = coordinator
@@ -64,6 +77,19 @@ final class AppWindow {
 
         countsLabel = Self.label("")
         gtk_box_pack_start(Gtk.box(column), countsLabel, 0, 0, 0)
+
+        // The proposals. A plain box inside a scroller rather than a
+        // GtkTreeView: a tree model needs GValue boxing and cell renderers,
+        // which is a lot of C surface to get wrong for a list that only has
+        // to be read. It will have to become a TreeView if these lists grow
+        // into the thousands.
+        listColumn = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2)!
+        let scroller = gtk_scrolled_window_new(nil, nil)!
+        gtk_scrolled_window_set_policy(Gtk.scrolledWindow(scroller),
+                                       GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC)
+        gtk_container_add(Gtk.container(scroller), listColumn)
+        gtk_box_pack_start(Gtk.box(column), scroller, 1, 1, 0)
+
         resultLabel = Self.label("")
         gtk_label_set_line_wrap(Gtk.label(resultLabel), 1)
         gtk_box_pack_start(Gtk.box(column), resultLabel, 0, 0, 0)
@@ -136,6 +162,71 @@ final class AppWindow {
         // nothing is worse than one that is visibly unavailable.
         let hasSource = !coordinator.settings.sourceFolder.isEmpty
         gtk_widget_set_sensitive(scanButton, (hasSource && !state.busy) ? 1 : 0)
+
+        refreshList()
+    }
+
+    /// Rebuilds the proposal list, but only when the proposals have actually
+    /// changed: this runs twice a second, and rebuilding every time would
+    /// reset the scroll position under the reader's hands.
+    private func refreshList() {
+        let items = coordinator.items
+        let ids = items.map(\.id)
+        guard ids != renderedItemIDs else { return }
+        renderedItemIDs = ids
+
+        for row in rowWidgets { gtk_widget_destroy(row) }
+        rowWidgets = []
+
+        if items.isEmpty {
+            let empty = Self.label("Noch nichts durchsucht.")
+            gtk_widget_set_margin_top(empty, 8)
+            gtk_box_pack_start(Gtk.box(listColumn), empty, 0, 0, 0)
+            rowWidgets = [empty]
+        } else {
+            for item in items {
+                let row = Self.proposalRow(item)
+                gtk_box_pack_start(Gtk.box(listColumn), row, 0, 0, 0)
+                rowWidgets.append(row)
+            }
+        }
+        // New widgets start hidden; the window was already shown.
+        gtk_widget_show_all(listColumn)
+    }
+
+    /// One proposal: what the file is called now, and what it would be called.
+    ///
+    /// Nothing here says the rename has happened — the list is a preview, and
+    /// the wording has to keep saying so until a button is pressed.
+    private static func proposalRow(_ item: RenameItem)
+        -> UnsafeMutablePointer<GtkWidget> {
+        let row = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0)!
+        gtk_widget_set_margin_bottom(row, 6)
+
+        let from = label(item.originalFileName)
+        gtk_label_set_ellipsize(Gtk.label(from), PANGO_ELLIPSIZE_MIDDLE)
+        gtk_box_pack_start(Gtk.box(row), from, 0, 0, 0)
+
+        let arrow = gtk_label_new(nil)!
+        gtk_label_set_xalign(Gtk.label(arrow), 0)
+        gtk_label_set_ellipsize(Gtk.label(arrow), PANGO_ELLIPSIZE_MIDDLE)
+        // Escaped, because a filename routinely contains an ampersand and
+        // Pango rejects the whole string rather than rendering it wrong.
+        var markup = "→ " + PangoMarkup.span(item.newFileName, weight: "bold")
+        if let conflict = item.conflict {
+            markup += "  " + PangoMarkup.escape(Self.conflictText(conflict))
+        }
+        gtk_label_set_markup(Gtk.label(arrow), markup)
+        gtk_box_pack_start(Gtk.box(row), arrow, 0, 0, 0)
+
+        return row
+    }
+
+    private static func conflictText(_ kind: ConflictKind) -> String {
+        switch kind {
+        case .existingFile: return "⚠ dort liegt schon eine Datei"
+        case .duplicateInBatch: return "⚠ zwei Dateien wollen denselben Namen"
+        }
     }
 
     // MARK: Widgets

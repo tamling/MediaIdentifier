@@ -37,6 +37,12 @@ enum Gtk {
         UnsafeMutableRawPointer(widget).assumingMemoryBound(to: GtkLabel.self)
     }
 
+    static func scrolledWindow(
+        _ widget: UnsafeMutablePointer<GtkWidget>
+    ) -> UnsafeMutablePointer<GtkScrolledWindow> {
+        UnsafeMutableRawPointer(widget).assumingMemoryBound(to: GtkScrolledWindow.self)
+    }
+
     /// `OpaquePointer`, unlike the casts above.
     ///
     /// GtkFileChooser is a GInterface, not a class: the header declares
