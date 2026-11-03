@@ -628,12 +628,13 @@ final class AppState: ObservableObject {
     }
 
     /// FFmpeg binary: a valid custom path wins, else the first common location.
+    /// The candidate list lives in `FFmpegLocator`, so the app and the Linux
+    /// binary look in the same places.
     var ffmpegPath: String? {
         if !customFFmpegPath.isEmpty, FileManager.default.isExecutableFile(atPath: customFFmpegPath) {
             return customFFmpegPath
         }
-        return ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/usr/bin/ffmpeg"]
-            .first { FileManager.default.isExecutableFile(atPath: $0) }
+        return FFmpegLocator.locate()
     }
     var ffmpegAvailable: Bool { ffmpegPath != nil }
 

@@ -195,7 +195,11 @@ public final class FFmpegConverter {
         public var errorDescription: String? {
             switch self {
             case .ffmpegNotFound:
-                return "FFmpeg was not found. Install it (e.g. `brew install ffmpeg`)."
+                return """
+                FFmpeg was not found. Install it — `apt install ffmpeg` on Debian \
+                or Ubuntu, `brew install ffmpeg` on macOS — or set its path in \
+                the settings.
+                """
             case let .conversionFailed(code, message):
                 return "FFmpeg exited with code \(code): \(message)"
             }
@@ -204,7 +208,10 @@ public final class FFmpegConverter {
 
     private let ffmpegPath: String
 
-    public init(ffmpegPath: String = "/opt/homebrew/bin/ffmpeg") {
+    /// - Parameter ffmpegPath: where FFmpeg is. Defaults to whichever of the
+    ///   usual locations actually has it, so an Intel Mac or a Linux box is
+    ///   not left with a Homebrew-only path that cannot exist there.
+    public init(ffmpegPath: String = FFmpegLocator.defaultPath) {
         self.ffmpegPath = ffmpegPath
     }
 
