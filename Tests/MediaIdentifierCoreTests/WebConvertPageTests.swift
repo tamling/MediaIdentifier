@@ -113,10 +113,13 @@ final class WebConvertPageTests: XCTestCase {
                        "a second run must not be startable mid-run")
     }
 
+    /// A hostile file name must not escape its cell. No slash in it: a real
+    /// file name cannot contain one, and URL would read it as a path
+    /// separator, so such a test would pass for the wrong reason.
     func testFileNamesAreEscaped() {
-        let html = page(makeRouter(candidates: [candidate("<script>x</script>.mkv")]))
-        XCTAssertFalse(html.contains("<script>x</script>"), html)
-        XCTAssertTrue(html.contains("&lt;script&gt;"), html)
+        let html = page(makeRouter(candidates: [candidate("A<img src=x onerror=alert(1)>.mkv")]))
+        XCTAssertFalse(html.contains("<img src=x"), html)
+        XCTAssertTrue(html.contains("&lt;img src=x"), html)
     }
 
     func testConvertIsReachableFromTheNavigation() {
