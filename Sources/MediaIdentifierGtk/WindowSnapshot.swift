@@ -42,6 +42,24 @@ enum WindowSnapshot {
     /// Call it only after the widget has been shown and the main loop has run
     /// at least once; before that GTK has not assigned it a size.
     static func write(_ widget: UnsafeMutablePointer<GtkWidget>, to path: String) throws {
+        // Drain whatever GTK still has queued before measuring or drawing.
+        //
+        // Widgets added a moment ago are not allocated or painted until the
+        // main loop runs again, and `gtk_widget_draw` on a tree in that state
+        // renders nothing — producing a blank image that is a perfectly valid
+        // PNG. That is how a screenshot can "succeed" and show an empty
+        // window: it happened here the first time the list was rebuilt
+        // immediately before the capture.
+        //
+        // Bounded, because gtk_events_pending can stay true indefinitely if
+        // something keeps scheduling work, and a hung capture is worse than
+        // an imperfect one.
+        var iterations = 0
+        while gtk_events_pending() != 0, iterations < 500 {
+            gtk_main_iteration_do(0)   // 0: do not block waiting for an event
+            iterations += 1
+        }
+
         guard gtk_widget_get_realized(widget) != 0 else { throw Failure.notRealized }
 
         let width = gtk_widget_get_allocated_width(widget)

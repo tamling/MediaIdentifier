@@ -144,15 +144,24 @@ jobs:
           # widget was never laid out, and it would otherwise look like a pass.
           file window.png | grep -qE 'PNG image data, [0-9]{3,} x [0-9]{3,}'
           echo "bytes: $(stat -c %s window.png)"
-          # A picture of the empty state is a perfectly valid PNG and would
-          # pass every check above, so the binary says what was on screen and
-          # that is what gets asserted. One proposal per demo file is
-          # expected; anything less means the parser or the planner dropped
-          # something.
+          # Two checks, because they catch different failures and I learned
+          # that the hard way by replacing one with the other.
+          #
+          # The count says the engine produced proposals. One per demo file is
+          # expected; less means the parser or the planner dropped something.
           captured="$(sed -n 's/^Captured \([0-9]*\) proposals$/\1/p' shot.log)"
           echo "proposals in the picture: ${captured:-none}"
           test "${captured:-0}" -ge 8 || {
             echo "FAIL: expected at least 8 proposals, the demo library has 8 files"
+            exit 1
+          }
+          # The size says the picture is of something. A blank window is a
+          # valid PNG that passes every other check and compresses to a few
+          # kilobytes; a drawn one has never been under 20 kB. This is the
+          # only check that notices the window rendering nothing at all.
+          bytes="$(stat -c %s window.png)"
+          test "$bytes" -gt 12000 || {
+            echo "FAIL: $bytes bytes — the window rendered blank"
             exit 1
           }
       # Before the checks that can fail: the rendered window is the most
