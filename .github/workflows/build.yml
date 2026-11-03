@@ -14,7 +14,18 @@ jobs:
         with:
           xcode-version: latest-stable
       - name: Run Swift tests
-        run: swift test
+        run: |
+          set -o pipefail
+          swift test 2>&1 | tee test.log
+      # Keep failures readable: the full log is thousands of lines, and the
+      # interesting part is buried in the middle of it.
+      - name: Failing assertions
+        if: failure()
+        run: |
+          echo "--- failed assertions ---"
+          grep -E ": error:|XCTAssert.* failed" test.log | head -60 || true
+          echo "--- totals ---"
+          grep -E "Executed [0-9]+ tests" test.log | tail -2 || true
 
   # Linux is a target platform: the portable Core (and later the web UI) must
   # build and pass its tests there, not just on macOS.
@@ -29,7 +40,16 @@ jobs:
       - name: Build
         run: swift build
       - name: Run Swift tests
-        run: swift test
+        run: |
+          set -o pipefail
+          swift test 2>&1 | tee test.log
+      - name: Failing assertions
+        if: failure()
+        run: |
+          echo "--- failed assertions ---"
+          grep -E ": error:|XCTAssert.* failed" test.log | head -60 || true
+          echo "--- totals ---"
+          grep -E "Executed [0-9]+ tests" test.log | tail -2 || true
 
   app:
     name: Build .app
