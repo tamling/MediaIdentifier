@@ -8,6 +8,8 @@ jobs:
   test:
     name: Core tests
     runs-on: macos-15
+    # Without this a hung test would burn the default six hours.
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
       - uses: maxim-lobanov/setup-xcode@v1
@@ -36,6 +38,7 @@ jobs:
   linux:
     name: Linux Core tests
     runs-on: ubuntu-latest
+    timeout-minutes: 40
     container: swift:6.0-jammy
     steps:
       - uses: actions/checkout@v4
@@ -80,6 +83,7 @@ jobs:
   app:
     name: Build .app
     runs-on: macos-15
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
       - uses: maxim-lobanov/setup-xcode@v1
