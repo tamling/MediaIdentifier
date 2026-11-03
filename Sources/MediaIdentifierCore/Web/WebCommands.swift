@@ -13,7 +13,9 @@ public enum WebCommand: Sendable, Equatable {
     case testLocalLLMConnection
     case testJellyfinConnection
     case scanSourceFolder
-    case applyProposedRenames
+    /// Applies the proposed renames. `accepting` lists the items the user
+    /// ticked; nil means every proposal.
+    case applyProposedRenames(accepting: Set<UUID>?)
     case undoLastRename
     case startConversions
     case clearHistory

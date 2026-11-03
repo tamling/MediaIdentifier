@@ -17,6 +17,7 @@ public struct WebRouter: Sendable {
     private let snapshot: @Sendable () -> StatusSnapshot
     private let settings: @Sendable () -> WebSettings
     private let configuredSecrets: @Sendable () -> Set<SecretKey>
+    private let items: @Sendable () -> [RenameItem]
     private let commands: WebCommandSink?
 
     public init(policy: WebSecurityPolicy,
@@ -24,6 +25,7 @@ public struct WebRouter: Sendable {
                 csrf: CSRFToken = CSRFToken(),
                 settings: @escaping @Sendable () -> WebSettings = { WebSettings() },
                 configuredSecrets: @escaping @Sendable () -> Set<SecretKey> = { [] },
+                items: @escaping @Sendable () -> [RenameItem] = { [] },
                 commands: WebCommandSink? = nil,
                 snapshot: @escaping @Sendable () -> StatusSnapshot) {
         self.policy = policy
@@ -31,6 +33,7 @@ public struct WebRouter: Sendable {
         self.csrf = csrf
         self.settings = settings
         self.configuredSecrets = configuredSecrets
+        self.items = items
         self.commands = commands
         self.snapshot = snapshot
     }
@@ -73,7 +76,7 @@ public struct WebRouter: Sendable {
             }
             if request.path == "/login" { return performLogin(fields) }
             guard isAuthorized(request) else { return unauthorized(for: request) }
-            return performAction(request.path, fields: fields)
+            return performAction(request, fields: fields)
         }
 
         if request.path == "/login" { return loginPage() }
@@ -82,7 +85,7 @@ public struct WebRouter: Sendable {
 
         switch request.path {
         case "/", "/index.html":
-            return .html(StatusHTTP.html(snapshot()))
+            return overviewPage()
         case "/settings":
             return settingsPage(settings(), notice: Self.notice(for: request.query))
         case "/api/status", "/api/status/":
@@ -138,8 +141,9 @@ public struct WebRouter: Sendable {
 
     // MARK: Actions
 
-    private func performAction(_ path: String, fields: [String: String]) -> HTTPResponse {
-        switch path {
+    private func performAction(_ request: HTTPRequest,
+                               fields: [String: String]) -> HTTPResponse {
+        switch request.path {
         case "/logout":
             return redirect(to: "/login", setCookie: policy.clearedCookie())
         case "/settings":
@@ -154,7 +158,7 @@ public struct WebRouter: Sendable {
             submit(.scanSourceFolder)
             return redirect(to: "/")
         case "/library/apply":
-            submit(.applyProposedRenames)
+            submit(.applyProposedRenames(accepting: Self.selectedItemIDs(in: request)))
             return redirect(to: "/")
         case "/library/undo":
             submit(.undoLastRename)
@@ -214,6 +218,28 @@ public struct WebRouter: Sendable {
         return response
     }
 
+    /// The items the user ticked, or nil when the form carried no selection at
+    /// all (so "apply" from somewhere without checkboxes still means
+    /// everything).
+    ///
+    /// Read with the multi-valued parser: a set of checkboxes sharing a name
+    /// submits that name once per tick, and the single-valued form would see
+    /// only the first.
+    static func selectedItemIDs(in request: HTTPRequest) -> Set<UUID>? {
+        let fields = HTTPRequestParser.parseFormEncodedMulti(
+            String(decoding: request.body, as: UTF8.self)
+        )
+        let ids = (fields[Self.selectionField] ?? []).compactMap { UUID(uuidString: $0) }
+        if !ids.isEmpty { return Set(ids) }
+        // The hidden companion distinguishes "the list was shown and nothing
+        // was ticked" from "this form carries no selection".
+        return fields[Self.selectionPresentField] != nil ? [] : nil
+    }
+
+    /// Name each ticked item is submitted under.
+    static let selectionField = "items"
+    static let selectionPresentField = "itemsPresent"
+
     /// Form fields of a POST, from the body and the query string. The body wins
     /// so a link cannot pre-set a field the form also carries.
     static func formFields(of request: HTTPRequest) -> [String: String] {
@@ -226,6 +252,112 @@ public struct WebRouter: Sendable {
     }
 
     // MARK: Pages
+
+    /// The overview: what is happening, what is proposed, and the buttons.
+    ///
+    /// No JavaScript anywhere, so the page works with scripting forbidden
+    /// outright by its own Content-Security-Policy.
+    func overviewPage() -> HTTPResponse {
+        let state = snapshot()
+        let proposals = items()
+        let settings = settings()
+
+        let stateLabel: String
+        let stateClass: String
+        if state.hasError {
+            stateLabel = "Finished with errors"
+            stateClass = "bad"
+        } else if state.busy {
+            stateLabel = "\(state.convertStatus ?? "Working") \(state.activePercent) %"
+            stateClass = "busy"
+        } else {
+            stateLabel = "Ready"
+            stateClass = "ok"
+        }
+
+        let result = state.lastResult.map {
+            "<p class=\"result\">\(Self.escape($0))</p>"
+        } ?? ""
+
+        let needsSetup = settings.sourceFolder.isEmpty
+        let setupHint = needsSetup ? """
+        <p class="hint">No import folder is set yet. \
+        <a href="/settings">Open the settings</a> to choose one.</p>
+        """ : ""
+
+        var rows = ""
+        for item in proposals {
+            let conflict = item.conflict.map {
+                "<span class=\"flag\">\(Self.escape(Self.conflictLabel($0)))</span>"
+            } ?? ""
+            rows += """
+            <tr>
+              <td class="tick"><input type="checkbox" name="\(Self.selectionField)" \
+            value="\(item.id.uuidString)" checked></td>
+              <td>
+                <div class="from">\(Self.escape(item.originalFileName))</div>
+                <div class="to">→ \(Self.escape(item.proposedRelativePath)) \(conflict)</div>
+              </td>
+            </tr>
+            """
+        }
+
+        let list = proposals.isEmpty ? """
+        <p class="hint">Nothing proposed yet.\(needsSetup ? "" : " Use “Look for new files”.")</p>
+        """ : """
+        <form method="post" action="/library/apply">
+          \(csrf.hiddenField)
+          <input type="hidden" name="\(Self.selectionPresentField)" value="1">
+          <table>\(rows)</table>
+          <button type="submit">Rename the ticked files</button>
+        </form>
+        """
+
+        let counts = "\(state.totalItems) proposed · \(state.done) renamed so far"
+
+        return .html("""
+        <!DOCTYPE html>
+        <html lang="en"><head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        \(state.busy ? "<meta http-equiv=\"refresh\" content=\"2\">" : "")
+        <title>Mediafin</title>
+        \(Self.styles)
+        </head>
+        <body>
+        <div class="page">
+          \(Self.navigation(current: "/"))
+          <div class="card">
+            <h1>Mediafin</h1>
+            <span class="badge \(stateClass)">\(Self.escape(stateLabel))</span>
+            <p class="sub">\(Self.escape(counts))</p>
+            \(result)
+            \(setupHint)
+          </div>
+
+          <div class="card">
+            <h2>Proposed renames</h2>
+            \(list)
+          </div>
+
+          <div class="card actions">
+            <form method="post" action="/library/scan">
+              \(csrf.hiddenField)
+              <button type="submit"\(needsSetup ? " disabled" : "")>Look for new files</button>
+            </form>
+            <form method="post" action="/library/undo">
+              \(csrf.hiddenField)
+              <button type="submit"\(state.done == 0 ? " disabled" : "")>Undo the last run</button>
+            </form>
+            <form method="post" action="/history/clear">
+              \(csrf.hiddenField)
+              <button type="submit"\(state.done == 0 ? " disabled" : "")>Clear the history</button>
+            </form>
+          </div>
+        </div>
+        </body></html>
+        """)
+    }
 
     /// Login form. No JavaScript, and the token field is a password field so it
     /// is not shown on screen or kept by autofill history.
@@ -420,8 +552,35 @@ public struct WebRouter: Sendable {
       .note { color:#e0a0a0; font-size:13px; margin:8px 0 0; }
       .hint { color:#71717a; font-size:12px; margin:6px 0 0; }
       .warn { color:#f0a020; font-size:12px; margin:14px 0 0; }
+      .result { color:#c8c8d0; font-size:13px; margin:14px 0 0; }
+      .badge { display:inline-block; padding:5px 12px; border-radius:999px; font-size:13px;
+               font-weight:700; }
+      .badge.ok { background:#36c98d22; color:#36c98d; border:1px solid #36c98d55; }
+      .badge.busy { background:#f0a02022; color:#f0a020; border:1px solid #f0a02055; }
+      .badge.bad { background:#e05a4f22; color:#e05a4f; border:1px solid #e05a4f55; }
+      table { width:100%; border-collapse:collapse; margin-top:6px; }
+      td { padding:10px 4px; border-bottom:1px solid #26262e; font-size:14px;
+           vertical-align:top; }
+      td.tick { width:28px; }
+      .from { color:#8a8a92; }
+      .to { color:#e6e6ea; margin-top:3px; }
+      .flag { color:#f0a020; font-size:12px; margin-left:6px; }
+      .actions { display:flex; gap:12px; flex-wrap:wrap; }
+      .actions form { background:none; border:0; padding:0; width:auto; margin:0; }
+      .actions button { margin-top:0; width:auto; }
+      button[disabled] { background:#2a2a32; color:#6a6a72; }
+      a { color:#8aa4ff; }
     </style>
     """
+
+    /// Plain wording for a conflict, since the raw case name means nothing to
+    /// someone reading the page.
+    static func conflictLabel(_ kind: ConflictKind) -> String {
+        switch kind {
+        case .existingFile: return "a file is already there"
+        case .duplicateInBatch: return "two files want the same name"
+        }
+    }
 
     /// Minimal HTML escaping for text interpolated into a page.
     static func escape(_ value: String) -> String {

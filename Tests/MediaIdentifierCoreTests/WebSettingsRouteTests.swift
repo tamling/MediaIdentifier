@@ -281,7 +281,7 @@ final class WebSettingsRouteTests: XCTestCase {
     func testEachActionSubmitsItsCommandAndRedirects() {
         let expected: [(String, WebCommand)] = [
             ("/library/scan", .scanSourceFolder),
-            ("/library/apply", .applyProposedRenames),
+            ("/library/apply", .applyProposedRenames(accepting: nil)),
             ("/library/undo", .undoLastRename),
             ("/convert/start", .startConversions),
             ("/history/clear", .clearHistory),

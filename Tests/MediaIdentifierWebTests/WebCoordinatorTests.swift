@@ -149,7 +149,7 @@ final class WebCoordinatorTests: XCTestCase {
         run(.scanSourceFolder)
         let destination = try XCTUnwrap(coordinator.items.first).primaryDestination
 
-        run(.applyProposedRenames)
+        run(.applyProposedRenames(accepting: nil))
 
         XCTAssertTrue(FileManager.default.fileExists(atPath: destination.path),
                       "expected the file at \(destination.path)")
@@ -164,7 +164,7 @@ final class WebCoordinatorTests: XCTestCase {
 
     func testApplyWithNothingScannedSaysSo() {
         run(.saveSettings(configuredSettings()))
-        run(.applyProposedRenames)
+        run(.applyProposedRenames(accepting: nil))
         XCTAssertTrue((coordinator.snapshot.lastResult ?? "").contains("Nothing to rename"),
                       coordinator.snapshot.lastResult ?? "nil")
     }
@@ -173,7 +173,7 @@ final class WebCoordinatorTests: XCTestCase {
         let original = try makeFile("The.Matrix.1999.mkv")
         run(.saveSettings(configuredSettings()))
         run(.scanSourceFolder)
-        run(.applyProposedRenames)
+        run(.applyProposedRenames(accepting: nil))
         XCTAssertFalse(FileManager.default.fileExists(atPath: original.path))
 
         run(.undoLastRename)
@@ -193,7 +193,7 @@ final class WebCoordinatorTests: XCTestCase {
         _ = try makeFile("The.Matrix.1999.mkv")
         run(.saveSettings(configuredSettings()))
         run(.scanSourceFolder)
-        run(.applyProposedRenames)
+        run(.applyProposedRenames(accepting: nil))
         XCTAssertFalse(coordinator.logEntries.isEmpty)
 
         run(.clearHistory)

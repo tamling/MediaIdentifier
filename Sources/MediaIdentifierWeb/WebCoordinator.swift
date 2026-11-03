@@ -112,8 +112,8 @@ public final class WebCoordinator: WebCommandSink, @unchecked Sendable {
             testJellyfin()
         case .scanSourceFolder:
             scanSourceFolder()
-        case .applyProposedRenames:
-            applyRenames()
+        case .applyProposedRenames(let accepting):
+            applyRenames(accepting: accepting)
         case .undoLastRename:
             undoLast()
         case .startConversions:
@@ -290,11 +290,20 @@ public final class WebCoordinator: WebCommandSink, @unchecked Sendable {
         refreshSnapshotCounts()
     }
 
-    private func applyRenames() {
-        let plan = items
+    private func applyRenames(accepting: Set<UUID>?) {
+        var plan = items
         guard !plan.isEmpty else {
             update { $0.lastResult = "Nothing to rename — scan the import folder first." }
             return
+        }
+        // The page sends the ids the user ticked. An empty selection means they
+        // unticked everything, which must do nothing rather than everything.
+        if let accepting {
+            plan = plan.filter { accepting.contains($0.id) }
+            guard !plan.isEmpty else {
+                update { $0.lastResult = "No files were ticked, so nothing was renamed." }
+                return
+            }
         }
         let policy = settings.conflictPolicy.policy
         update { $0.busy = true; $0.renaming = true; $0.renameProgress = 0; $0.hasError = false }
@@ -304,7 +313,8 @@ public final class WebCoordinator: WebCommandSink, @unchecked Sendable {
             self?.update { $0.renameProgress = fraction }
         })
 
-        lock.lock(); _items = []; lock.unlock()
+        let applied = Set(plan.map(\.id))
+        lock.lock(); _items.removeAll { applied.contains($0.id) }; lock.unlock()
         update {
             $0.busy = false
             $0.renaming = false

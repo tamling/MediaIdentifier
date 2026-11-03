@@ -250,6 +250,22 @@ public struct HTTPRequestParser {
         return (path.isEmpty ? "/" : path, parseFormEncoded(String(pieces[1])))
     }
 
+    /// Decodes `application/x-www-form-urlencoded` data, keeping every value.
+    ///
+    /// A set of checkboxes sharing a name submits the name repeatedly, so the
+    /// single-valued form below would see only the first one ticked.
+    public static func parseFormEncodedMulti(_ text: String) -> [String: [String]] {
+        var result: [String: [String]] = [:]
+        for pair in text.split(separator: "&", omittingEmptySubsequences: true) {
+            let halves = pair.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
+            guard let rawName = halves.first, !rawName.isEmpty else { continue }
+            let name = decodeComponent(String(rawName))
+            let value = halves.count > 1 ? decodeComponent(String(halves[1])) : ""
+            result[name, default: []].append(value)
+        }
+        return result
+    }
+
     /// Decodes `application/x-www-form-urlencoded` data — used for both query
     /// strings and form posts. Repeated keys keep the first value.
     public static func parseFormEncoded(_ text: String) -> [String: String] {
