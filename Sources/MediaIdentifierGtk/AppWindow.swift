@@ -98,9 +98,16 @@ final class AppWindow {
         Self.add(scroller, to: proposals, expand: true)
         gtk_box_pack_start(Gtk.box(page), proposals, 1, 1, 0)
 
+        // Footer: what just happened on the left, which version said so on
+        // the right. The version is there so a bug report can name one.
+        let footer = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12)!
         resultLabel = Self.label("", classes: "mf-dim")
         gtk_label_set_line_wrap(Gtk.label(resultLabel), 1)
-        gtk_box_pack_start(Gtk.box(page), resultLabel, 0, 0, 0)
+        gtk_box_pack_start(Gtk.box(footer), resultLabel, 1, 1, 0)
+        let version = Self.label(MediafinVersion.display, classes: "mf-dim")
+        gtk_label_set_xalign(Gtk.label(version), 1)
+        gtk_box_pack_end(Gtk.box(footer), version, 0, 0, 0)
+        gtk_box_pack_start(Gtk.box(page), footer, 0, 0, 0)
 
         Gtk.onClick(saveButton, self) { $0.saveFolders() }
         Gtk.onClick(scanButton, self) { $0.scan() }

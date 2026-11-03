@@ -133,13 +133,28 @@ jobs:
           # screenshot is meant to show.
         run: |
           set -euo pipefail
-          timeout 60 xvfb-run -a --server-args="-screen 0 1280x800x24" \
-            .build/release/mediafin-gtk --screenshot window.png
+          # --demo points the engine at a throwaway library of plausible
+          # release names and scans it, so the picture shows the interface
+          # doing its job rather than its empty state. It runs the real
+          # parser and planner, so this fails if either stops working.
+          timeout 90 xvfb-run -a --server-args="-screen 0 1280x900x24" \
+            .build/release/mediafin-gtk --demo --screenshot window.png | tee shot.log
           file window.png
           # Dimensions in the hundreds: a 1x1 PNG is what GTK produces when the
           # widget was never laid out, and it would otherwise look like a pass.
           file window.png | grep -qE 'PNG image data, [0-9]{3,} x [0-9]{3,}'
           echo "bytes: $(stat -c %s window.png)"
+          # A picture of the empty state is a perfectly valid PNG and would
+          # pass every check above, so the binary says what was on screen and
+          # that is what gets asserted. One proposal per demo file is
+          # expected; anything less means the parser or the planner dropped
+          # something.
+          captured="$(sed -n 's/^Captured \([0-9]*\) proposals$/\1/p' shot.log)"
+          echo "proposals in the picture: ${captured:-none}"
+          test "${captured:-0}" -ge 8 || {
+            echo "FAIL: expected at least 8 proposals, the demo library has 8 files"
+            exit 1
+          }
       # Before the checks that can fail: the rendered window is the most
       # useful thing this job produces, and a later failing assertion must not
       # be what stops it being readable.

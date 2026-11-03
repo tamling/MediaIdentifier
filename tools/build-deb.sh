@@ -55,11 +55,22 @@ while [ $# -gt 0 ]; do
 done
 
 ARCH="$(dpkg --print-architecture)"
+
+# Read from the source rather than written here, so the package and the
+# window cannot disagree about which version is running.
+VERSION_FILE="Sources/MediaIdentifierCore/App/MediafinVersion.swift"
+BASE_VERSION="$(sed -n 's/.*static let number = "\([0-9.]*\)".*/\1/p' "$VERSION_FILE")"
+[ -n "$BASE_VERSION" ] || {
+  echo "FAIL: could not read the version from $VERSION_FILE" >&2
+  exit 1
+}
+
 VERSION="${MEDIAFIN_VERSION:-}"
 if [ -z "$VERSION" ]; then
-  # A valid, sortable version for an untagged build: 1.0.0~gitYYYYMMDD.<sha>
+  # A valid, sortable version for an untagged build:
+  # <number>~gitYYYYMMDD.<sha>
   SHA="$(git rev-parse --short=8 HEAD 2>/dev/null || echo unknown)"
-  VERSION="1.0.0~git$(date -u +%Y%m%d).${SHA}"
+  VERSION="${BASE_VERSION}~git$(date -u +%Y%m%d).${SHA}"
 fi
 PACKAGE="mediafin_${VERSION}_${ARCH}.deb"
 STAGE="$(mktemp -d)"
