@@ -37,6 +37,20 @@ enum Gtk {
         UnsafeMutableRawPointer(widget).assumingMemoryBound(to: GtkLabel.self)
     }
 
+    static func toggleButton(
+        _ widget: UnsafeMutablePointer<GtkWidget>
+    ) -> UnsafeMutablePointer<GtkToggleButton> {
+        UnsafeMutableRawPointer(widget).assumingMemoryBound(to: GtkToggleButton.self)
+    }
+
+    static func isChecked(_ widget: UnsafeMutablePointer<GtkWidget>) -> Bool {
+        gtk_toggle_button_get_active(toggleButton(widget)) != 0
+    }
+
+    static func setChecked(_ widget: UnsafeMutablePointer<GtkWidget>, _ on: Bool) {
+        gtk_toggle_button_set_active(toggleButton(widget), on ? 1 : 0)
+    }
+
     static func headerBar(
         _ widget: UnsafeMutablePointer<GtkWidget>
     ) -> UnsafeMutablePointer<GtkHeaderBar> {

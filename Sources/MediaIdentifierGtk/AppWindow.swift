@@ -22,11 +22,17 @@ final class AppWindow {
     private let moviesChooser: UnsafeMutablePointer<GtkWidget>
     private let seriesChooser: UnsafeMutablePointer<GtkWidget>
     private let scanButton: UnsafeMutablePointer<GtkWidget>
+    private let applyButton: UnsafeMutablePointer<GtkWidget>
+    private let undoButton: UnsafeMutablePointer<GtkWidget>
     private let listColumn: UnsafeMutablePointer<GtkWidget>
 
     /// The rows currently on screen, kept so they can be destroyed without
     /// walking the container — which would mean another C callback.
     private var rowWidgets: [UnsafeMutablePointer<GtkWidget>] = []
+    /// Which proposal each tick box belongs to. The window holds no opinion
+    /// about what is selected beyond what these say, so there is nothing to
+    /// keep in step with them.
+    private var rowChecks: [(id: UUID, check: UnsafeMutablePointer<GtkWidget>)] = []
     /// What the list was last built from. The refresh runs twice a second and
     /// rebuilding every time would throw away the scroll position.
     ///
@@ -96,6 +102,21 @@ final class AppWindow {
                                        GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC)
         gtk_container_add(Gtk.container(scroller), listColumn)
         Self.add(scroller, to: proposals, expand: true)
+
+        // Selecting on the left, acting on the right: the destructive end of
+        // the row is the one that should take a deliberate reach.
+        let actions = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8)!
+        let allButton = gtk_button_new_with_label("Alle")!
+        let noneButton = gtk_button_new_with_label("Keine")!
+        gtk_box_pack_start(Gtk.box(actions), allButton, 0, 0, 0)
+        gtk_box_pack_start(Gtk.box(actions), noneButton, 0, 0, 0)
+        undoButton = gtk_button_new_with_label("Rückgängig")!
+        applyButton = gtk_button_new_with_label("Umbenennen")!
+        Styling.style(applyButton, "suggested-action")
+        gtk_box_pack_end(Gtk.box(actions), applyButton, 0, 0, 0)
+        gtk_box_pack_end(Gtk.box(actions), undoButton, 0, 0, 0)
+        Self.add(actions, to: proposals)
+
         gtk_box_pack_start(Gtk.box(page), proposals, 1, 1, 0)
 
         // Footer: what just happened on the left, which version said so on
@@ -111,6 +132,10 @@ final class AppWindow {
 
         Gtk.onClick(saveButton, self) { $0.saveFolders() }
         Gtk.onClick(scanButton, self) { $0.scan() }
+        Gtk.onClick(applyButton, self) { $0.applySelected() }
+        Gtk.onClick(undoButton, self) { $0.undoLast() }
+        Gtk.onClick(allButton, self) { $0.setAllChecked(true) }
+        Gtk.onClick(noneButton, self) { $0.setAllChecked(false) }
 
         loadFolders()
         refresh()
@@ -140,6 +165,25 @@ final class AppWindow {
     func scan() {
         saveFolders()
         coordinator.submit(.scanSourceFolder)
+    }
+
+    /// Hands the engine the ids that are ticked, and nothing else.
+    ///
+    /// An empty selection is submitted as an empty set rather than caught
+    /// here: the coordinator already answers that case with "No files were
+    /// ticked, so nothing was renamed", and a second opinion in the window
+    /// would be one more place for the two to disagree.
+    func applySelected() {
+        let ticked = rowChecks.filter { Gtk.isChecked($0.check) }.map(\.id)
+        coordinator.submit(.applyProposedRenames(accepting: Set(ticked)))
+    }
+
+    func undoLast() {
+        coordinator.submit(.undoLastRename)
+    }
+
+    func setAllChecked(_ on: Bool) {
+        for row in rowChecks { Gtk.setChecked(row.check, on) }
     }
 
     private func loadFolders() {
@@ -176,6 +220,8 @@ final class AppWindow {
         // nothing is worse than one that is visibly unavailable.
         let hasSource = !coordinator.settings.sourceFolder.isEmpty
         gtk_widget_set_sensitive(scanButton, (hasSource && !state.busy) ? 1 : 0)
+        gtk_widget_set_sensitive(applyButton, (!rowChecks.isEmpty && !state.busy) ? 1 : 0)
+        gtk_widget_set_sensitive(undoButton, state.busy ? 0 : 1)
 
         refreshList()
     }
@@ -191,6 +237,7 @@ final class AppWindow {
 
         for row in rowWidgets { gtk_widget_destroy(row) }
         rowWidgets = []
+        rowChecks = []
 
         if items.isEmpty {
             let empty = Self.label("Noch nichts durchsucht.", classes: "mf-empty")
@@ -199,9 +246,10 @@ final class AppWindow {
             rowWidgets = [empty]
         } else {
             for (index, item) in items.enumerated() {
-                let row = Self.proposalRow(item, banded: index % 2 == 1)
-                gtk_box_pack_start(Gtk.box(listColumn), row, 0, 0, 0)
-                rowWidgets.append(row)
+                let built = Self.proposalRow(item, banded: index % 2 == 1)
+                gtk_box_pack_start(Gtk.box(listColumn), built.row, 0, 0, 0)
+                rowWidgets.append(built.row)
+                rowChecks.append((id: item.id, check: built.check))
             }
         }
         // New widgets start hidden; the window was already shown.
@@ -212,25 +260,35 @@ final class AppWindow {
     ///
     /// Nothing here says the rename has happened — the list is a preview, and
     /// the wording has to keep saying so until a button is pressed.
-    private static func proposalRow(_ item: RenameItem,
-                                    banded: Bool) -> UnsafeMutablePointer<GtkWidget> {
-        let row = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2)!
+    private static func proposalRow(_ item: RenameItem, banded: Bool)
+        -> (row: UnsafeMutablePointer<GtkWidget>, check: UnsafeMutablePointer<GtkWidget>) {
+        let row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10)!
         Styling.style(row, "mf-row")
         if banded { Styling.style(row, "mf-row-alt") }
 
+        // The planner already decided what it would accept — a file it is
+        // unsure about comes in unticked. Overriding that here would mean the
+        // window quietly disagreeing with the engine about what is safe.
+        let check = gtk_check_button_new()!
+        Gtk.setChecked(check, item.isAccepted)
+        gtk_widget_set_valign(check, GTK_ALIGN_CENTER)
+        gtk_box_pack_start(Gtk.box(row), check, 0, 0, 0)
+
+        let text = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2)!
         let from = label(item.originalFileName, classes: "mf-from")
         gtk_label_set_ellipsize(Gtk.label(from), PANGO_ELLIPSIZE_MIDDLE)
-        gtk_box_pack_start(Gtk.box(row), from, 0, 0, 0)
+        gtk_box_pack_start(Gtk.box(text), from, 0, 0, 0)
 
         let to = label(item.newFileName, classes: "mf-to")
         gtk_label_set_ellipsize(Gtk.label(to), PANGO_ELLIPSIZE_MIDDLE)
-        gtk_box_pack_start(Gtk.box(row), to, 0, 0, 0)
+        gtk_box_pack_start(Gtk.box(text), to, 0, 0, 0)
 
         if let conflict = item.conflict {
             let warning = label(conflictText(conflict), classes: "mf-warn")
-            gtk_box_pack_start(Gtk.box(row), warning, 0, 0, 0)
+            gtk_box_pack_start(Gtk.box(text), warning, 0, 0, 0)
         }
-        return row
+        gtk_box_pack_start(Gtk.box(row), text, 1, 1, 0)
+        return (row, check)
     }
 
     private static func conflictText(_ kind: ConflictKind) -> String {
