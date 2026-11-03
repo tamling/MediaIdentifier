@@ -183,6 +183,10 @@ jobs:
         shell: bash
         run: |
           set -uo pipefail
+          # curl is not in the Swift container, and the HTTPS check below hides
+          # stderr, so without this the "server did not come up" verdict would
+          # really mean "curl: command not found", sixty times over.
+          apt-get install -y -qq curl
           apt-get install -y -qq ./mediafin-linux-x86_64.deb
 
           echo "=== files the package installed ==="
@@ -202,13 +206,24 @@ jobs:
 
           check "binary is on PATH"            'command -v mediafin'
           check "binary runs"                  'mediafin --help'
-          check "man page installed"           'test -f /usr/share/man/man1/mediafin.1.gz'
+          # Asserted against the package, not the filesystem: the Ubuntu base
+          # image ships /etc/dpkg/dpkg.cfg.d/excludes with
+          # "path-exclude /usr/share/man/*", so dpkg lists the man page in
+          # `dpkg -L` but never unpacks it here. What matters is that the
+          # package carries it for a real installation.
+          check "man page is in the package"   'dpkg-deb --contents mediafin-linux-x86_64.deb | grep -q "usr/share/man/man1/mediafin.1.gz"'
           check "systemd unit installed"       'test -f /usr/lib/systemd/system/mediafin.service || test -f /lib/systemd/system/mediafin.service'
           check "unit is NOT enabled"          '! test -e /etc/systemd/system/multi-user.target.wants/mediafin.service'
           check "state dir is 0700 mediafin"   'test "$(stat -c "%U %a" /var/lib/mediafin)" = "mediafin 700"'
           check "copyright installed"          'test -f /usr/share/doc/mediafin/copyright'
           check "changelog installed"          'test -f /usr/share/doc/mediafin/changelog.Debian.gz'
           check "no stray files at the root"   '! test -e /.shlibdeps'
+          # The package's "./" entry is the filesystem root on the target
+          # machine, and dpkg applies an archived directory's mode even when
+          # the directory already exists. A staging root left at mktemp's 0700
+          # would therefore chmod / to 0700 on install. CI runs as root, which
+          # hides the damage, so assert on the archive instead.
+          check "package root is 0755"         'test "$(dpkg-deb -c mediafin-linux-x86_64.deb | awk "\$NF == \"./\" { print \$1 }")" = drwxr-xr-x'
 
           echo "=== serves HTTPS after a plain apt install ==="
           export MEDIAFIN_CONFIG_DIR="$PWD/.deb-smoke"

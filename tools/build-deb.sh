@@ -52,6 +52,13 @@ fi
 PACKAGE="mediafin_${VERSION}_${ARCH}.deb"
 STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
+# mktemp -d gives 0700, and dpkg-deb records the staging root as the package's
+# "./" entry — which IS the filesystem root on the target machine. dpkg applies
+# a directory's archived mode even when the directory already exists, so a
+# 0700 staging root would chmod / to 0700 on install and lock every non-root
+# process out of the system. Verified by extracting such a package over a 0755
+# directory: it came back 0700.
+chmod 755 "$STAGE"
 
 if [ -n "$PREBUILT" ]; then
   echo "==> Using the binary you supplied: $PREBUILT"
