@@ -94,6 +94,18 @@ if case .pemFiles(let chain, _)? = tlsSource {
 // MARK: Server
 
 let server = WebServer()
+let coordinator = WebCoordinator(configDirectory: configDirectory)
+
+if let problem = coordinator.settingsProblem {
+    report("""
+
+    The settings file could not be read, so the defaults are in use. It has
+    been left alone so you can look at it:
+      \(configDirectory.appendingPathComponent("settings.json").path)
+      \(problem)
+    """)
+}
+
 let router = WebRouter(
     policy: WebSecurityPolicy(
         token: stored.token,
@@ -101,9 +113,10 @@ let router = WebRouter(
         allowAnonymousHealth: true,
         isTLS: tlsSource != nil
     ),
-    // Until the renaming engine is wired into the interface the snapshot
-    // reports an idle server, which /healthz already makes useful to a monitor.
-    snapshot: { StatusSnapshot() }
+    settings: { coordinator.settings },
+    configuredSecrets: { coordinator.configuredSecrets },
+    commands: coordinator,
+    snapshot: { coordinator.snapshot }
 )
 
 let boundPort = orExit {
