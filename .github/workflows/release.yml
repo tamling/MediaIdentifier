@@ -162,9 +162,10 @@ jobs:
         run: |
           set -euo pipefail
           apt-get update -qq
-          # dpkg-shlibdeps needs dpkg-dev; lintian is optional and only
-          # reports style.
-          apt-get install -y -qq dpkg-dev lintian
+          # dpkg-shlibdeps needs dpkg-dev. lintian is deliberately not
+          # installed here: it only reports style, and it drags in a large
+          # Perl dependency tree on every release.
+          apt-get install -y -qq dpkg-dev
           ./tools/build-deb.sh
           # The version lives in the package metadata; the asset name stays
           # stable so each release replaces the last instead of piling up.
@@ -173,40 +174,70 @@ jobs:
           sha256sum mediafin-linux-x86_64.deb
       # Installing it is the only check that proves the dependency list is
       # right: apt refuses the package if anything it declares is missing.
+      #
+      # Every check runs and reports itself, then the step exits non-zero if
+      # any failed. An `echo` before a `test` is worse than useless: the last
+      # line printed names the check that FAILED, which reads like the one
+      # that passed.
       - name: Install the .deb and run it
         shell: bash
         run: |
-          set -euo pipefail
+          set -uo pipefail
           apt-get install -y -qq ./mediafin-linux-x86_64.deb
-          command -v mediafin
-          mediafin --help > /dev/null
-          echo "--- the man page is installed ---"
-          test -f /usr/share/man/man1/mediafin.1.gz
-          echo "--- what the package actually installed ---"
+
+          echo "=== files the package installed ==="
           dpkg -L mediafin
-          echo "--- the service exists but must not be enabled ---"
-          # /lib is a symlink to /usr/lib on a usr-merged system, so accept
-          # either spelling rather than depend on which one dpkg chose.
-          test -f /usr/lib/systemd/system/mediafin.service \
-            || test -f /lib/systemd/system/mediafin.service
-          echo "--- the state directory belongs to the service user ---"
-          stat -c '%U %G %a' /var/lib/mediafin
-          test "$(stat -c '%U %a' /var/lib/mediafin)" = "mediafin 700"
-          echo "--- it serves HTTPS after a plain apt install ---"
+          echo "=== declared dependencies ==="
+          dpkg-deb --field mediafin-linux-x86_64.deb Package Version Depends Recommends
+
+          failed=0
+          check() {
+            if eval "$2" >/dev/null 2>&1; then
+              echo "ok    : $1"
+            else
+              echo "FAIL  : $1   [$2]"
+              failed=1
+            fi
+          }
+
+          check "binary is on PATH"            'command -v mediafin'
+          check "binary runs"                  'mediafin --help'
+          check "man page installed"           'test -f /usr/share/man/man1/mediafin.1.gz'
+          check "systemd unit installed"       'test -f /usr/lib/systemd/system/mediafin.service || test -f /lib/systemd/system/mediafin.service'
+          check "unit is NOT enabled"          '! test -e /etc/systemd/system/multi-user.target.wants/mediafin.service'
+          check "state dir is 0700 mediafin"   'test "$(stat -c "%U %a" /var/lib/mediafin)" = "mediafin 700"'
+          check "copyright installed"          'test -f /usr/share/doc/mediafin/copyright'
+          check "changelog installed"          'test -f /usr/share/doc/mediafin/changelog.Debian.gz'
+          check "no stray files at the root"   '! test -e /.shlibdeps'
+
+          echo "=== serves HTTPS after a plain apt install ==="
           export MEDIAFIN_CONFIG_DIR="$PWD/.deb-smoke"
           mediafin --port 8741 --bind local > deb.log 2>&1 &
           PID=$!
+          ready=0
           for _ in $(seq 1 60); do
-            curl -sk --max-time 2 https://127.0.0.1:8741/healthz >/dev/null 2>&1 && break
-            kill -0 $PID 2>/dev/null || { cat deb.log; exit 1; }
+            if curl -sk --max-time 2 https://127.0.0.1:8741/healthz >/dev/null 2>&1; then
+              ready=1; break
+            fi
+            kill -0 $PID 2>/dev/null || break
             sleep 0.5
           done
-          test "$(curl -sk --max-time 5 https://127.0.0.1:8741/healthz)" = "ok"
-          kill $PID
-          echo "--- removal leaves nothing behind ---"
+          if [ "$ready" = 1 ]; then
+            body="$(curl -sk --max-time 5 https://127.0.0.1:8741/healthz)"
+            check "healthz answers ok"         '[ "'"$body"'" = ok ]'
+          else
+            echo "FAIL  : server did not come up"
+            cat deb.log
+            failed=1
+          fi
+          kill $PID 2>/dev/null || true
+
+          echo "=== purge leaves nothing behind ==="
           apt-get purge -y -qq mediafin
-          test ! -e /usr/bin/mediafin
-          test ! -e /var/lib/mediafin
+          check "binary removed"               '! test -e /usr/bin/mediafin'
+          check "state dir removed"            '! test -e /var/lib/mediafin'
+
+          exit $failed
       - name: Publish to "latest" release
         uses: softprops/action-gh-release@v2
         with:
