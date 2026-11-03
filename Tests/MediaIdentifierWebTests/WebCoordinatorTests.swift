@@ -286,3 +286,108 @@ final class WebCoordinatorTests: XCTestCase {
         XCTAssertEqual(found.map(\.lastPathComponent), ["a.mkv", "b.mkv"])
     }
 }
+
+/// Tests the watch folder: that it starts and stops with the setting, that it
+/// only offers new files, and that it never renames on its own.
+final class WatchFolderTests: XCTestCase {
+
+    private var root: URL!
+    private var config: URL!
+    private var source: URL!
+    private var movies: URL!
+    private var coordinator: WebCoordinator!
+
+    override func setUpWithError() throws {
+        try super.setUpWithError()
+        root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("mediafin-watch-\(UUID().uuidString)")
+        config = root.appendingPathComponent("config")
+        source = root.appendingPathComponent("downloads")
+        movies = root.appendingPathComponent("Movies")
+        for directory in [config!, source!, movies!] {
+            try FileManager.default.createDirectory(at: directory,
+                                                    withIntermediateDirectories: true)
+        }
+        coordinator = WebCoordinator(configDirectory: config, watchInterval: 1)
+    }
+
+    override func tearDownWithError() throws {
+        coordinator = nil
+        if let root { try? FileManager.default.removeItem(at: root) }
+        try super.tearDownWithError()
+    }
+
+    private func settings(watching: Bool) -> WebSettings {
+        WebSettings(sourceFolder: source.path, moviesFolder: movies.path,
+                    identification: .offline, watchSourceFolder: watching)
+    }
+
+    private func makeFile(_ name: String) throws -> URL {
+        let url = source.appendingPathComponent(name)
+        try Data("not really a video".utf8).write(to: url)
+        return url
+    }
+
+    func testWatchingFollowsTheSetting() {
+        XCTAssertFalse(coordinator.isWatching, "off by default")
+
+        coordinator.executeForTesting(.saveSettings(settings(watching: true)))
+        XCTAssertTrue(coordinator.isWatching)
+        XCTAssertTrue(coordinator.snapshot.watchActive)
+
+        coordinator.executeForTesting(.saveSettings(settings(watching: false)))
+        XCTAssertFalse(coordinator.isWatching)
+        XCTAssertFalse(coordinator.snapshot.watchActive)
+    }
+
+    func testWatchingNeedsAnImportFolder() {
+        var incomplete = settings(watching: true)
+        incomplete.sourceFolder = ""
+        coordinator.executeForTesting(.saveSettings(incomplete))
+        XCTAssertFalse(coordinator.isWatching, "there is nothing to watch")
+    }
+
+    func testANewFileIsProposedButNotRenamed() throws {
+        coordinator.executeForTesting(.saveSettings(settings(watching: true)))
+        let original = try makeFile("The.Matrix.1999.1080p.mkv")
+
+        coordinator.pollWatchFolderForTesting()
+
+        XCTAssertEqual(coordinator.items.count, 1, "the new file should be proposed")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: original.path),
+                      "watching must never move a file on its own")
+        XCTAssertTrue((coordinator.snapshot.lastResult ?? "").contains("waiting for you"),
+                      coordinator.snapshot.lastResult ?? "nil")
+    }
+
+    func testTheSameFileIsNotOfferedTwice() throws {
+        coordinator.executeForTesting(.saveSettings(settings(watching: true)))
+        _ = try makeFile("The.Matrix.1999.mkv")
+
+        coordinator.pollWatchFolderForTesting()
+        XCTAssertTrue((coordinator.snapshot.lastResult ?? "").contains("appeared"),
+                      coordinator.snapshot.lastResult ?? "nil")
+
+        // Replace the message, so a second report would be visible.
+        coordinator.executeForTesting(.undoLastRename)
+        // A second poll finds nothing new, so it must not report anything.
+        coordinator.pollWatchFolderForTesting()
+        XCTAssertFalse((coordinator.snapshot.lastResult ?? "").contains("appeared"),
+                       coordinator.snapshot.lastResult ?? "nil")
+    }
+
+    func testNonVideoFilesAreIgnored() throws {
+        coordinator.executeForTesting(.saveSettings(settings(watching: true)))
+        _ = try makeFile("readme.txt")
+        coordinator.pollWatchFolderForTesting()
+        XCTAssertTrue(coordinator.items.isEmpty)
+        XCTAssertFalse((coordinator.snapshot.lastResult ?? "").contains("appeared"))
+    }
+
+    func testPollingDoesNothingWhenWatchingIsOff() throws {
+        coordinator.executeForTesting(.saveSettings(settings(watching: false)))
+        _ = try makeFile("The.Matrix.1999.mkv")
+        coordinator.pollWatchFolderForTesting()
+        XCTAssertTrue(coordinator.items.isEmpty)
+    }
+}

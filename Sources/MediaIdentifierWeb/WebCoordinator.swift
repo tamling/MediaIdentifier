@@ -36,6 +36,10 @@ public final class WebCoordinator: WebCommandSink, @unchecked Sendable {
 
     private let queue = DispatchQueue(label: "mediafin.coordinator", qos: .utility)
     private let lock = NSLock()
+    private let watchScanner = WatchFolderScanner()
+    private let watchInterval: TimeInterval
+    /// Only touched on `queue`.
+    private var watchTimer: DispatchSourceTimer?
 
     private let settingsStore: SettingsStore
     private let secretStore: SecretStore
@@ -53,7 +57,10 @@ public final class WebCoordinator: WebCommandSink, @unchecked Sendable {
     /// so instead of silently running on defaults.
     public let settingsProblem: String?
 
-    public init(configDirectory: URL) {
+    /// - Parameter watchInterval: how often the import folder is looked at
+    ///   when watching is on. Injectable so the tests do not wait.
+    public init(configDirectory: URL, watchInterval: TimeInterval = 15) {
+        self.watchInterval = max(1, watchInterval)
         settingsStore = SettingsStore(directory: configDirectory)
         secretStore = SecretStore(directory: configDirectory)
         log = RenameLog(url: configDirectory.appendingPathComponent("rename-log.json"))
@@ -76,6 +83,12 @@ public final class WebCoordinator: WebCommandSink, @unchecked Sendable {
             """
         }
         refreshSnapshotCounts()
+        // Not on the queue yet, so hand it over rather than touching the timer.
+        queue.async { [weak self] in self?.updateWatchState() }
+    }
+
+    deinit {
+        watchTimer?.cancel()
     }
 
     // MARK: State the interface reads
@@ -130,6 +143,7 @@ public final class WebCoordinator: WebCommandSink, @unchecked Sendable {
             try settingsStore.save(settings)
             lock.lock(); _settings = settings.normalised(); lock.unlock()
             update { $0.lastResult = "Settings saved." }
+            updateWatchState()
         } catch {
             update { $0.lastResult = "Settings could not be saved: \(error)" }
         }
@@ -363,6 +377,59 @@ public final class WebCoordinator: WebCommandSink, @unchecked Sendable {
         journal.clear()
         update { $0.lastResult = "History cleared." }
         refreshSnapshotCounts()
+    }
+
+    // MARK: Watching the import folder
+
+    /// True while the import folder is being watched.
+    var isWatching: Bool { queue.sync { watchTimer != nil } }
+
+    /// Starts or stops watching to match the settings. Runs on `queue`.
+    private func updateWatchState() {
+        let settings = self.settings
+        let shouldWatch = settings.watchSourceFolder && !settings.sourceFolder.isEmpty
+
+        if shouldWatch, watchTimer == nil {
+            watchScanner.reset()
+            let timer = DispatchSource.makeTimerSource(queue: queue)
+            timer.schedule(deadline: .now() + .milliseconds(Int(watchInterval * 1000)),
+                           repeating: watchInterval)
+            timer.setEventHandler { [weak self] in self?.pollWatchFolder() }
+            timer.resume()
+            watchTimer = timer
+        } else if !shouldWatch, watchTimer != nil {
+            watchTimer?.cancel()
+            watchTimer = nil
+        }
+        let watching = watchTimer != nil
+        update { $0.watchActive = watching }
+    }
+
+    /// Looks for files that have appeared since the last look.
+    ///
+    /// New files are only *offered*: they are scanned and proposed, never
+    /// renamed on their own. Moving someone's files without them having seen
+    /// the proposal is not something a watch setting should authorise.
+    private func pollWatchFolder() {
+        let settings = self.settings
+        guard settings.watchSourceFolder, !settings.sourceFolder.isEmpty,
+              !snapshot.busy, !snapshot.renaming else { return }
+
+        let root = URL(fileURLWithPath: settings.sourceFolder, isDirectory: true)
+        let appeared = watchScanner.poll(directory: root).filter(VideoFileTypes.isVideo)
+        guard !appeared.isEmpty else { return }
+
+        scanSourceFolder()
+        let count = appeared.count
+        update {
+            $0.lastResult = "\(count) new file\(count == 1 ? "" : "s") appeared in the import "
+                + "folder and \($0.totalItems == 1 ? "is" : "are") waiting for you to confirm."
+        }
+    }
+
+    /// Runs one poll synchronously. Tests only — the real one is on a timer.
+    func pollWatchFolderForTesting() {
+        queue.sync { self.pollWatchFolder() }
     }
 
     // MARK: Providers
