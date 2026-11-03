@@ -238,7 +238,9 @@ final class WebSecurityTests: XCTestCase {
 
     func testLogoutClearsTheCookie() throws {
         let gate = router()
-        let response = gate.respond(to: post("/logout", csrf: gate.csrf.value))
+        // Signing out is a state change like any other, so it needs a session.
+        let response = gate.respond(to: post("/logout", csrf: gate.csrf.value,
+                                             headers: ["authorization": "Bearer \(token)"]))
         XCTAssertEqual(response.status, 303)
         XCTAssertEqual(response.headers["Location"], "/login")
         let cookie = try XCTUnwrap(response.headers["Set-Cookie"])
