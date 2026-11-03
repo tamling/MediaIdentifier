@@ -37,6 +37,39 @@ enum Gtk {
         UnsafeMutableRawPointer(widget).assumingMemoryBound(to: GtkLabel.self)
     }
 
+    static func entry(_ widget: UnsafeMutablePointer<GtkWidget>) -> UnsafeMutablePointer<GtkEntry> {
+        UnsafeMutableRawPointer(widget).assumingMemoryBound(to: GtkEntry.self)
+    }
+
+    static func comboBox(
+        _ widget: UnsafeMutablePointer<GtkWidget>
+    ) -> UnsafeMutablePointer<GtkComboBox> {
+        UnsafeMutableRawPointer(widget).assumingMemoryBound(to: GtkComboBox.self)
+    }
+
+    static func comboBoxText(
+        _ widget: UnsafeMutablePointer<GtkWidget>
+    ) -> UnsafeMutablePointer<GtkComboBoxText> {
+        UnsafeMutableRawPointer(widget).assumingMemoryBound(to: GtkComboBoxText.self)
+    }
+
+    static func expander(
+        _ widget: UnsafeMutablePointer<GtkWidget>
+    ) -> UnsafeMutablePointer<GtkExpander> {
+        UnsafeMutableRawPointer(widget).assumingMemoryBound(to: GtkExpander.self)
+    }
+
+    /// The text in an entry. GTK owns the buffer, so this copies it and does
+    /// not free it — the usual mistake in both directions.
+    static func text(of widget: UnsafeMutablePointer<GtkWidget>) -> String {
+        guard let raw = gtk_entry_get_text(entry(widget)) else { return "" }
+        return String(cString: raw)
+    }
+
+    static func setText(of widget: UnsafeMutablePointer<GtkWidget>, _ value: String) {
+        gtk_entry_set_text(entry(widget), value)
+    }
+
     static func toggleButton(
         _ widget: UnsafeMutablePointer<GtkWidget>
     ) -> UnsafeMutablePointer<GtkToggleButton> {

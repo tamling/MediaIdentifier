@@ -188,7 +188,7 @@ if let demoLayout {
     }
 }
 
-private let mainWindow = AppWindow(coordinator: coordinator)
+private let mainWindow = AppWindow(coordinator: coordinator, expandSettings: options.demo)
 Pending.window = mainWindow.widget
 
 // The coordinator works on its own queue and cannot call into GTK, which may

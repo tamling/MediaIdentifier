@@ -25,6 +25,10 @@ final class AppWindow {
     private let applyButton: UnsafeMutablePointer<GtkWidget>
     private let undoButton: UnsafeMutablePointer<GtkWidget>
     private let listColumn: UnsafeMutablePointer<GtkWidget>
+    private let modeCombo: UnsafeMutablePointer<GtkWidget>
+    private let llmURLEntry: UnsafeMutablePointer<GtkWidget>
+    private let llmModelEntry: UnsafeMutablePointer<GtkWidget>
+    private let llmKeyEntry: UnsafeMutablePointer<GtkWidget>
 
     /// The rows currently on screen, kept so they can be destroyed without
     /// walking the container — which would mean another C callback.
@@ -41,7 +45,10 @@ final class AppWindow {
     /// the first build and leave the empty-state line unwritten.
     private var renderedItemIDs: [UUID]?
 
-    init(coordinator: AppCoordinator) {
+    /// - Parameter expandSettings: opens the identification section instead
+    ///   of leaving it collapsed. Used by --demo, so the screenshot shows
+    ///   those fields rendered rather than only proving they were built.
+    init(coordinator: AppCoordinator, expandSettings: Bool = false) {
         self.coordinator = coordinator
 
         let window = gtk_window_new(GTK_WINDOW_TOPLEVEL)!
@@ -85,6 +92,39 @@ final class AppWindow {
         gtk_box_pack_end(Gtk.box(saveRow), saveButton, 0, 0, 0)
         Self.add(saveRow, to: folders)
         gtk_box_pack_start(Gtk.box(page), folders, 0, 0, 0)
+
+        // MARK: Identification
+        //
+        // Behind an expander, collapsed: it is set once and then never looked
+        // at again, and leaving it open would take height away from the list,
+        // which is what the window is actually for.
+        modeCombo = gtk_combo_box_text_new()!
+        for mode in IdentificationMode.allCases {
+            gtk_combo_box_text_append_text(Gtk.comboBoxText(modeCombo), mode.label)
+        }
+        llmURLEntry = Self.entry(placeholder: "http://192.168.1.2:1234")
+        llmModelEntry = Self.entry(placeholder: "qwen/qwen3-8b")
+        // Never shown, never read back out of storage: the field stays empty
+        // and its placeholder says whether a key is on file. Filling it in
+        // from the secret store would put the key on screen and into any
+        // screenshot of this window.
+        llmKeyEntry = Self.entry(placeholder: "")
+        gtk_entry_set_visibility(Gtk.entry(llmKeyEntry), 0)
+
+        let detection = Self.card(titled: "Erkennung")
+        Self.add(Self.row("Verfahren", modeCombo), to: detection)
+        Self.add(Self.row("Server", llmURLEntry), to: detection)
+        Self.add(Self.row("Modell", llmModelEntry), to: detection)
+        Self.add(Self.row("API-Key", llmKeyEntry), to: detection)
+        let testRow = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8)!
+        let testButton = gtk_button_new_with_label("Verbindung testen")!
+        gtk_box_pack_end(Gtk.box(testRow), testButton, 0, 0, 0)
+        Self.add(testRow, to: detection)
+
+        let detectionExpander = gtk_expander_new("Erkennung und Modellserver")!
+        gtk_expander_set_expanded(Gtk.expander(detectionExpander), expandSettings ? 1 : 0)
+        gtk_container_add(Gtk.container(detectionExpander), detection)
+        gtk_box_pack_start(Gtk.box(page), detectionExpander, 0, 0, 0)
 
         // MARK: Proposals
 
@@ -136,6 +176,7 @@ final class AppWindow {
         Gtk.onClick(undoButton, self) { $0.undoLast() }
         Gtk.onClick(allButton, self) { $0.setAllChecked(true) }
         Gtk.onClick(noneButton, self) { $0.setAllChecked(false) }
+        Gtk.onClick(testButton, self) { $0.testModelServer() }
 
         loadFolders()
         refresh()
@@ -151,13 +192,41 @@ final class AppWindow {
     /// fails silently for a path that no longer exists, so an unmounted drive
     /// would otherwise wipe the stored library path on the next save.
     func saveFolders() {
-        let settings = FolderSelection.applying(
+        var settings = FolderSelection.applying(
             source: Gtk.chosenFolder(sourceChooser),
             movies: Gtk.chosenFolder(moviesChooser),
             series: Gtk.chosenFolder(seriesChooser),
             to: coordinator.settings
         )
+
+        // Text boxes are taken at face value, unlike the folder choosers: an
+        // empty box means the user emptied it, while an empty chooser may
+        // only mean GTK could not display a path that no longer exists.
+        settings.localLLMBaseURL =
+            Gtk.text(of: llmURLEntry).trimmingCharacters(in: .whitespacesAndNewlines)
+        settings.localLLMModel =
+            Gtk.text(of: llmModelEntry).trimmingCharacters(in: .whitespacesAndNewlines)
+        let mode = Int(gtk_combo_box_get_active(Gtk.comboBox(modeCombo)))
+        if mode >= 0, mode < IdentificationMode.allCases.count {
+            settings.identification = IdentificationMode.allCases[mode]
+        }
         coordinator.submit(.saveSettings(settings))
+
+        // Only when something was typed. An empty field means "leave the
+        // stored key alone", not "delete it" — otherwise saving a folder
+        // would wipe a credential the user never touched.
+        let key = Gtk.text(of: llmKeyEntry)
+        if !key.isEmpty {
+            coordinator.submit(.setSecret(.localLLMAPIKey, key))
+            Gtk.setText(of: llmKeyEntry, "")
+        }
+    }
+
+    /// Saves first: testing an address the user typed but has not saved would
+    /// report on the old one and look like the new one failed.
+    func testModelServer() {
+        saveFolders()
+        coordinator.submit(.testLocalLLMConnection)
     }
 
     /// Saving first, so pressing "Durchsuchen" straight after picking a folder
@@ -191,6 +260,18 @@ final class AppWindow {
         Gtk.setChosenFolder(sourceChooser, settings.sourceFolder)
         Gtk.setChosenFolder(moviesChooser, settings.moviesFolder)
         Gtk.setChosenFolder(seriesChooser, settings.seriesFolder)
+
+        Gtk.setText(of: llmURLEntry, settings.localLLMBaseURL)
+        Gtk.setText(of: llmModelEntry, settings.localLLMModel)
+        if let index = IdentificationMode.allCases.firstIndex(of: settings.identification) {
+            gtk_combo_box_set_active(Gtk.comboBox(modeCombo), Int32(index))
+        }
+        // The key itself is never loaded — only whether there is one.
+        let stored = coordinator.configuredSecrets.contains(.localLLMAPIKey)
+        gtk_entry_set_placeholder_text(
+            Gtk.entry(llmKeyEntry),
+            stored ? "gespeichert — zum Ersetzen neu eingeben" : "keiner hinterlegt"
+        )
     }
 
     // MARK: Reading the engine back
@@ -322,6 +403,14 @@ final class AppWindow {
                             to card: UnsafeMutablePointer<GtkWidget>,
                             expand: Bool = false) {
         gtk_box_pack_start(Gtk.box(card), child, expand ? 1 : 0, expand ? 1 : 0, 0)
+    }
+
+    private static func entry(placeholder: String) -> UnsafeMutablePointer<GtkWidget> {
+        let field = gtk_entry_new()!
+        if !placeholder.isEmpty {
+            gtk_entry_set_placeholder_text(Gtk.entry(field), placeholder)
+        }
+        return field
     }
 
     private static func folderChooser(_ title: String) -> UnsafeMutablePointer<GtkWidget> {
