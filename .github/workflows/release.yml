@@ -11,6 +11,10 @@ jobs:
     name: Build & publish .app
     runs-on: macos-15
     timeout-minutes: 60
+    # Serialised against the Linux job only so the two do not both try to
+    # create the release tag. Linux goes first: its artefacts are the ones
+    # people are usually waiting for, and the Mac build is the slower half.
+    needs: linux
     steps:
       - uses: actions/checkout@v4
       - uses: maxim-lobanov/setup-xcode@v1
@@ -120,7 +124,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     container: swift:6.0-jammy
-    needs: release
     steps:
       - uses: actions/checkout@v4
       - name: Build (Release, static stdlib)
