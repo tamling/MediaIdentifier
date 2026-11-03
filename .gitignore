@@ -22,3 +22,8 @@ Package.resolved
 *.tar.gz
 Mediafin.app.zip
 dist/
+
+# Screenshots the GTK job renders, pulled down to look at. Regenerated on
+# every build, so keeping them would only add weight and go stale.
+gtk-window.png
+window.png
