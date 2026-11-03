@@ -147,16 +147,38 @@ jobs:
             exit 1
           fi
           ldd .build/release/mediafin
-      - name: Package the tarball
+      # Copied out before anything else is built. The next step compiles the
+      # GTK front-end without --static-swift-stdlib, and SwiftPM shares one
+      # build directory: a rebuild with different flags can replace the
+      # static binary with a dynamic one, and the release would then need a
+      # Swift installation it promises not to need.
+      - name: Set the server binary aside
         shell: bash
         run: |
           set -euo pipefail
           install -d dist
           install -m 755 .build/release/mediafin dist/mediafin
+      - name: Build the native window
+        shell: bash
+        run: |
+          set -euo pipefail
+          apt-get update -qq
+          apt-get install -y -qq pkg-config libgtk-3-dev
+          # Not static: it links the system's GTK anyway, so a static Swift
+          # runtime would only add weight it cannot avoid paying elsewhere.
+          swift build -c release --product mediafin-gtk
+          install -m 755 .build/release/mediafin-gtk dist/mediafin-gtk
+          .build/release/mediafin-gtk --version
+      - name: Package the tarball
+        shell: bash
+        run: |
+          set -euo pipefail
           install -m 644 LICENSE dist/LICENSE
           install -m 644 README.md dist/README.md
           tar -czf mediafin-linux-x86_64.tar.gz -C dist .
           sha256sum mediafin-linux-x86_64.tar.gz
+          echo "contents:"
+          tar -tzf mediafin-linux-x86_64.tar.gz | sed 's/^/  /'
       - name: Build the .deb
         shell: bash
         run: |
@@ -166,7 +188,10 @@ jobs:
           # installed here: it only reports style, and it drags in a large
           # Perl dependency tree on every release.
           apt-get install -y -qq dpkg-dev
-          ./tools/build-deb.sh
+          # Both binaries by path, from dist/ rather than from the build
+          # directory: dist/mediafin is the static one captured before the
+          # GTK build, which is the whole point of having set it aside.
+          ./tools/build-deb.sh --binary dist/mediafin --gtk-binary dist/mediafin-gtk
           # The version lives in the package metadata; the asset name stays
           # stable so each release replaces the last instead of piling up.
           cp mediafin_*.deb mediafin-linux-x86_64.deb
@@ -206,6 +231,17 @@ jobs:
 
           check "binary is on PATH"            'command -v mediafin'
           check "binary runs"                  'mediafin --help'
+          check "window binary is on PATH"     'command -v mediafin-gtk'
+          # --version needs no display, so it is the one way to prove the
+          # window binary actually runs inside a container.
+          check "window binary runs"           'mediafin-gtk --version'
+          check "desktop entry installed"      'test -f /usr/share/applications/mediafin.desktop'
+          check "desktop entry points at it"   'grep -q "^Exec=mediafin-gtk$" /usr/share/applications/mediafin.desktop'
+          # The package must pull GTK in, or the menu entry starts nothing.
+          check "GTK is a declared dependency" 'dpkg-deb --field mediafin-linux-x86_64.deb Depends | grep -q libgtk-3-0'
+          # Both report the same version, which is the reason it is read from
+          # one source rather than written in two.
+          check "versions agree"               'dpkg-deb --field mediafin-linux-x86_64.deb Version | grep -q "^$(mediafin-gtk --version | sed "s/^Mediafin //")"'
           # Asserted against the package, not the filesystem: the Ubuntu base
           # image ships /etc/dpkg/dpkg.cfg.d/excludes with
           # "path-exclude /usr/share/man/*", so dpkg lists the man page in
