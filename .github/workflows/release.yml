@@ -186,7 +186,7 @@ jobs:
           # curl is not in the Swift container, and the HTTPS check below hides
           # stderr, so without this the "server did not come up" verdict would
           # really mean "curl: command not found", sixty times over.
-          apt-get install -y -qq curl
+          apt-get install -y -qq curl file
           apt-get install -y -qq ./mediafin-linux-x86_64.deb
 
           echo "=== files the package installed ==="
@@ -224,6 +224,12 @@ jobs:
           # would therefore chmod / to 0700 on install. CI runs as root, which
           # hides the damage, so assert on the archive instead.
           check "package root is 0755"         'test "$(dpkg-deb -c mediafin-linux-x86_64.deb | awk "\$NF == \"./\" { print \$1 }")" = drwxr-xr-x'
+          # dpkg-deb defaults to zstd here, but apt is built without zstd on
+          # Debian-based systems, where it then refuses the file outright:
+          # "E: Unsupported file ... given on commandline". CI's own apt reads
+          # zstd fine, so only an assertion on the archive catches this.
+          check "not zstd-compressed"          '! file mediafin-linux-x86_64.deb | grep -q zst'
+          check "xz-compressed"                'file mediafin-linux-x86_64.deb | grep -q "data compression xz"'
 
           echo "=== serves HTTPS after a plain apt install ==="
           export MEDIAFIN_CONFIG_DIR="$PWD/.deb-smoke"

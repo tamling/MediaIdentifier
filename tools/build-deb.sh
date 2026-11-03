@@ -340,7 +340,14 @@ chmod 755 "$STAGE/DEBIAN/postrm"
 echo "==> Building $PACKAGE"
 # Deterministic ownership: the staging tree is built as whatever user runs
 # this, but everything in the package belongs to root.
-dpkg-deb --root-owner-group --build "$STAGE" "$PACKAGE" >/dev/null
+# xz, not dpkg-deb's default. Modern dpkg defaults to zstd, but apt can only
+# take a .deb on the command line if it can read that .deb's control member
+# itself, and apt is built without zstd on Debian-based systems (LMDE, Debian
+# up to bullseye). There it refuses the file with
+#   E: Unsupported file ./mediafin-linux-x86_64.deb given on commandline
+# which reads like a corrupt download and is not one. xz is understood
+# everywhere, costs a few seconds more to build, and compresses better.
+dpkg-deb --root-owner-group -Zxz --build "$STAGE" "$PACKAGE" >/dev/null
 ls -l "$PACKAGE"
 
 echo "==> Verifying"
