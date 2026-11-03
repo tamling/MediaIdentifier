@@ -103,11 +103,12 @@ else
   echo "==> Building mediafin (release, static Swift runtime)"
   swift build -c release --product mediafin --static-swift-stdlib
   BIN=.build/release/mediafin
-  # Two invocations because SwiftPM takes one --product at a time. The GUI is
-  # not static: it links GTK from the system anyway, so a static Swift runtime
-  # would only add weight it cannot avoid paying for elsewhere.
-  echo "==> Building mediafin-gtk (release)"
-  swift build -c release --product mediafin-gtk
+  # Two invocations because SwiftPM takes one --product at a time. Both
+  # static: linking GTK from the system says nothing about Swift's own
+  # runtime, and without this the window needs libswiftCore.so and dies with
+  # a loader error on any machine that has no Swift installation.
+  echo "==> Building mediafin-gtk (release, static Swift runtime)"
+  swift build -c release --product mediafin-gtk --static-swift-stdlib
   PREBUILT_GTK=.build/release/mediafin-gtk
 fi
 [ -x "$BIN" ] || { echo "FAIL: $BIN is not executable" >&2; exit 1; }
