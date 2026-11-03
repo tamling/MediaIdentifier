@@ -5,7 +5,8 @@ import PackageDescription
 // evaluated on the build machine, so excluding that target on Linux lets
 // `swift build` / `swift test` work there for the portable parts.
 var products: [Product] = [
-    .library(name: "MediaIdentifierCore", targets: ["MediaIdentifierCore"])
+    .library(name: "MediaIdentifierCore", targets: ["MediaIdentifierCore"]),
+    .library(name: "MediaIdentifierWeb", targets: ["MediaIdentifierWeb"]),
 ]
 
 var targets: [Target] = [
@@ -19,7 +20,30 @@ var targets: [Target] = [
         name: "MediaIdentifierCoreTests",
         dependencies: ["MediaIdentifierCore"],
         path: "Tests/MediaIdentifierCoreTests"
-    )
+    ),
+    // HTTPS server for the local web interface. Separate target so the Core
+    // stays dependency-free: only this one pulls in SwiftNIO.
+    .target(
+        name: "MediaIdentifierWeb",
+        dependencies: [
+            "MediaIdentifierCore",
+            .product(name: "NIOCore", package: "swift-nio"),
+            .product(name: "NIOPosix", package: "swift-nio"),
+            .product(name: "NIOHTTP1", package: "swift-nio"),
+            .product(name: "NIOSSL", package: "swift-nio-ssl"),
+        ],
+        path: "Sources/MediaIdentifierWeb"
+    ),
+    .testTarget(
+        name: "MediaIdentifierWebTests",
+        dependencies: [
+            "MediaIdentifierWeb",
+            .product(name: "NIOCore", package: "swift-nio"),
+            .product(name: "NIOPosix", package: "swift-nio"),
+            .product(name: "NIOSSL", package: "swift-nio-ssl"),
+        ],
+        path: "Tests/MediaIdentifierWebTests"
+    ),
 ]
 
 #if os(macOS)
@@ -44,5 +68,11 @@ let package = Package(
         .macOS(.v13)
     ],
     products: products,
+    dependencies: [
+        // NIOSSL vendors its own BoringSSL, so TLS needs no system OpenSSL on
+        // either macOS or Linux.
+        .package(url: "https://github.com/apple/swift-nio.git", from: "2.65.0"),
+        .package(url: "https://github.com/apple/swift-nio-ssl.git", from: "2.25.0"),
+    ],
     targets: targets
 )

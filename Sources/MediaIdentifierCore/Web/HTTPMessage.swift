@@ -85,28 +85,41 @@ public struct HTTPResponse: Sendable, Equatable {
     /// browser.
     public func serialized(omitBody: Bool = false) -> Data {
         var head = "HTTP/1.1 \(status) \(HTTPResponse.reason(for: status))\r\n"
-        head += "Content-Type: \(contentType)\r\n"
-        head += "Content-Length: \(body.count)\r\n"
-        head += "X-Content-Type-Options: nosniff\r\n"
-        head += "Cache-Control: no-store\r\n"
-        head += "Referrer-Policy: no-referrer\r\n"
-        head += "X-Frame-Options: DENY\r\n"
+        for header in wireHeaders() {
+            head += "\(header.name): \(header.value)\r\n"
+        }
+        head += "\r\n"
+        return omitBody ? Data(head.utf8) : Data(head.utf8) + body
+    }
+
+    /// Every header to send, in order: the fixed hardening set followed by the
+    /// response's own. Shared, so a transport that writes headers itself (the
+    /// NIO server) cannot drift from `serialized()`.
+    public func wireHeaders() -> [(name: String, value: String)] {
+        var result: [(name: String, value: String)] = [
+            ("Content-Type", contentType),
+            ("Content-Length", String(body.count)),
+            ("X-Content-Type-Options", "nosniff"),
+            ("Cache-Control", "no-store"),
+            ("Referrer-Policy", "no-referrer"),
+            ("X-Frame-Options", "DENY"),
+        ]
         if contentType.hasPrefix("text/html") {
             // The interface uses no JavaScript at all, so scripting can be
             // forbidden outright: an injected <script> would not execute.
-            head += "Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; "
-            head += "img-src 'self' data:; form-action 'self'; base-uri 'none'; "
-            head += "frame-ancestors 'none'\r\n"
+            result.append(("Content-Security-Policy",
+                           "default-src 'none'; style-src 'unsafe-inline'; "
+                               + "img-src 'self' data:; form-action 'self'; "
+                               + "base-uri 'none'; frame-ancestors 'none'"))
         }
-        head += "Connection: close\r\n"
+        result.append(("Connection", "close"))
         for (name, value) in headers.sorted(by: { $0.key < $1.key }) {
             // Strip CR/LF so a header value can never inject extra headers.
             let clean = value.replacingOccurrences(of: "\r", with: "")
                 .replacingOccurrences(of: "\n", with: "")
-            head += "\(name): \(clean)\r\n"
+            result.append((name, clean))
         }
-        head += "\r\n"
-        return omitBody ? Data(head.utf8) : Data(head.utf8) + body
+        return result
     }
 
     public static func reason(for status: Int) -> String {
@@ -225,8 +238,9 @@ public struct HTTPRequestParser {
         return HTTPRequest(method: method, path: path, query: query, headers: headers)
     }
 
-    /// Splits `/a/b?x=1&y=2` into its decoded path and parameters.
-    static func splitTarget(_ target: String) -> (path: String, query: [String: String]) {
+    /// Splits `/a/b?x=1&y=2` into its decoded path and parameters. Public so a
+    /// transport that parses the request line itself still routes identically.
+    public static func splitTarget(_ target: String) -> (path: String, query: [String: String]) {
         let pieces = target.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false)
         let rawPath = pieces.first.map(String.init) ?? "/"
         let path = rawPath.removingPercentEncoding ?? rawPath
