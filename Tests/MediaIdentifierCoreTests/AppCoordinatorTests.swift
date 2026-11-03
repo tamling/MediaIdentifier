@@ -1,18 +1,17 @@
 import XCTest
-import MediaIdentifierCore
-@testable import MediaIdentifierWeb
+@testable import MediaIdentifierCore
 
 /// Tests that the commands the interface submits actually do something: real
 /// files on disk get scanned, renamed and undone, and settings and secrets
 /// survive.
-final class WebCoordinatorTests: XCTestCase {
+final class AppCoordinatorTests: XCTestCase {
 
     private var root: URL!
     private var config: URL!
     private var source: URL!
     private var movies: URL!
     private var series: URL!
-    private var coordinator: WebCoordinator!
+    private var coordinator: AppCoordinator!
 
     override func setUpWithError() throws {
         try super.setUpWithError()
@@ -26,7 +25,7 @@ final class WebCoordinatorTests: XCTestCase {
             try FileManager.default.createDirectory(at: directory,
                                                     withIntermediateDirectories: true)
         }
-        coordinator = WebCoordinator(configDirectory: config)
+        coordinator = AppCoordinator(configDirectory: config)
     }
 
     override func tearDownWithError() throws {
@@ -61,7 +60,7 @@ final class WebCoordinatorTests: XCTestCase {
         run(.saveSettings(configuredSettings()))
         XCTAssertEqual(coordinator.settings.sourceFolder, source.path)
 
-        let restarted = WebCoordinator(configDirectory: config)
+        let restarted = AppCoordinator(configDirectory: config)
         XCTAssertEqual(restarted.settings.moviesFolder, movies.path)
         XCTAssertEqual(restarted.settings.conflictPolicy, .rename)
     }
@@ -233,11 +232,11 @@ final class WebCoordinatorTests: XCTestCase {
     }
 
     func testStatusDescriptionsAreActionable() {
-        XCTAssertTrue(WebCoordinator.describe(status: 200, service: "model server")
+        XCTAssertTrue(AppCoordinator.describe(status: 200, service: "model server")
             .contains("works"))
-        XCTAssertTrue(WebCoordinator.describe(status: 401, service: "Jellyfin")
+        XCTAssertTrue(AppCoordinator.describe(status: 401, service: "Jellyfin")
             .contains("API key"))
-        XCTAssertTrue(WebCoordinator.describe(status: 404, service: "Jellyfin")
+        XCTAssertTrue(AppCoordinator.describe(status: 404, service: "Jellyfin")
             .contains("URL"))
     }
 
@@ -289,7 +288,7 @@ final class WebCoordinatorTests: XCTestCase {
         _ = try makeFile("b.mkv")
         _ = try makeFile("a.mkv")
         _ = try makeFile(".hidden.mkv")
-        let found = WebCoordinator.FolderScan.videoFiles(under: source)
+        let found = AppCoordinator.FolderScan.videoFiles(under: source)
         XCTAssertEqual(found.map(\.lastPathComponent), ["a.mkv", "b.mkv"])
     }
 }
@@ -302,7 +301,7 @@ final class WatchFolderTests: XCTestCase {
     private var config: URL!
     private var source: URL!
     private var movies: URL!
-    private var coordinator: WebCoordinator!
+    private var coordinator: AppCoordinator!
 
     override func setUpWithError() throws {
         try super.setUpWithError()
@@ -315,7 +314,7 @@ final class WatchFolderTests: XCTestCase {
             try FileManager.default.createDirectory(at: directory,
                                                     withIntermediateDirectories: true)
         }
-        coordinator = WebCoordinator(configDirectory: config, watchInterval: 1)
+        coordinator = AppCoordinator(configDirectory: config, watchInterval: 1)
     }
 
     override func tearDownWithError() throws {

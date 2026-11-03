@@ -1,6 +1,5 @@
 import XCTest
-import MediaIdentifierCore
-@testable import MediaIdentifierWeb
+@testable import MediaIdentifierCore
 
 /// Cancelling a conversion run.
 ///
@@ -17,7 +16,7 @@ import MediaIdentifierCore
 final class ConversionCancelTests: XCTestCase {
 
     private var root: URL!
-    private var coordinator: WebCoordinator!
+    private var coordinator: AppCoordinator!
 
     override func setUpWithError() throws {
         try super.setUpWithError()
@@ -25,7 +24,7 @@ final class ConversionCancelTests: XCTestCase {
             .appendingPathComponent("mediafin-cancel-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root.appendingPathComponent("config"),
                                                 withIntermediateDirectories: true)
-        coordinator = WebCoordinator(configDirectory: root.appendingPathComponent("config"))
+        coordinator = AppCoordinator(configDirectory: root.appendingPathComponent("config"))
     }
 
     override func tearDownWithError() throws {

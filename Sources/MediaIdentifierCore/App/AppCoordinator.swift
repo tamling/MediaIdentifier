@@ -2,14 +2,20 @@ import Foundation
 #if canImport(FoundationNetworking)
 import FoundationNetworking
 #endif
-import MediaIdentifierCore
 
-/// Carries out the commands the web interface submits.
+/// Carries out the commands a front-end submits.
+///
+/// This is the engine both interfaces drive: the web UI and the native GTK
+/// window send the same `WebCommand` values here and read the same snapshot
+/// back. It lives in Core rather than beside the HTTP server because it never
+/// needed the server — only `WebServer.swift` imports SwiftNIO — and leaving
+/// it there would have meant either a second copy of this logic for the GTK
+/// front-end, or that front-end linking a web server it never starts.
 ///
 /// Every command runs on one serial queue, so two scans or a scan and a rename
 /// can never interleave, and requests are never made to wait: they submit and
 /// return, and progress is reported back through `snapshot`.
-public final class WebCoordinator: WebCommandSink, @unchecked Sendable {
+public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
     /// Finds media below a folder.
     public struct FolderScan: Sendable {
         /// Hard limit so pointing Mediafin at a huge tree cannot exhaust

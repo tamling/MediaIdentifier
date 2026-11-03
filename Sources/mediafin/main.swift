@@ -94,7 +94,7 @@ if case .pemFiles(let chain, _)? = tlsSource {
 // MARK: Server
 
 let server = WebServer()
-let coordinator = WebCoordinator(configDirectory: configDirectory)
+let coordinator = AppCoordinator(configDirectory: configDirectory)
 
 if let problem = coordinator.settingsProblem {
     report("""
