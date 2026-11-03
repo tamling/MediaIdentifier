@@ -48,6 +48,15 @@ starting a server that exposes your library should be your decision. See the
 comments at the top of `/usr/lib/systemd/system/mediafin.service` before
 `systemctl enable --now mediafin`.
 
+If you would rather not wait for a release, build the package yourself from
+the published tarball — this needs `dpkg-dev` but no Swift:
+
+```bash
+tar -xzf mediafin-linux-x86_64.tar.gz
+./tools/build-deb.sh --binary ./mediafin
+sudo apt install ./mediafin_*.deb
+```
+
 Elsewhere, take the tarball — same binary, no package management:
 
 ```bash

@@ -7,13 +7,40 @@
 # `apt install ./mediafin_*.deb` pulls exactly what the binary needs. Guessing
 # that list is how a package ends up almost working.
 #
-#   ./tools/build-deb.sh            # builds, then verifies the package
+#   ./tools/build-deb.sh                    # build from source, then package
+#   ./tools/build-deb.sh --binary ./mediafin  # package a binary you already have
 #
-# Needs: dpkg-dev (dpkg-shlibdeps, dpkg-deb), and a Swift toolchain to build.
+# The second form needs no Swift toolchain, so you can turn the published
+# tarball into a .deb on the machine you want to install it on:
+#
+#   tar -xzf mediafin-linux-x86_64.tar.gz
+#   ./tools/build-deb.sh --binary ./mediafin
+#
+# Needs: dpkg-dev (dpkg-shlibdeps, dpkg-deb). A Swift toolchain only for the
+# first form.
 #
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
+
+PREBUILT=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --binary)
+      [ $# -ge 2 ] || { echo "--binary needs a path" >&2; exit 2; }
+      PREBUILT="$2"
+      shift 2
+      ;;
+    -h|--help)
+      sed -n '2,20p' "$0"
+      exit 0
+      ;;
+    *)
+      echo "Unknown option: $1 (try --help)" >&2
+      exit 2
+      ;;
+  esac
+done
 
 ARCH="$(dpkg --print-architecture)"
 VERSION="${MEDIAFIN_VERSION:-}"
@@ -26,10 +53,23 @@ PACKAGE="mediafin_${VERSION}_${ARCH}.deb"
 STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
 
-echo "==> Building mediafin (release, static Swift runtime)"
-swift build -c release --product mediafin --static-swift-stdlib
-BIN=.build/release/mediafin
-[ -x "$BIN" ] || { echo "FAIL: no binary at $BIN" >&2; exit 1; }
+if [ -n "$PREBUILT" ]; then
+  echo "==> Using the binary you supplied: $PREBUILT"
+  BIN="$PREBUILT"
+  [ -f "$BIN" ] || { echo "FAIL: no file at $BIN" >&2; exit 1; }
+  # A wrong file here would produce a package that installs and then fails,
+  # so check it is actually an executable for this machine before packaging.
+  case "$(file -b "$BIN" 2>/dev/null)" in
+    *ELF*executable*|*ELF*shared\ object*) : ;;
+    *) echo "FAIL: $BIN is not a Linux executable" >&2; exit 1 ;;
+  esac
+  chmod +x "$BIN" 2>/dev/null || true
+else
+  echo "==> Building mediafin (release, static Swift runtime)"
+  swift build -c release --product mediafin --static-swift-stdlib
+  BIN=.build/release/mediafin
+fi
+[ -x "$BIN" ] || { echo "FAIL: $BIN is not executable" >&2; exit 1; }
 
 echo "==> Staging the package tree"
 install -D -m 755 "$BIN"       "$STAGE/usr/bin/mediafin"
