@@ -166,7 +166,7 @@ public enum StatusHTTP {
     /// Minimal read-only dashboard with a 2s auto-refresh.
     public static func html(_ s: StatusSnapshot) -> String {
         let stateLabel = s.hasError ? "Error" : (s.busy ? "Busy (\(s.activePercent) %)" : "Ready")
-        let stateColor = s.hasError ? "#e05a4f" : (s.busy ? "#f0a020" : "#36c98d")
+        let stateColor = s.hasError ? Palette.error : (s.busy ? Palette.busy : Palette.ok)
         // The shared escaper, not a local one. This page renders filenames and
         // interpolates into attribute context elsewhere in the same template,
         // so it needs quotes escaped too — which the local version it used to
@@ -202,19 +202,19 @@ public enum StatusHTTP {
         <title>Mediafin – Status</title>
         <style>
           :root { color-scheme: dark; }
-          body { font-family: -apple-system, system-ui, sans-serif; background:#16161a; color:#e6e6ea;
+          body { font-family: -apple-system, system-ui, sans-serif; background:\(Palette.background); color:\(Palette.text);
                  margin:0; padding:32px; }
-          .card { max-width:640px; margin:0 auto; background:#1e1e24; border:1px solid #2a2a32;
+          .card { max-width:640px; margin:0 auto; background:\(Palette.surface); border:1px solid \(Palette.border);
                   border-radius:16px; padding:24px 28px; }
           h1 { font-size:18px; margin:0 0 4px; }
-          .sub { color:#8a8a92; font-size:13px; margin-bottom:20px; }
+          .sub { color:\(Palette.textMuted); font-size:13px; margin-bottom:20px; }
           .badge { display:inline-block; padding:6px 14px; border-radius:999px; font-weight:700;
                    background:\(stateColor)22; color:\(stateColor); border:1px solid \(stateColor)55; }
           table { width:100%; border-collapse:collapse; margin-top:18px; }
-          td { padding:9px 4px; border-bottom:1px solid #26262e; font-size:14px; vertical-align:top; }
-          td.k { color:#8a8a92; width:40%; }
-          td.v { color:#e6e6ea; font-variant-numeric:tabular-nums; }
-          .foot { color:#6a6a72; font-size:12px; margin-top:18px; }
+          td { padding:9px 4px; border-bottom:1px solid \(Palette.surfaceRaised); font-size:14px; vertical-align:top; }
+          td.k { color:\(Palette.textMuted); width:40%; }
+          td.v { color:\(Palette.text); font-variant-numeric:tabular-nums; }
+          .foot { color:\(Palette.textMuted); font-size:12px; margin-top:18px; }
         </style></head>
         <body><div class="card">
           <h1>Mediafin</h1>

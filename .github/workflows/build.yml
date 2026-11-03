@@ -127,11 +127,10 @@ jobs:
           # seconds timing out against it and floods the log.
           NO_AT_BRIDGE: "1"
           GTK_A11Y: none
-          # Pin the theme so the screenshot is the same from run to run and
-          # does not change meaning when the container image updates. The
-          # window takes the user's own theme on a real desktop; this only
-          # fixes what CI renders.
-          GTK_THEME: Adwaita
+          # GTK_THEME is deliberately NOT set: the application picks
+          # Adwaita:dark itself and only when nothing else asked for a theme,
+          # so setting it here would override the very behaviour the
+          # screenshot is meant to show.
         run: |
           set -euo pipefail
           timeout 60 xvfb-run -a --server-args="-screen 0 1280x800x24" \

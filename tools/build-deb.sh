@@ -7,8 +7,14 @@
 # `apt install ./mediafin_*.deb` pulls exactly what the binary needs. Guessing
 # that list is how a package ends up almost working.
 #
-#   ./tools/build-deb.sh                    # build from source, then package
+#   ./tools/build-deb.sh                      # build from source, then package
 #   ./tools/build-deb.sh --binary ./mediafin  # package a binary you already have
+#   …           --binary ./mediafin --gtk-binary ./mediafin-gtk
+#
+# The package carries the server, and the native window too when one is given
+# or built. Both end up in one package: the desktop it is meant for has GTK
+# already, and splitting it would mean two packages to keep in step. On a
+# headless server use the tarball, or build without the window.
 #
 # The second form needs no Swift toolchain, so you can turn the published
 # tarball into a .deb on the machine you want to install it on:
@@ -24,11 +30,17 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 PREBUILT=""
+PREBUILT_GTK=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --binary)
       [ $# -ge 2 ] || { echo "--binary needs a path" >&2; exit 2; }
       PREBUILT="$2"
+      shift 2
+      ;;
+    --gtk-binary)
+      [ $# -ge 2 ] || { echo "--gtk-binary needs a path" >&2; exit 2; }
+      PREBUILT_GTK="$2"
       shift 2
       ;;
     -h|--help)
@@ -75,6 +87,12 @@ else
   echo "==> Building mediafin (release, static Swift runtime)"
   swift build -c release --product mediafin --static-swift-stdlib
   BIN=.build/release/mediafin
+  # Two invocations because SwiftPM takes one --product at a time. The GUI is
+  # not static: it links GTK from the system anyway, so a static Swift runtime
+  # would only add weight it cannot avoid paying for elsewhere.
+  echo "==> Building mediafin-gtk (release)"
+  swift build -c release --product mediafin-gtk
+  PREBUILT_GTK=.build/release/mediafin-gtk
 fi
 [ -x "$BIN" ] || { echo "FAIL: $BIN is not executable" >&2; exit 1; }
 
@@ -83,6 +101,36 @@ install -D -m 755 "$BIN"       "$STAGE/usr/bin/mediafin"
 install -D -m 644 README.md    "$STAGE/usr/share/doc/mediafin/README.md"
 install -D -m 644 LICENSE      "$STAGE/usr/share/doc/mediafin/copyright"
 install -d -m 755 "$STAGE/DEBIAN"
+
+# The native window, when there is one to ship. Optional rather than required
+# so the package can still be built on a machine without GTK headers, and so
+# `--binary` on its own keeps working for the server-only case.
+if [ -n "$PREBUILT_GTK" ]; then
+  [ -x "$PREBUILT_GTK" ] || { echo "FAIL: $PREBUILT_GTK is not executable" >&2; exit 1; }
+  echo "==> Including the native window: $PREBUILT_GTK"
+  install -D -m 755 "$PREBUILT_GTK" "$STAGE/usr/bin/mediafin-gtk"
+
+  # So it appears in the application menu rather than only on the command
+  # line. The icon is a stock name the user's icon theme already provides —
+  # shipping our own would mean an asset to maintain for no gain yet.
+  install -d -m 755 "$STAGE/usr/share/applications"
+  cat > "$STAGE/usr/share/applications/mediafin.desktop" <<'DESKTOP'
+[Desktop Entry]
+Type=Application
+Name=Mediafin
+GenericName=Media renamer
+Comment=Identify and rename media files for a Jellyfin library
+Exec=mediafin-gtk
+Icon=multimedia-video-player
+Terminal=false
+Categories=AudioVideo;Video;Utility;
+Keywords=media;rename;jellyfin;movies;series;
+StartupNotify=true
+DESKTOP
+  chmod 644 "$STAGE/usr/share/applications/mediafin.desktop"
+else
+  echo "==> No native window supplied; packaging the server only"
+fi
 
 # Debian wants a changelog, compressed, with no timestamp inside the archive
 # that changes per build beyond the version itself.
@@ -244,8 +292,13 @@ Package: mediafin
 Architecture: any
 Description: placeholder for dpkg-shlibdeps
 CONTROL
+# Every shipped ELF, not just the server: the window links GTK, and a package
+# that lists only the server's libraries would install and then fail to start
+# the thing the menu entry points at.
+SHLIB_TARGETS=("$STAGE/usr/bin/mediafin")
+[ -n "$PREBUILT_GTK" ] && SHLIB_TARGETS+=("$STAGE/usr/bin/mediafin-gtk")
 ( cd "$SHLIBS_DIR" && dpkg-shlibdeps -O --ignore-missing-info \
-    "$STAGE/usr/bin/mediafin" > shlibdeps.out 2>shlibdeps.err ) || {
+    "${SHLIB_TARGETS[@]}" > shlibdeps.out 2>shlibdeps.err ) || {
   echo "FAIL: dpkg-shlibdeps could not resolve the libraries:" >&2
   cat "$SHLIBS_DIR/shlibdeps.err" >&2
   exit 1

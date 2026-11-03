@@ -1,6 +1,10 @@
 import CGtk3
 import Foundation
 import MediaIdentifierCore
+// For setenv.
+#if canImport(Glibc)
+import Glibc
+#endif
 
 // Mediafin's native Linux front-end.
 //
@@ -74,6 +78,19 @@ private enum Pending {
 // MARK: Run
 
 private let mode = parse(Array(CommandLine.arguments.dropFirst()))
+
+// Before gtk_init, which reads this when it picks a theme.
+//
+// The stylesheet paints Mediafin's own dark palette, but it cannot reach
+// everything: a file chooser dialog, a menu, a tooltip are built by GTK from
+// the theme, and a light theme underneath would make those flash white out of
+// a dark window. Asking for the dark variant lines them up.
+//
+// Overwrite is 0 on purpose: a user who sets GTK_THEME themselves keeps it,
+// and MEDIAFIN_GTK_THEME=system turns the whole thing off.
+if !Styling.isDisabled {
+    setenv("GTK_THEME", "Adwaita:dark", 0)
+}
 
 // gtk_init_check rather than gtk_init: gtk_init prints its own message and
 // aborts, which gives a script no way to tell "no display" from a crash.
