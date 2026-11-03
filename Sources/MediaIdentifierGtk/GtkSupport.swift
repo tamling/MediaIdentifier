@@ -93,29 +93,33 @@ enum Gtk {
     /// Connects a button to a method on `owner`.
     ///
     /// This is the shape every GTK binding has to invent, because a C function
-    /// pointer cannot close over anything. The owner is passed through GTK's
-    /// `user_data` as an opaque pointer and read back on the other side.
-    /// Unretained on purpose: the caller holds the only strong reference for
-    /// the lifetime of the window, so retaining here would be a cycle GTK has
-    /// no way to break.
+    /// pointer cannot close over anything. What the handler needs is put in an
+    /// `Action` and passed through GTK's `user_data` as an opaque pointer.
+    ///
+    /// The Action is retained for GTK and released by the closure-notify GTK
+    /// calls when the signal goes, so its lifetime is GTK's rather than
+    /// something this code has to track. It holds the owner weakly, so this
+    /// creates no cycle and no reference that outlives the window.
     static func onClick<Owner: AnyObject>(
         _ widget: UnsafeMutablePointer<GtkWidget>,
         _ owner: Owner,
         _ action: @escaping (Owner) -> Void
     ) {
-        // The closure itself also cannot ride along in user_data, so it is
-        // stored next to the owner in a box GTK frees when the signal goes.
-        let box = Box(owner: owner, action: action)
-        let payload = Unmanaged.passRetained(box).toOpaque()
+        // The owner is captured here, in an ordinary Swift closure, and only
+        // the non-generic Action crosses into C. A @convention(c) closure may
+        // not mention a generic parameter at all — not even inside
+        // Unmanaged<Box<Owner>> — because there is nowhere in a bare function
+        // pointer to put the type metadata.
+        let payload = Unmanaged.passRetained(Action(owner: owner, action: action)).toOpaque()
         let handler: @convention(c) (UnsafeMutablePointer<GtkWidget>?,
                                      UnsafeMutableRawPointer?) -> Void = { _, data in
             guard let data else { return }
-            Unmanaged<Box<Owner>>.fromOpaque(data).takeUnretainedValue().run()
+            Unmanaged<Action>.fromOpaque(data).takeUnretainedValue().run()
         }
         let release: @convention(c) (UnsafeMutableRawPointer?, UnsafeMutablePointer<GClosure>?)
             -> Void = { data, _ in
                 guard let data else { return }
-                Unmanaged<Box<Owner>>.fromOpaque(data).release()
+                Unmanaged<Action>.fromOpaque(data).release()
             }
         g_signal_connect_data(object(widget), "clicked",
                               unsafeBitCast(handler, to: GCallback.self),
@@ -131,15 +135,15 @@ enum Gtk {
         _ owner: Owner,
         _ action: @escaping (Owner) -> Void
     ) {
-        let payload = Unmanaged.passRetained(Box(owner: owner, action: action)).toOpaque()
+        let payload = Unmanaged.passRetained(Action(owner: owner, action: action)).toOpaque()
         let tick: @convention(c) (UnsafeMutableRawPointer?) -> gboolean = { data in
             guard let data else { return Gtk.sourceRemove }
-            Unmanaged<Box<Owner>>.fromOpaque(data).takeUnretainedValue().run()
+            Unmanaged<Action>.fromOpaque(data).takeUnretainedValue().run()
             return Gtk.sourceContinue
         }
         let release: @convention(c) (UnsafeMutableRawPointer?) -> Void = { data in
             guard let data else { return }
-            Unmanaged<Box<Owner>>.fromOpaque(data).release()
+            Unmanaged<Action>.fromOpaque(data).release()
         }
         // _full rather than g_timeout_add: it takes the destroy notify that
         // frees the box, so the timer does not leak it when the source goes.
@@ -147,23 +151,27 @@ enum Gtk {
         g_timeout_add_full(0, milliseconds, tick, payload, release)
     }
 
-    /// Holds a weak owner and what to do with it, so both can be reached from
-    /// a C callback through a single pointer.
-    final class Box<Owner: AnyObject> {
-        private weak var owner: Owner?
-        private let action: (Owner) -> Void
+    /// What a GTK callback is handed through `user_data`: one object, no
+    /// generic parameters.
+    ///
+    /// Not generic on purpose. A `@convention(c)` closure is a bare function
+    /// pointer with nowhere to carry type metadata, so it cannot name a
+    /// generic type — `Unmanaged<Box<Owner>>` inside the callback is rejected
+    /// even though nothing of `Owner` is used at runtime. The generic part
+    /// stays outside, in the ordinary Swift closure that captures the owner.
+    final class Action {
+        private let body: () -> Void
 
-        init(owner: Owner, action: @escaping (Owner) -> Void) {
-            self.owner = owner
-            self.action = action
-        }
-
-        /// Does nothing once the owner is gone — a click can still arrive
+        /// Holds the owner weakly: a click or a timer tick can still arrive
         /// while the window is being torn down.
-        func run() {
-            guard let owner else { return }
-            action(owner)
+        init<Owner: AnyObject>(owner: Owner, action: @escaping (Owner) -> Void) {
+            body = { [weak owner] in
+                guard let owner else { return }
+                action(owner)
+            }
         }
+
+        func run() { body() }
     }
 
     // MARK: GLib main loop
