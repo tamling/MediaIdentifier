@@ -97,7 +97,9 @@ jobs:
           # so only Mediafin.app.zip remains on the "latest" release.
           gh release view latest --repo "$GITHUB_REPOSITORY" --json assets \
             --jq '.assets[].name' 2>/dev/null | while read -r name; do
-              [ "$name" = "Mediafin.app.zip" ] && continue
+              case "$name" in
+                Mediafin.app.zip|mediafin-linux-x86_64.tar.gz) continue ;;
+              esac
               echo "Deleting stale asset: $name"
               gh release delete-asset latest "$name" --repo "$GITHUB_REPOSITORY" -y || true
             done
@@ -105,6 +107,53 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest
-          name: Latest build (Universal — Apple Silicon & Intel)
+          name: Latest build (macOS universal + Linux x86_64)
           prerelease: true
           files: Mediafin.app.zip
+
+  # The Linux binary is what makes Mediafin usable without a Swift toolchain
+  # on the target machine.
+  linux:
+    name: Build & publish the Linux binary
+    runs-on: ubuntu-latest
+    container: swift:6.0-jammy
+    needs: release
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build (Release, static stdlib)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Static Swift runtime so the binary only needs glibc, not a Swift
+          # installation, on whatever machine it ends up on.
+          swift build -c release --product mediafin --static-swift-stdlib
+          BIN=.build/release/mediafin
+          test -x "$BIN"
+          echo "Size: $(du -h "$BIN" | cut -f1)"
+          # A binary that cannot run is not a release asset.
+          "$BIN" --help > /dev/null
+      - name: Check it does not need a Swift installation
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ldd .build/release/mediafin | grep -i "swift"; then
+            echo "::error::the binary still links Swift runtime libraries"
+            exit 1
+          fi
+          ldd .build/release/mediafin
+      - name: Package
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -d dist
+          install -m 755 .build/release/mediafin dist/mediafin
+          install -m 644 LICENSE dist/LICENSE
+          install -m 644 README.md dist/README.md
+          tar -czf mediafin-linux-x86_64.tar.gz -C dist .
+          sha256sum mediafin-linux-x86_64.tar.gz
+      - name: Publish to "latest" release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          prerelease: true
+          files: mediafin-linux-x86_64.tar.gz

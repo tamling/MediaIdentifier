@@ -70,6 +70,12 @@ jobs:
       - name: Smoke-test the mediafin binary
         shell: bash
         run: ./tools/smoke-mediafin.sh
+      - name: Upload the Linux binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: mediafin-linux-x86_64
+          path: .build/release/mediafin
+          if-no-files-found: error
 
   app:
     name: Build .app

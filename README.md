@@ -30,6 +30,17 @@ It runs two ways on top of one shared, fully unit-tested domain core:
 
 ## Running on Linux
 
+Download `mediafin-linux-x86_64.tar.gz` from the
+[latest release](../../releases/tag/latest) — it carries the Swift runtime
+statically, so it needs nothing but glibc:
+
+```bash
+tar -xzf mediafin-linux-x86_64.tar.gz
+./mediafin
+```
+
+Or build it yourself:
+
 ```bash
 swift build -c release --product mediafin
 .build/release/mediafin
