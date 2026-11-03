@@ -15,3 +15,10 @@ build/
 .build/
 .swiftpm/
 Package.resolved
+
+# Release artefacts, built by tools/build-deb.sh or downloaded from a release.
+# They are tens of megabytes and must never land in a commit.
+*.deb
+*.tar.gz
+Mediafin.app.zip
+dist/
