@@ -111,7 +111,13 @@ jobs:
           # fonts-dejavu-core is not optional: with no font installed Pango
           # draws nothing, and the screenshot would be a blank window that
           # still passed every check.
-          apt-get install -y -qq pkg-config libgtk-3-dev xvfb fonts-dejavu-core file
+          #
+          # The rest is so the screenshot shows what a user sees rather than
+          # GTK's bare fallbacks: Cantarell is the font the Adwaita theme is
+          # designed around, and without an icon theme the header bar's
+          # controls render as "missing image" squares.
+          apt-get install -y -qq pkg-config libgtk-3-dev xvfb file \
+            fonts-dejavu-core fonts-cantarell adwaita-icon-theme
       - name: Build
         run: swift build -c release --product mediafin-gtk
       - name: Render the window headless
@@ -121,6 +127,11 @@ jobs:
           # seconds timing out against it and floods the log.
           NO_AT_BRIDGE: "1"
           GTK_A11Y: none
+          # Pin the theme so the screenshot is the same from run to run and
+          # does not change meaning when the container image updates. The
+          # window takes the user's own theme on a real desktop; this only
+          # fixes what CI renders.
+          GTK_THEME: Adwaita
         run: |
           set -euo pipefail
           timeout 60 xvfb-run -a --server-args="-screen 0 1280x800x24" \

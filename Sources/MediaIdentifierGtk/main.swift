@@ -84,6 +84,9 @@ guard gtk_init_check(nil, nil) != 0 else {
         """, code: 2)
 }
 
+// After gtk_init, which has to have run before a screen exists to style.
+Styling.install()
+
 // The same engine the web interface drives, pointed at the same configuration
 // directory — so folders set here show up there and the other way round.
 private let coordinator = AppCoordinator(configDirectory: MediafinPaths.configDirectory())

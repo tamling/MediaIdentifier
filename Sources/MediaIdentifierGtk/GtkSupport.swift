@@ -37,6 +37,12 @@ enum Gtk {
         UnsafeMutableRawPointer(widget).assumingMemoryBound(to: GtkLabel.self)
     }
 
+    static func headerBar(
+        _ widget: UnsafeMutablePointer<GtkWidget>
+    ) -> UnsafeMutablePointer<GtkHeaderBar> {
+        UnsafeMutableRawPointer(widget).assumingMemoryBound(to: GtkHeaderBar.self)
+    }
+
     static func scrolledWindow(
         _ widget: UnsafeMutablePointer<GtkWidget>
     ) -> UnsafeMutablePointer<GtkScrolledWindow> {

@@ -4,19 +4,18 @@ import MediaIdentifierCore
 
 /// Mediafin's window.
 ///
-/// It owns no logic of its own. Every button submits a `WebCommand` to the
+/// It owns no logic. Every button submits a `WebCommand` to the
 /// `AppCoordinator` — the same engine the web interface drives — and the
-/// window learns what happened by reading the snapshot back on a timer. That
-/// is deliberate: the coordinator runs work on its own serial queue, so a
-/// click must never wait for a scan to finish, and anything the window
-/// decided for itself would be a second answer to a question the engine has
-/// already answered.
+/// window learns what happened by reading the snapshot back on a timer. The
+/// coordinator runs work on its own serial queue, so a click must never wait
+/// for a scan, and it cannot call into GTK, which may only be touched from
+/// the main thread. Polling is the honest shape for that boundary.
 final class AppWindow {
     let widget: UnsafeMutablePointer<GtkWidget>
 
     private let coordinator: AppCoordinator
 
-    private let statusBadge: UnsafeMutablePointer<GtkWidget>
+    private let header: UnsafeMutablePointer<GtkWidget>
     private let resultLabel: UnsafeMutablePointer<GtkWidget>
     private let countsLabel: UnsafeMutablePointer<GtkWidget>
     private let sourceChooser: UnsafeMutablePointer<GtkWidget>
@@ -29,8 +28,7 @@ final class AppWindow {
     /// walking the container — which would mean another C callback.
     private var rowWidgets: [UnsafeMutablePointer<GtkWidget>] = []
     /// What the list was last built from. The refresh runs twice a second and
-    /// rebuilding every time would throw away the scroll position and burn
-    /// the CPU for nothing.
+    /// rebuilding every time would throw away the scroll position.
     ///
     /// Optional rather than an empty array: at startup there are no proposals
     /// *and* nothing has been rendered, and comparing `[] == []` would skip
@@ -41,58 +39,68 @@ final class AppWindow {
         self.coordinator = coordinator
 
         let window = gtk_window_new(GTK_WINDOW_TOPLEVEL)!
+        gtk_window_set_default_size(Gtk.window(window), 900, 640)
+        // Set as well as the header bar's title: this is what a taskbar, an
+        // alt-tab switcher and a window list show.
         gtk_window_set_title(Gtk.window(window), "Mediafin")
-        gtk_window_set_default_size(Gtk.window(window), 820, 560)
         self.widget = window
 
-        let column = gtk_box_new(GTK_ORIENTATION_VERTICAL, 14)!
-        gtk_container_set_border_width(Gtk.container(column), 20)
-        gtk_container_add(Gtk.container(window), column)
+        // A header bar rather than a label at the top of the page: it is what
+        // the window manager draws the title into on a modern desktop, so the
+        // primary action sits in the same strip as the window controls
+        // instead of below them.
+        header = gtk_header_bar_new()!
+        gtk_header_bar_set_show_close_button(Gtk.headerBar(header), 1)
+        gtk_header_bar_set_title(Gtk.headerBar(header), "Mediafin")
+        scanButton = gtk_button_new_with_label("Durchsuchen")!
+        // The theme's own accent, not a colour of ours — it follows whatever
+        // the user has set.
+        Styling.style(scanButton, "suggested-action")
+        gtk_header_bar_pack_end(Gtk.headerBar(header), scanButton)
+        gtk_window_set_titlebar(Gtk.window(window), header)
 
-        // Header: the name, and what the engine is doing right now.
-        let header = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12)!
-        gtk_box_pack_start(Gtk.box(header), Self.heading("Mediafin"), 0, 0, 0)
-        statusBadge = Self.label("")
-        gtk_box_pack_end(Gtk.box(header), statusBadge, 0, 0, 0)
-        gtk_box_pack_start(Gtk.box(column), header, 0, 0, 0)
+        let page = gtk_box_new(GTK_ORIENTATION_VERTICAL, 16)!
+        gtk_container_set_border_width(Gtk.container(page), 18)
+        gtk_container_add(Gtk.container(window), page)
 
-        gtk_box_pack_start(Gtk.box(column),
-                           gtk_separator_new(GTK_ORIENTATION_HORIZONTAL)!, 0, 0, 2)
+        // MARK: Folders
 
-        // Folders. A chooser rather than a text field: a path typed by hand is
-        // the single most common way to point this at the wrong place.
         sourceChooser = Self.folderChooser("Ordner mit den neuen Dateien")
         moviesChooser = Self.folderChooser("Filmbibliothek")
         seriesChooser = Self.folderChooser("Serienbibliothek")
-        gtk_box_pack_start(Gtk.box(column), Self.row("Quelle", sourceChooser), 0, 0, 0)
-        gtk_box_pack_start(Gtk.box(column), Self.row("Filme", moviesChooser), 0, 0, 0)
-        gtk_box_pack_start(Gtk.box(column), Self.row("Serien", seriesChooser), 0, 0, 0)
 
-        let actions = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8)!
-        let saveButton = gtk_button_new_with_label("Ordner übernehmen")!
-        scanButton = gtk_button_new_with_label("Durchsuchen")!
-        gtk_box_pack_start(Gtk.box(actions), saveButton, 0, 0, 0)
-        gtk_box_pack_start(Gtk.box(actions), scanButton, 0, 0, 0)
-        gtk_box_pack_start(Gtk.box(column), actions, 0, 0, 4)
+        let folders = Self.card(titled: "Bibliothek")
+        Self.add(Self.row("Quelle", sourceChooser), to: folders)
+        Self.add(Self.row("Filme", moviesChooser), to: folders)
+        Self.add(Self.row("Serien", seriesChooser), to: folders)
 
-        countsLabel = Self.label("")
-        gtk_box_pack_start(Gtk.box(column), countsLabel, 0, 0, 0)
+        let saveRow = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0)!
+        let saveButton = gtk_button_new_with_label("Übernehmen")!
+        gtk_box_pack_end(Gtk.box(saveRow), saveButton, 0, 0, 0)
+        Self.add(saveRow, to: folders)
+        gtk_box_pack_start(Gtk.box(page), folders, 0, 0, 0)
 
-        // The proposals. A plain box inside a scroller rather than a
-        // GtkTreeView: a tree model needs GValue boxing and cell renderers,
-        // which is a lot of C surface to get wrong for a list that only has
-        // to be read. It will have to become a TreeView if these lists grow
-        // into the thousands.
-        listColumn = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2)!
+        // MARK: Proposals
+
+        let proposals = Self.card(titled: "Vorschläge")
+        countsLabel = Self.label("", classes: "mf-dim")
+        Self.add(countsLabel, to: proposals)
+
+        // A plain box inside a scroller rather than a GtkTreeView: a tree
+        // model needs GValue boxing and cell renderers, which is a lot of C
+        // surface to get wrong for a list that only has to be read. It will
+        // have to become a TreeView if these lists reach the thousands.
+        listColumn = gtk_box_new(GTK_ORIENTATION_VERTICAL, 1)!
         let scroller = gtk_scrolled_window_new(nil, nil)!
         gtk_scrolled_window_set_policy(Gtk.scrolledWindow(scroller),
-                                       GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC)
+                                       GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC)
         gtk_container_add(Gtk.container(scroller), listColumn)
-        gtk_box_pack_start(Gtk.box(column), scroller, 1, 1, 0)
+        Self.add(scroller, to: proposals, expand: true)
+        gtk_box_pack_start(Gtk.box(page), proposals, 1, 1, 0)
 
-        resultLabel = Self.label("")
+        resultLabel = Self.label("", classes: "mf-dim")
         gtk_label_set_line_wrap(Gtk.label(resultLabel), 1)
-        gtk_box_pack_start(Gtk.box(column), resultLabel, 0, 0, 0)
+        gtk_box_pack_start(Gtk.box(page), resultLabel, 0, 0, 0)
 
         Gtk.onClick(saveButton, self) { $0.saveFolders() }
         Gtk.onClick(scanButton, self) { $0.scan() }
@@ -142,16 +150,15 @@ final class AppWindow {
     func refresh() {
         let state = coordinator.snapshot
 
-        let badge: String
+        let subtitle: String
         if state.hasError {
-            badge = PangoMarkup.span("Mit Fehlern beendet", weight: "bold")
+            subtitle = "Mit Fehlern beendet"
         } else if state.busy {
-            let what = state.convertStatus ?? "Arbeitet"
-            badge = PangoMarkup.span("\(what) \(state.activePercent) %", weight: "bold")
+            subtitle = "\(state.convertStatus ?? "Arbeitet") · \(state.activePercent) %"
         } else {
-            badge = PangoMarkup.span("Bereit", weight: "bold")
+            subtitle = "Bereit"
         }
-        Gtk.setMarkup(statusBadge, badge)
+        gtk_header_bar_set_subtitle(Gtk.headerBar(header), subtitle)
 
         Gtk.setText(countsLabel,
                     "\(state.totalItems) Vorschläge · \(state.ready) bereit · "
@@ -179,13 +186,13 @@ final class AppWindow {
         rowWidgets = []
 
         if items.isEmpty {
-            let empty = Self.label("Noch nichts durchsucht.")
-            gtk_widget_set_margin_top(empty, 8)
+            let empty = Self.label("Noch nichts durchsucht.", classes: "mf-empty")
+            gtk_label_set_xalign(Gtk.label(empty), 0.5)
             gtk_box_pack_start(Gtk.box(listColumn), empty, 0, 0, 0)
             rowWidgets = [empty]
         } else {
-            for item in items {
-                let row = Self.proposalRow(item)
+            for (index, item) in items.enumerated() {
+                let row = Self.proposalRow(item, banded: index % 2 == 1)
                 gtk_box_pack_start(Gtk.box(listColumn), row, 0, 0, 0)
                 rowWidgets.append(row)
             }
@@ -198,65 +205,72 @@ final class AppWindow {
     ///
     /// Nothing here says the rename has happened — the list is a preview, and
     /// the wording has to keep saying so until a button is pressed.
-    private static func proposalRow(_ item: RenameItem)
-        -> UnsafeMutablePointer<GtkWidget> {
-        let row = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0)!
-        gtk_widget_set_margin_bottom(row, 6)
+    private static func proposalRow(_ item: RenameItem,
+                                    banded: Bool) -> UnsafeMutablePointer<GtkWidget> {
+        let row = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2)!
+        Styling.style(row, "mf-row")
+        if banded { Styling.style(row, "mf-row-alt") }
 
-        let from = label(item.originalFileName)
+        let from = label(item.originalFileName, classes: "mf-from")
         gtk_label_set_ellipsize(Gtk.label(from), PANGO_ELLIPSIZE_MIDDLE)
         gtk_box_pack_start(Gtk.box(row), from, 0, 0, 0)
 
-        let arrow = gtk_label_new(nil)!
-        gtk_label_set_xalign(Gtk.label(arrow), 0)
-        gtk_label_set_ellipsize(Gtk.label(arrow), PANGO_ELLIPSIZE_MIDDLE)
-        // Escaped, because a filename routinely contains an ampersand and
-        // Pango rejects the whole string rather than rendering it wrong.
-        var markup = "→ " + PangoMarkup.span(item.newFileName, weight: "bold")
-        if let conflict = item.conflict {
-            markup += "  " + PangoMarkup.escape(Self.conflictText(conflict))
-        }
-        gtk_label_set_markup(Gtk.label(arrow), markup)
-        gtk_box_pack_start(Gtk.box(row), arrow, 0, 0, 0)
+        let to = label(item.newFileName, classes: "mf-to")
+        gtk_label_set_ellipsize(Gtk.label(to), PANGO_ELLIPSIZE_MIDDLE)
+        gtk_box_pack_start(Gtk.box(row), to, 0, 0, 0)
 
+        if let conflict = item.conflict {
+            let warning = label(conflictText(conflict), classes: "mf-warn")
+            gtk_box_pack_start(Gtk.box(row), warning, 0, 0, 0)
+        }
         return row
     }
 
     private static func conflictText(_ kind: ConflictKind) -> String {
         switch kind {
-        case .existingFile: return "⚠ dort liegt schon eine Datei"
-        case .duplicateInBatch: return "⚠ zwei Dateien wollen denselben Namen"
+        case .existingFile: return "Dort liegt schon eine Datei"
+        case .duplicateInBatch: return "Zwei Dateien wollen denselben Namen"
         }
     }
 
     // MARK: Widgets
 
-    private static func heading(_ text: String) -> UnsafeMutablePointer<GtkWidget> {
-        let label = gtk_label_new(nil)!
-        gtk_label_set_markup(Gtk.label(label),
-                             PangoMarkup.span(text, size: "xx-large", weight: "bold"))
+    private static func label(_ text: String,
+                              classes: String...) -> UnsafeMutablePointer<GtkWidget> {
+        let label = gtk_label_new(text)!
         gtk_label_set_xalign(Gtk.label(label), 0)
+        for name in classes { Styling.style(label, name) }
         return label
     }
 
-    private static func label(_ text: String) -> UnsafeMutablePointer<GtkWidget> {
-        let label = gtk_label_new(text)!
-        gtk_label_set_xalign(Gtk.label(label), 0)
-        return label
+    /// A grouped panel with a quiet caption, the shape GTK's own settings
+    /// dialogues use.
+    private static func card(titled title: String) -> UnsafeMutablePointer<GtkWidget> {
+        let card = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10)!
+        Styling.style(card, "mf-card")
+        let caption = label(title.uppercased(), classes: "mf-card-title")
+        gtk_box_pack_start(Gtk.box(card), caption, 0, 0, 0)
+        return card
+    }
+
+    private static func add(_ child: UnsafeMutablePointer<GtkWidget>,
+                            to card: UnsafeMutablePointer<GtkWidget>,
+                            expand: Bool = false) {
+        gtk_box_pack_start(Gtk.box(card), child, expand ? 1 : 0, expand ? 1 : 0, 0)
     }
 
     private static func folderChooser(_ title: String) -> UnsafeMutablePointer<GtkWidget> {
         gtk_file_chooser_button_new(title, GTK_FILE_CHOOSER_ACTION_SELECT_FOLDER)!
     }
 
-    /// A caption of fixed width beside its control, so the three rows line up
+    /// A caption of fixed width beside its control, so the rows line up
     /// without a grid.
     private static func row(_ caption: String,
                             _ control: UnsafeMutablePointer<GtkWidget>)
         -> UnsafeMutablePointer<GtkWidget> {
-        let row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10)!
+        let row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12)!
         let text = label(caption)
-        gtk_widget_set_size_request(text, 90, -1)
+        gtk_widget_set_size_request(text, 78, -1)
         gtk_box_pack_start(Gtk.box(row), text, 0, 0, 0)
         gtk_box_pack_start(Gtk.box(row), control, 1, 1, 0)
         return row
