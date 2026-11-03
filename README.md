@@ -2,11 +2,15 @@
 
 # MediaIdentifier
 
-A native **macOS (Apple Silicon)** app that analyses downloaded media files and
-renames them into a **Jellyfin-compatible** layout — by drag-and-drop, with a
-preview before anything touches the disk. Built with SwiftUI on top of a pure,
-fully unit-tested domain core. Ships as a **universal binary** (Apple Silicon
-and Intel).
+Analyses downloaded media files and renames them into a **Jellyfin-compatible**
+layout, with a preview before anything touches the disk.
+
+It runs two ways on top of one shared, fully unit-tested domain core:
+
+- **Linux** (and macOS): the `mediafin` binary serves a local web interface
+  over **HTTPS** — see [Running on Linux](#running-on-linux).
+- **macOS**: a native SwiftUI app with drag-and-drop, shipped as a universal
+  binary (Apple Silicon and Intel).
 
 ---
 
@@ -23,6 +27,62 @@ and Intel).
   **renamed alongside** the video.
 - Every change is **logged** and can be **undone**.
 - Everything runs **100% locally** — no media is ever uploaded.
+
+## Running on Linux
+
+```bash
+swift build -c release --product mediafin
+.build/release/mediafin
+```
+
+On the first start it creates an access token and a self-signed certificate,
+prints the token once, and tells you the URL:
+
+```
+Mediafin is serving its interface on https://localhost:8720
+```
+
+Open that in a browser and sign in with the printed token. The token is kept
+in the configuration directory (`$XDG_CONFIG_HOME/mediafin`, by default
+`~/.config/mediafin`) with mode `0600`, so it survives a restart; print it
+again with `mediafin --print-token`, or issue a new one — signing every browser
+out — with `mediafin --rotate-token`.
+
+**The browser will warn once about the certificate.** That is inherent to
+self-signing, not a fault. Compare the SHA-256 fingerprint printed at startup
+with the one the browser shows, then accept it; or supply a real certificate:
+
+```bash
+mediafin --cert /etc/ssl/mediafin.pem --key /etc/ssl/mediafin.key
+```
+
+Useful options (`mediafin --help` lists them all):
+
+| Option | Meaning |
+| --- | --- |
+| `--port <n>` | Port to listen on (default 8720). |
+| `--bind local\|all` | Reachable from this machine only (default), or from the network. |
+| `--no-tls` | Serve plain HTTP. Refused for a network bind. |
+| `--cert` / `--key` | Use your own PEM certificate and key. |
+| `--config-dir <dir>` | Where to keep the token, certificate and settings. |
+
+The defaults are the careful ones: **loopback only, TLS on, access token
+required**. Binding to the network without TLS is refused outright rather than
+quietly sending your token in clear text — if something in front of Mediafin
+already terminates TLS, say so explicitly with
+`--i-accept-plain-http-on-the-network`.
+
+`openssl` is needed only for generating that first self-signed certificate.
+TLS itself does not need it: NIOSSL brings its own BoringSSL.
+
+### What the interface can do
+
+Sign in → **Settings** (import folder, library folders, how titles are
+identified, your own model server, Jellyfin) → **Overview** (look for new
+files, review each proposed name, tick the ones you want, rename, undo).
+
+`/healthz` answers without a token for uptime monitors — `200` idle, `503`
+while running, `500` after a run with failures — and reveals nothing but that.
 
 ## Building
 
@@ -82,6 +142,11 @@ Sources/
     Undo/                     RenameJournal (FR13)
     Metadata/                 MetadataProvider (+ offline & TMDb implementations)
     Conversion/               FFmpeg argument builder + converter (FR16/FR17)
+    Web/                      HTTP message layer, router, access control,
+                              settings & secret stores (portable)
+  MediaIdentifierWeb/         HTTPS server (SwiftNIO + NIOSSL), certificate
+                              handling, command coordinator
+  mediafin/                   The Linux binary: serves the web interface
   MediaIdentifierApp/         SwiftUI macOS front-end (dark "Mediafin" design)
     AppState.swift            View model wiring Core to the UI
     Theme.swift               Colour palette + reusable chips/controls
@@ -90,7 +155,8 @@ Sources/
                               ConvertView, LogView, ConflictResolutionView,
                               MetadataSettingsView
 Tests/
-  MediaIdentifierCoreTests/   XCTest suite
+  MediaIdentifierCoreTests/   XCTest suite for the Core
+  MediaIdentifierWebTests/    End-to-end tests over real sockets, incl. TLS
 ```
 
 The **Core** library has no SwiftUI/AppKit imports, so the logic is portable and
@@ -196,6 +262,38 @@ A static review informed these hardening measures:
   executables and argument arrays — never a shell string.
 - **Bounded input / no key caching:** the local-database loader caps decoded
   size; TMDb requests use an ephemeral URL session so the key is not cached.
+
+The web interface is treated as a privileged surface — it can see the whole
+library — so it is hardened separately:
+
+- **Encrypted by default, and refuses not to be:** TLS 1.2 is the floor, and
+  binding to anything but loopback without TLS is refused rather than quietly
+  sending the access token in clear text.
+- **Authenticated by default:** a 256-bit token, compared in
+  length-independent time; an unconfigured token matches nothing instead of
+  letting everyone in. Failed logins are rate-limited, and while blocked even
+  the correct token is refused so the limit cannot be probed around.
+- **Token never in a URL:** it is accepted from a header or the session
+  cookie only, because URLs end up in logs, history and referrers. The cookie
+  is `HttpOnly`, `SameSite=Strict` and — over TLS — `Secure`.
+- **Three layers against cross-site requests:** that cookie policy, a
+  `form-action 'self'` CSP, and a per-process CSRF token in every form. A
+  cross-site request is refused *before* the credentials are checked, so it
+  cannot spend login attempts and lock the real user out.
+- **No scripting at all:** the pages use no JavaScript, so their own
+  Content-Security-Policy can forbid it outright (`default-src 'none'`).
+- **Writes only where intended:** an explicit list of paths accepts a POST;
+  everything else answers 405. Redirect targets are never taken from the
+  request. An unauthenticated client gets 401 even for unknown paths, so it
+  cannot map what exists.
+- **Credentials apart from configuration:** `settings.json` has no field for a
+  key at all — keys live in `secrets.json`, mode `0600`, written through a
+  temporary file created with its permissions already applied so a secret is
+  never briefly world-readable. The interface is only ever told *whether* a
+  key is stored, never its value.
+- **Bounded requests:** anything over 64 KiB stops being buffered and gets a
+  413. `/healthz` may answer anonymously for uptime monitors and reveals only
+  idle/busy/error — never a file name.
 
 ## Note on this environment
 
