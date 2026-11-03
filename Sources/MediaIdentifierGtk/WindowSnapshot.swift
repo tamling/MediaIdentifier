@@ -64,6 +64,18 @@ enum WindowSnapshot {
 
         let width = gtk_widget_get_allocated_width(widget)
         let height = gtk_widget_get_allocated_height(widget)
+
+        // Said out loud because a blank capture is otherwise indistinguishable
+        // from a working one: both produce a valid PNG of the right size. If
+        // the window reports itself unmapped or invisible here, that is the
+        // answer; if it reports itself fine and the image is still empty,
+        // the fault is in how it is being drawn rather than in its state.
+        FileHandle.standardError.write(Data(
+            ("mediafin-gtk: capture state — \(width)x\(height)"
+                + " mapped=\(gtk_widget_get_mapped(widget) != 0)"
+                + " visible=\(gtk_widget_is_visible(widget) != 0)"
+                + " drawable=\(gtk_widget_is_drawable(widget) != 0)"
+                + " flushed=\(iterations)\n").utf8))
         // GTK reports 1x1 for a widget it has not laid out, which would write a
         // technically valid PNG that shows nothing — worse than an error,
         // because it looks like a pass.

@@ -137,6 +137,13 @@ jobs:
           # release names and scans it, so the picture shows the interface
           # doing its job rather than its empty state. It runs the real
           # parser and planner, so this fails if either stops working.
+          # Both, so a blank image can be attributed. If the empty window
+          # renders and the filled one does not, the fault is in rebuilding
+          # the list; if neither renders, it is in the capture itself.
+          timeout 60 xvfb-run -a --server-args="-screen 0 1280x900x24" \
+            .build/release/mediafin-gtk --screenshot empty.png
+          echo "empty-state capture: $(stat -c %s empty.png) bytes"
+
           timeout 90 xvfb-run -a --server-args="-screen 0 1280x900x24" \
             .build/release/mediafin-gtk --demo --screenshot window.png | tee shot.log
           file window.png
