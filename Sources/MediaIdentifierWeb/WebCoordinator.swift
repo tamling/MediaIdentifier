@@ -410,6 +410,11 @@ public final class WebCoordinator: WebCommandSink, @unchecked Sendable {
     /// New files are only *offered*: they are scanned and proposed, never
     /// renamed on their own. Moving someone's files without them having seen
     /// the proposal is not something a watch setting should authorise.
+    ///
+    /// A file is reported only once its size has stayed the same between two
+    /// polls (`WatchFolderScanner`), so a download still being written is not
+    /// picked up half-finished. That means a new file shows up one interval
+    /// after it finishes, which is the right trade.
     private func pollWatchFolder() {
         let settings = self.settings
         guard settings.watchSourceFolder, !settings.sourceFolder.isEmpty,

@@ -351,6 +351,10 @@ final class WatchFolderTests: XCTestCase {
         coordinator.executeForTesting(.saveSettings(settings(watching: true)))
         let original = try makeFile("The.Matrix.1999.1080p.mkv")
 
+        // A file is only offered once its size has been stable across two
+        // polls, so that a download still being written is not picked up.
+        coordinator.pollWatchFolderForTesting()
+        XCTAssertTrue(coordinator.items.isEmpty, "not offered until the size has settled")
         coordinator.pollWatchFolderForTesting()
 
         XCTAssertEqual(coordinator.items.count, 1, "the new file should be proposed")
@@ -364,21 +368,39 @@ final class WatchFolderTests: XCTestCase {
         coordinator.executeForTesting(.saveSettings(settings(watching: true)))
         _ = try makeFile("The.Matrix.1999.mkv")
 
-        coordinator.pollWatchFolderForTesting()
+        coordinator.pollWatchFolderForTesting()   // establishes the size
+        coordinator.pollWatchFolderForTesting()   // size stable → offered
         XCTAssertTrue((coordinator.snapshot.lastResult ?? "").contains("appeared"),
                       coordinator.snapshot.lastResult ?? "nil")
 
         // Replace the message, so a second report would be visible.
         coordinator.executeForTesting(.undoLastRename)
-        // A second poll finds nothing new, so it must not report anything.
+        // Further polls find nothing new, so they must not report anything.
+        coordinator.pollWatchFolderForTesting()
         coordinator.pollWatchFolderForTesting()
         XCTAssertFalse((coordinator.snapshot.lastResult ?? "").contains("appeared"),
                        coordinator.snapshot.lastResult ?? "nil")
     }
 
+    /// The point of the two-poll rule: a file still being written must not be
+    /// picked up half-downloaded.
+    func testAGrowingFileIsNotOfferedUntilItStops() throws {
+        coordinator.executeForTesting(.saveSettings(settings(watching: true)))
+        let url = try makeFile("The.Matrix.1999.mkv")
+
+        coordinator.pollWatchFolderForTesting()
+        try Data("still downloading…".utf8).write(to: url)   // size changed
+        coordinator.pollWatchFolderForTesting()
+        XCTAssertTrue(coordinator.items.isEmpty, "a growing file must not be offered")
+
+        coordinator.pollWatchFolderForTesting()              // size now stable
+        XCTAssertEqual(coordinator.items.count, 1)
+    }
+
     func testNonVideoFilesAreIgnored() throws {
         coordinator.executeForTesting(.saveSettings(settings(watching: true)))
         _ = try makeFile("readme.txt")
+        coordinator.pollWatchFolderForTesting()
         coordinator.pollWatchFolderForTesting()
         XCTAssertTrue(coordinator.items.isEmpty)
         XCTAssertFalse((coordinator.snapshot.lastResult ?? "").contains("appeared"))
@@ -387,6 +409,7 @@ final class WatchFolderTests: XCTestCase {
     func testPollingDoesNothingWhenWatchingIsOff() throws {
         coordinator.executeForTesting(.saveSettings(settings(watching: false)))
         _ = try makeFile("The.Matrix.1999.mkv")
+        coordinator.pollWatchFolderForTesting()
         coordinator.pollWatchFolderForTesting()
         XCTAssertTrue(coordinator.items.isEmpty)
     }
