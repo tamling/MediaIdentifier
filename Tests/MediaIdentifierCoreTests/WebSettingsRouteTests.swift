@@ -283,7 +283,7 @@ final class WebSettingsRouteTests: XCTestCase {
             ("/library/scan", .scanSourceFolder),
             ("/library/apply", .applyProposedRenames(accepting: nil)),
             ("/library/undo", .undoLastRename),
-            ("/convert/start", .startConversions),
+            ("/convert/scan", .findConvertible),
             ("/history/clear", .clearHistory),
             ("/settings/test-llm", .testLocalLLMConnection),
             ("/settings/test-jellyfin", .testJellyfinConnection),

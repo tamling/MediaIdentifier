@@ -6,6 +6,9 @@ public struct RenameLogEntry: Identifiable, Codable, Equatable, Sendable {
         case success
         case failure
         case skipped
+        /// A re-encode rather than a rename, so the history can say which it
+        /// was instead of labelling a conversion "renamed".
+        case converted
     }
 
     public var id: UUID

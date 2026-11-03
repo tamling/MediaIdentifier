@@ -117,6 +117,8 @@ let router = WebRouter(
     configuredSecrets: { coordinator.configuredSecrets },
     items: { coordinator.items },
     logEntries: { coordinator.logEntries },
+    convertible: { coordinator.convertible },
+    ffmpegAvailable: { coordinator.ffmpegAvailable },
     commands: coordinator,
     snapshot: { coordinator.snapshot }
 )

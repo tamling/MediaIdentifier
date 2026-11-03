@@ -19,6 +19,8 @@ public struct WebRouter: Sendable {
     private let configuredSecrets: @Sendable () -> Set<SecretKey>
     private let items: @Sendable () -> [RenameItem]
     private let logEntries: @Sendable () -> [RenameLogEntry]
+    private let convertible: @Sendable () -> [ConversionCandidate]
+    private let ffmpegAvailable: @Sendable () -> Bool
     private let commands: WebCommandSink?
 
     public init(policy: WebSecurityPolicy,
@@ -28,6 +30,8 @@ public struct WebRouter: Sendable {
                 configuredSecrets: @escaping @Sendable () -> Set<SecretKey> = { [] },
                 items: @escaping @Sendable () -> [RenameItem] = { [] },
                 logEntries: @escaping @Sendable () -> [RenameLogEntry] = { [] },
+                convertible: @escaping @Sendable () -> [ConversionCandidate] = { [] },
+                ffmpegAvailable: @escaping @Sendable () -> Bool = { false },
                 commands: WebCommandSink? = nil,
                 snapshot: @escaping @Sendable () -> StatusSnapshot) {
         self.policy = policy
@@ -37,6 +41,8 @@ public struct WebRouter: Sendable {
         self.configuredSecrets = configuredSecrets
         self.items = items
         self.logEntries = logEntries
+        self.convertible = convertible
+        self.ffmpegAvailable = ffmpegAvailable
         self.commands = commands
         self.snapshot = snapshot
     }
@@ -47,7 +53,8 @@ public struct WebRouter: Sendable {
         "/login", "/logout", "/settings",
         "/settings/test-llm", "/settings/test-jellyfin",
         "/library/scan", "/library/apply", "/library/undo",
-        "/convert/start", "/history/clear",
+        "/convert/scan", "/convert/start", "/convert/cancel",
+        "/history/clear",
     ]
 
     // MARK: Entry point
@@ -91,6 +98,8 @@ public struct WebRouter: Sendable {
             return overviewPage()
         case "/settings":
             return settingsPage(settings(), notice: Self.notice(for: request.query))
+        case "/convert":
+            return convertPage()
         case "/history":
             return historyPage()
         case "/history/export":
@@ -170,9 +179,16 @@ public struct WebRouter: Sendable {
         case "/library/undo":
             submit(.undoLastRename)
             return redirect(to: "/")
+        case "/convert/scan":
+            submit(.findConvertible)
+            return redirect(to: "/convert")
         case "/convert/start":
-            submit(.startConversions)
-            return redirect(to: "/")
+            // Only the ticked files, and only because a button was pressed.
+            submit(.convertFiles(accepting: Self.selectedItemIDs(in: request) ?? []))
+            return redirect(to: "/convert")
+        case "/convert/cancel":
+            submit(.cancelConversions)
+            return redirect(to: "/convert")
         case "/history/clear":
             submit(.clearHistory)
             return redirect(to: "/")
@@ -185,6 +201,10 @@ public struct WebRouter: Sendable {
         let submitted = WebSettings.fromForm(fields, current: settings())
         let problems = submitted.problems()
         guard problems.isEmpty else {
+            // A mistake in the conversion form must come back on that page.
+            if Self.settingsReturnPath(fields) == "/convert" {
+                return convertPage(problems: problems, status: 422)
+            }
             return settingsPage(submitted, problems: problems, status: 422)
         }
         submit(.saveSettings(submitted))
@@ -201,7 +221,14 @@ public struct WebRouter: Sendable {
                 submit(.setSecret(key, value))
             }
         }
-        return redirect(to: "/settings?saved=1")
+        return redirect(to: Self.settingsReturnPath(fields) + "?saved=1")
+    }
+
+    /// Where to go after saving, so the convert page's own form comes back to
+    /// itself. Only these two paths are honoured: a redirect target is never
+    /// taken from the request as given.
+    static func settingsReturnPath(_ fields: [String: String]) -> String {
+        fields["after"] == "/convert" ? "/convert" : "/settings"
     }
 
     private func submit(_ command: WebCommand) {
@@ -366,6 +393,175 @@ public struct WebRouter: Sendable {
         """)
     }
 
+    /// Files that could be re-encoded, with the options and a start button.
+    ///
+    /// Nothing is converted without this button being pressed, and the output
+    /// is written beside the original — which is why the page says so plainly
+    /// rather than leaving the user to guess what happens to their media.
+    func convertPage(problems: [WebSettings.Problem] = [],
+                     status: Int = 200) -> HTTPResponse {
+        let state = snapshot()
+        let settings = settings().conversion
+        let candidates = convertible()
+        let haveFFmpeg = ffmpegAvailable()
+
+        let missingFFmpeg = haveFFmpeg ? "" : """
+        <p class="note">FFmpeg was not found, so nothing can be converted. \
+        Install it — <code>apt install ffmpeg</code> on Debian or Ubuntu — or \
+        set its path below.</p>
+        """
+
+        var rows = ""
+        for candidate in candidates {
+            rows += """
+            <tr>
+              <td class="tick"><input type="checkbox" name="\(Self.selectionField)" \
+            value="\(candidate.id.uuidString)"></td>
+              <td><div class="to">\(Self.escape(candidate.fileName))</div></td>
+              <td class="right-cell"><span class="hint">\(Self.escape(candidate.readableSize))</span></td>
+            </tr>
+            """
+        }
+
+        let list: String
+        if state.converting {
+            let file = state.currentFile.map { Self.escape($0) } ?? "a file"
+            list = """
+            <p class="sub">Converting \(file) — \(state.activePercent) % \
+            (\(state.pendingConversions) still queued)</p>
+            <form method="post" action="/convert/cancel">
+              \(csrf.hiddenField)
+              <button type="submit">Stop after this file</button>
+            </form>
+            """
+        } else if candidates.isEmpty {
+            list = """
+            <p class="hint">Nothing found yet. “Look for files” searches your \
+            library folders for videos that are not already converted.</p>
+            """
+        } else {
+            list = """
+            <form method="post" action="/convert/start">
+              \(csrf.hiddenField)
+              <input type="hidden" name="\(Self.selectionPresentField)" value="1">
+              <table>\(rows)</table>
+              <button type="submit"\(haveFFmpeg ? "" : " disabled")>\
+            Convert the ticked files</button>
+              <p class="hint">The result is written beside the original, as \
+            <code>…\(Self.escape(".\(ConversionOutput.marker(for: settings.options))"))\
+            .mkv</code>. Nothing is deleted — remove the originals yourself once \
+            you are happy.</p>
+            </form>
+            """
+        }
+
+        func options<T: Equatable>(_ all: [T], _ current: T,
+                                   value: (T) -> String, label: (T) -> String) -> String {
+            all.map { item in
+                let selected = item == current ? " selected" : ""
+                return "<option value=\"\(value(item))\"\(selected)>\(Self.escape(label(item)))</option>"
+            }.joined()
+        }
+
+        let codecOptions = options(ConversionOptions.VideoCodec.allCases, settings.videoCodec,
+                                   value: { $0.rawValue },
+                                   label: { Self.codecLabel($0) })
+        let presetOptions = options(ConversionOptions.Preset.allCases, settings.preset,
+                                    value: { $0.rawValue },
+                                    label: { "\($0.rawValue) — \(Self.presetHint($0))" })
+        let audioOptions = options(ConversionOptions.AudioMode.allCases, settings.audioMode,
+                                   value: { $0.rawValue },
+                                   label: { Self.audioLabel($0) })
+        let heightOptions = WebConversionSettings.offeredHeights.map { height in
+            let selected = height == settings.targetHeight ? " selected" : ""
+            let value = height.map(String.init) ?? ""
+            return "<option value=\"\(value)\"\(selected)>"
+                + "\(Self.escape(WebConversionSettings.heightLabel(height)))</option>"
+        }.joined()
+
+        return .html("""
+        <!DOCTYPE html>
+        <html lang="en"><head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        \(state.converting ? "<meta http-equiv=\"refresh\" content=\"3\">" : "")
+        <title>Mediafin – Convert</title>
+        \(Self.styles)
+        </head>
+        <body>
+        <div class="page">
+          \(Self.navigation(current: "/convert"))
+          <div class="card">
+            <h1>Convert</h1>
+            <p class="sub">Re-encode to save space. Expect about \
+        \(settings.estimatedSizePercent) % of the original size with these settings.</p>
+            \(missingFFmpeg)
+            \(list)
+          </div>
+
+          <div class="card actions">
+            <form method="post" action="/convert/scan">
+              \(csrf.hiddenField)
+              <button type="submit"\(state.converting ? " disabled" : "")>Look for files</button>
+            </form>
+          </div>
+
+          <form method="post" action="/settings" class="card">
+            \(csrf.hiddenField)
+            <input type="hidden" name="conversionFormPresent" value="1">
+            <input type="hidden" name="after" value="/convert">
+            <h2>Settings</h2>
+            \(problems.isEmpty ? "" : problems.map {
+                "<p class=\"note\">\(Self.escape($0.message))</p>"
+            }.joined())
+            <label for="videoCodec">Video codec</label>
+            <select id="videoCodec" name="videoCodec">\(codecOptions)</select>
+            <label for="quality">Quality (lower is better and larger, 0–51)</label>
+            <input id="quality" name="quality" type="text" value="\(settings.quality)">
+            <label for="preset">Encoder effort</label>
+            <select id="preset" name="preset">\(presetOptions)</select>
+            <label for="targetHeight">Resolution</label>
+            <select id="targetHeight" name="targetHeight">\(heightOptions)</select>
+            <label for="audioMode">Audio</label>
+            <select id="audioMode" name="audioMode">\(audioOptions)</select>
+            <label class="inline"><input type="checkbox" name="stripSubtitles" value="1"\
+        \(settings.stripSubtitles ? " checked" : "")> Drop subtitle tracks</label>
+            <label for="ffmpegPath">FFmpeg path (only if it is somewhere unusual)</label>
+            <input id="ffmpegPath" name="ffmpegPath" type="text" \
+        value="\(Self.escape(settings.ffmpegPath))">
+            <button type="submit">Save</button>
+          </form>
+        </div>
+        </body></html>
+        """, status: status)
+    }
+
+    static func codecLabel(_ codec: ConversionOptions.VideoCodec) -> String {
+        switch codec {
+        case .h265: return "H.265 / HEVC — best balance, plays nearly everywhere"
+        case .h264: return "H.264 — largest files, plays everywhere"
+        case .av1: return "AV1 — smallest files, slowest, needs a recent player"
+        case .copy: return "Keep the video as it is (only repackage)"
+        }
+    }
+
+    static func presetHint(_ preset: ConversionOptions.Preset) -> String {
+        switch preset {
+        case .veryslow, .slower: return "smallest files, very slow"
+        case .slow: return "recommended"
+        case .medium: return "faster, slightly larger"
+        case .fast, .faster, .veryfast: return "quick, noticeably larger"
+        }
+    }
+
+    static func audioLabel(_ mode: ConversionOptions.AudioMode) -> String {
+        switch mode {
+        case .passthrough: return "Keep the original audio (recommended)"
+        case .opus: return "Re-encode to Opus — smallest"
+        case .aac: return "Re-encode to AAC — most compatible"
+        }
+    }
+
     /// What has been renamed, newest first, with a download of the whole log.
     func historyPage() -> HTTPResponse {
         let entries = logEntries()
@@ -380,6 +576,7 @@ public struct WebRouter: Sendable {
             case .success: status = "<span class=\"ok-text\">renamed</span>"
             case .skipped: status = "<span class=\"flag\">skipped</span>"
             case .failure: status = "<span class=\"bad-text\">failed</span>"
+            case .converted: status = "<span class=\"ok-text\">converted</span>"
             }
             let detail = entry.errorDescription.map {
                 "<div class=\"hint\">\(Self.escape($0))</div>"
@@ -594,7 +791,8 @@ public struct WebRouter: Sendable {
 
     /// Links shared by the pages.
     static func navigation(current: String) -> String {
-        let items = [("/", "Overview"), ("/history", "History"), ("/settings", "Settings")]
+        let items = [("/", "Overview"), ("/convert", "Convert"),
+                     ("/history", "History"), ("/settings", "Settings")]
         let links = items.map { path, title in
             path == current
                 ? "<span class=\"here\">\(title)</span>"

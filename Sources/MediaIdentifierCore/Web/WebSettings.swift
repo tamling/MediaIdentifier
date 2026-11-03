@@ -38,6 +38,8 @@ public struct WebSettings: Codable, Sendable, Equatable {
     /// Move files instead of only previewing.
     public var conflictPolicy: ConflictPolicyChoice
     public var watchSourceFolder: Bool
+    /// Transcoding settings (FR16, FR17).
+    public var conversion: WebConversionSettings
 
     public enum ConflictPolicyChoice: String, Codable, Sendable, CaseIterable {
         case skip, rename, replace
@@ -66,7 +68,8 @@ public struct WebSettings: Codable, Sendable, Equatable {
                 localLLMBaseURL: String = "", localLLMModel: String = "",
                 jellyfinBaseURL: String = "",
                 conflictPolicy: ConflictPolicyChoice = .skip,
-                watchSourceFolder: Bool = false) {
+                watchSourceFolder: Bool = false,
+                conversion: WebConversionSettings = WebConversionSettings()) {
         self.sourceFolder = sourceFolder
         self.moviesFolder = moviesFolder
         self.seriesFolder = seriesFolder
@@ -76,6 +79,39 @@ public struct WebSettings: Codable, Sendable, Equatable {
         self.jellyfinBaseURL = jellyfinBaseURL
         self.conflictPolicy = conflictPolicy
         self.watchSourceFolder = watchSourceFolder
+        self.conversion = conversion
+    }
+
+    // MARK: Decoding
+
+    /// Every field is optional on the way in, so a settings file written by an
+    /// older version still loads once a field is added. Without this, one
+    /// unknown-shaped file would throw and silently reset *all* settings.
+    enum CodingKeys: String, CodingKey {
+        case sourceFolder, moviesFolder, seriesFolder, identification
+        case localLLMBaseURL, localLLMModel, jellyfinBaseURL
+        case conflictPolicy, watchSourceFolder, conversion
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let defaults = WebSettings()
+        func value<T: Decodable>(_ key: CodingKeys, _ fallback: T) -> T {
+            guard let decoded = try? container.decodeIfPresent(T.self, forKey: key) else {
+                return fallback
+            }
+            return decoded ?? fallback
+        }
+        sourceFolder = value(.sourceFolder, defaults.sourceFolder)
+        moviesFolder = value(.moviesFolder, defaults.moviesFolder)
+        seriesFolder = value(.seriesFolder, defaults.seriesFolder)
+        identification = value(.identification, defaults.identification)
+        localLLMBaseURL = value(.localLLMBaseURL, defaults.localLLMBaseURL)
+        localLLMModel = value(.localLLMModel, defaults.localLLMModel)
+        jellyfinBaseURL = value(.jellyfinBaseURL, defaults.jellyfinBaseURL)
+        conflictPolicy = value(.conflictPolicy, defaults.conflictPolicy)
+        watchSourceFolder = value(.watchSourceFolder, defaults.watchSourceFolder)
+        conversion = value(.conversion, defaults.conversion)
     }
 
     // MARK: Validation
@@ -130,6 +166,7 @@ public struct WebSettings: Codable, Sendable, Equatable {
                                          label: "The Jellyfin address", required: false) {
             found.append(problem)
         }
+        found.append(contentsOf: conversion.problems())
         return found
     }
 
@@ -201,6 +238,7 @@ public struct WebSettings: Codable, Sendable, Equatable {
         if fields["watchSourceFolderPresent"] != nil {
             settings.watchSourceFolder = fields["watchSourceFolder"] != nil
         }
+        settings.conversion = WebConversionSettings.fromForm(fields, current: current.conversion)
         return settings.normalised()
     }
 }

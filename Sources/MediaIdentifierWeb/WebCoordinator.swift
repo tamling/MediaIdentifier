@@ -52,6 +52,11 @@ public final class WebCoordinator: WebCommandSink, @unchecked Sendable {
     private var _settings: WebSettings
     private var _snapshot = StatusSnapshot()
     private var _items: [RenameItem] = []
+    private var _convertible: [ConversionCandidate] = []
+    /// Set while a conversion run should stop after the file in flight.
+    private var _cancelConversions = false
+    /// The running FFmpeg, so a cancel can end it.
+    private var _runningConversion: Process?
 
     /// Set when the settings file could not be read, so the interface can say
     /// so instead of silently running on defaults.
@@ -96,12 +101,31 @@ public final class WebCoordinator: WebCommandSink, @unchecked Sendable {
     public var snapshot: StatusSnapshot { lock.lock(); defer { lock.unlock() }; return _snapshot }
     public var settings: WebSettings { lock.lock(); defer { lock.unlock() }; return _settings }
     public var items: [RenameItem] { lock.lock(); defer { lock.unlock() }; return _items }
+    public var convertible: [ConversionCandidate] {
+        lock.lock(); defer { lock.unlock() }; return _convertible
+    }
+
+    /// Whether FFmpeg can be found, so the page can say so instead of failing
+    /// once the button is pressed.
+    public var ffmpegAvailable: Bool {
+        FileManager.default.isExecutableFile(atPath: ffmpegPath)
+    }
+
+    private var ffmpegPath: String {
+        FFmpegLocator.resolve(configured: settings.conversion.ffmpegPath)
+    }
     public var configuredSecrets: Set<SecretKey> { secretStore.configuredKeys() }
     public var logEntries: [RenameLogEntry] { log.entries }
 
     // MARK: Submission
 
     public func submit(_ command: WebCommand) {
+        // Cancelling must not queue behind the very run it is meant to stop,
+        // so it is handled here rather than on the serial queue.
+        if case .cancelConversions = command {
+            cancelConversions()
+            return
+        }
         queue.async { [weak self] in self?.execute(command) }
     }
 
@@ -129,10 +153,13 @@ public final class WebCoordinator: WebCommandSink, @unchecked Sendable {
             applyRenames(accepting: accepting)
         case .undoLastRename:
             undoLast()
-        case .startConversions:
-            // Converting is not reachable from the interface yet. Say so
-            // rather than appear to have started something.
-            update { $0.lastResult = "Converting is not available in the web interface yet." }
+        case .findConvertible:
+            findConvertible()
+        case .convertFiles(let accepting):
+            convertFiles(accepting: accepting)
+        case .cancelConversions:
+            // Handled in `submit`, off the queue.
+            break
         case .clearHistory:
             clearHistory()
         }
@@ -377,6 +404,164 @@ public final class WebCoordinator: WebCommandSink, @unchecked Sendable {
         journal.clear()
         update { $0.lastResult = "History cleared." }
         refreshSnapshotCounts()
+    }
+
+    // MARK: Converting
+
+    /// Lists videos in the library folders that are not already output of a
+    /// previous conversion.
+    private func findConvertible() {
+        let settings = self.settings
+        let roots = [settings.moviesFolder, settings.seriesFolder, settings.sourceFolder]
+            .filter { !$0.isEmpty }
+            .map { URL(fileURLWithPath: $0, isDirectory: true) }
+
+        guard !roots.isEmpty else {
+            update { $0.lastResult = "Set your library folders in the settings first." }
+            return
+        }
+
+        update { $0.busy = true; $0.convertStatus = "Looking for files…" }
+        var found: [ConversionCandidate] = []
+        var seen: Set<String> = []
+        for root in roots {
+            for url in FolderScan.videoFiles(under: root) {
+                let path = url.standardizedFileURL.path
+                guard seen.insert(path).inserted else { continue }
+                // Never offer our own output: a second pass would re-encode
+                // an already lossy file.
+                guard !ConversionOutput.isConvertedOutput(url) else { continue }
+                let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
+                found.append(ConversionCandidate(source: url, byteSize: Int64(size)))
+            }
+        }
+
+        lock.lock(); _convertible = found; lock.unlock()
+        update {
+            $0.busy = false
+            $0.convertStatus = nil
+            $0.lastResult = found.isEmpty
+                ? "No files to convert were found."
+                : "\(found.count) file\(found.count == 1 ? "" : "s") could be converted."
+        }
+    }
+
+    /// Converts the ticked files, one after another.
+    ///
+    /// The output goes beside the original and the original is kept: a
+    /// re-encode is lossy and slow, so a bad result has to be undoable by
+    /// deleting the new file. Nothing starts without this command.
+    private func convertFiles(accepting: Set<UUID>) {
+        let all = convertible
+        let pending = all.filter { accepting.contains($0.id) }
+        guard !pending.isEmpty else {
+            update { $0.lastResult = "No files were ticked, so nothing was converted." }
+            return
+        }
+        let options = settings.conversion.options
+        let converter = FFmpegConverter(ffmpegPath: ffmpegPath)
+        guard converter.isAvailable else {
+            update {
+                $0.lastResult = FFmpegConverter.ConverterError.ffmpegNotFound
+                    .errorDescription ?? "FFmpeg was not found."
+            }
+            return
+        }
+
+        lock.lock(); _cancelConversions = false; lock.unlock()
+        var done = 0
+        var failed = 0
+
+        for (index, candidate) in pending.enumerated() {
+            lock.lock()
+            let cancelled = _cancelConversions
+            lock.unlock()
+            if cancelled { break }
+
+            let destination = ConversionOutput.destination(for: candidate.source,
+                                                           options: options)
+            update {
+                $0.busy = true
+                $0.converting = true
+                $0.convertProgress = 0
+                $0.currentFile = candidate.fileName
+                $0.pendingConversions = pending.count - index - 1
+                $0.convertDetail = nil
+            }
+
+            do {
+                try converter.convert(
+                    input: candidate.source,
+                    output: destination,
+                    options: options,
+                    onStart: { [weak self] process in
+                        guard let self else { return }
+                        self.lock.lock()
+                        self._runningConversion = process
+                        self.lock.unlock()
+                    },
+                    progress: { [weak self] progress in
+                        self?.update {
+                            $0.convertProgress = progress.fraction
+                            if let speed = progress.speed {
+                                $0.convertDetail = String(format: "%.0f %% · %.1f×",
+                                                          progress.fraction * 100, speed)
+                            }
+                        }
+                    }
+                )
+                done += 1
+                log.append(RenameLogEntry(oldName: candidate.fileName,
+                                          newName: destination.lastPathComponent,
+                                          status: .converted))
+            } catch {
+                failed += 1
+                // A half-written output is worse than none: it would look like
+                // a finished file to a media server.
+                try? FileManager.default.removeItem(at: destination)
+                log.append(RenameLogEntry(oldName: candidate.fileName,
+                                          newName: destination.lastPathComponent,
+                                          status: .failure,
+                                          errorDescription: Self.describe(error)))
+            }
+            lock.lock(); _runningConversion = nil; lock.unlock()
+        }
+
+        let converted = Set(pending.prefix(done + failed).map(\.id))
+        lock.lock()
+        _convertible.removeAll { converted.contains($0.id) }
+        let stopped = _cancelConversions
+        _cancelConversions = false
+        lock.unlock()
+
+        update {
+            $0.busy = false
+            $0.converting = false
+            $0.convertProgress = 1
+            $0.currentFile = nil
+            $0.convertDetail = nil
+            $0.pendingConversions = 0
+            $0.hasError = failed > 0
+            $0.lastResult = "Converted \(done)"
+                + (failed > 0 ? ", \(failed) failed" : "")
+                + (stopped ? " — stopped early" : "")
+                + ". The originals are still there."
+        }
+        refreshSnapshotCounts()
+    }
+
+    private func cancelConversions() {
+        lock.lock()
+        _cancelConversions = true
+        let process = _runningConversion
+        lock.unlock()
+        // End the encoder now rather than waiting out a long file.
+        process?.terminate()
+        update { $0.lastResult = "Stopping after the current file." }
+    }
+
+    static func describe(_ error: Error) -> String {
+        (error as? LocalizedError)?.errorDescription ?? String(describing: error)
     }
 
     // MARK: Watching the import folder

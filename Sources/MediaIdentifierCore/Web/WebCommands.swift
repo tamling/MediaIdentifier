@@ -17,7 +17,12 @@ public enum WebCommand: Sendable, Equatable {
     /// ticked; nil means every proposal.
     case applyProposedRenames(accepting: Set<UUID>?)
     case undoLastRename
-    case startConversions
+    /// Looks for files that could be converted, so the page has something to
+    /// show. Does not convert anything.
+    case findConvertible
+    /// Converts the files the user ticked. Never started on its own.
+    case convertFiles(accepting: Set<UUID>)
+    case cancelConversions
     case clearHistory
 }
 

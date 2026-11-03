@@ -111,6 +111,7 @@ private struct LogRow: View {
         case .success: return "checkmark.circle.fill"
         case .failure: return "xmark.octagon.fill"
         case .skipped: return "minus.circle.fill"
+        case .converted: return "wand.and.stars"
         }
     }
     private var color: Color {
@@ -118,6 +119,7 @@ private struct LogRow: View {
         case .success: return Theme.accentBright
         case .failure: return Color(hex: 0xE05A4F)
         case .skipped: return Theme.mono
+        case .converted: return Theme.accentBright
         }
     }
 }

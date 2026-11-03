@@ -267,11 +267,18 @@ final class WebCoordinatorTests: XCTestCase {
         XCTAssertNotNil(coordinator.enrichmentProvider(settings))
     }
 
-    // MARK: Converting is honest about not being there yet
+    // MARK: Converting
 
-    func testConvertingSaysItIsNotAvailableRatherThanPretending() {
-        run(.startConversions)
-        XCTAssertTrue((coordinator.snapshot.lastResult ?? "").contains("not available"),
+    func testConvertingNeedsLibraryFoldersFirst() {
+        run(.findConvertible)
+        XCTAssertTrue((coordinator.snapshot.lastResult ?? "").contains("library folders"),
+                      coordinator.snapshot.lastResult ?? "nil")
+    }
+
+    func testNothingTickedConvertsNothing() {
+        run(.saveSettings(configuredSettings()))
+        run(.convertFiles(accepting: []))
+        XCTAssertTrue((coordinator.snapshot.lastResult ?? "").contains("No files were ticked"),
                       coordinator.snapshot.lastResult ?? "nil")
         XCTAssertFalse(coordinator.snapshot.converting)
     }
