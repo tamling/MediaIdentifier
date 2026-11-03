@@ -97,10 +97,11 @@ public struct WebSettings: Codable, Sendable, Equatable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let defaults = WebSettings()
         func value<T: Decodable>(_ key: CodingKeys, _ fallback: T) -> T {
-            guard let decoded = try? container.decodeIfPresent(T.self, forKey: key) else {
-                return fallback
-            }
-            return decoded ?? fallback
+            // `try?` flattens the Optional that decodeIfPresent returns, so
+            // this single coalesce covers both ways a damaged file fails: the
+            // key is absent, or it holds the wrong type. Either way the
+            // default stands and the rest of the file still loads.
+            (try? container.decodeIfPresent(T.self, forKey: key)) ?? fallback
         }
         sourceFolder = value(.sourceFolder, defaults.sourceFolder)
         moviesFolder = value(.moviesFolder, defaults.moviesFolder)

@@ -130,13 +130,34 @@ jobs:
           # widget was never laid out, and it would otherwise look like a pass.
           file window.png | grep -qE 'PNG image data, [0-9]{3,} x [0-9]{3,}'
           echo "bytes: $(stat -c %s window.png)"
+      # Before the checks that can fail: the rendered window is the most
+      # useful thing this job produces, and a later failing assertion must not
+      # be what stops it being readable.
+      - name: Emit the screenshot as base64
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "--- BEGIN window.png base64 ---"
+          base64 -w 120 window.png
+          echo "--- END window.png base64 ---"
+      - name: Upload the screenshot
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gtk-window-screenshot
+          path: window.png
+          if-no-files-found: warn
       - name: Refuse to hang without a display
         shell: bash
         run: |
+          # No `set -e` here, and no `set +e` either: GitHub already invokes
+          # this shell as `bash -e -o pipefail`, so the expected non-zero exit
+          # would abort the step before $? could be read. `|| code=$?` is the
+          # form that survives -e.
           set -uo pipefail
+          code=0
           timeout 20 env -u DISPLAY -u WAYLAND_DISPLAY \
-            .build/release/mediafin-gtk --screenshot should-not-exist.png
-          code=$?
+            .build/release/mediafin-gtk --screenshot should-not-exist.png || code=$?
           if [ "$code" != 2 ]; then
             echo "FAIL: expected exit 2 with no display, got $code"
             exit 1
@@ -146,19 +167,6 @@ jobs:
             exit 1
           fi
           echo "ok    : exits 2 with no display and writes nothing"
-      - name: Emit the screenshot as base64
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "--- BEGIN window.png base64 ---"
-          base64 -w 120 window.png
-          echo "--- END window.png base64 ---"
-      - name: Upload the screenshot
-        uses: actions/upload-artifact@v4
-        with:
-          name: gtk-window-screenshot
-          path: window.png
-          if-no-files-found: error
 
   app:
     name: Build .app
