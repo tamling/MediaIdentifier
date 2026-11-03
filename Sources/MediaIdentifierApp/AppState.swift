@@ -279,9 +279,26 @@ final class AppState: ObservableObject {
     // MARK: Status web server (FR20)
 
     /// Hostname-based URL shown in Settings (reachable on the LAN via mDNS).
+    /// Always https: the page is served over TLS so the access token is not
+    /// sent in clear text.
     var webURL: String {
         let host = webLocalOnly ? "localhost" : ProcessInfo.processInfo.hostName
-        return "http://\(host):\(webPort)/"
+        return "https://\(host):\(webPort)/"
+    }
+
+    /// The token a browser needs for the status page. `/healthz` stays
+    /// reachable without it, so an uptime monitor still works.
+    var webAccessToken: String { webServer.accessToken }
+
+    /// Fingerprint of the self-signed certificate, to compare against the
+    /// browser's warning.
+    var webCertificateFingerprint: String { webServer.certificateFingerprint }
+
+    /// Issues a new token and restarts, signing every browser out.
+    func rotateWebToken() {
+        webServer.rotateToken()
+        restartWebServer()
+        lastResult = "A new access token was issued for the status page."
     }
 
     private func restartWebServer() {
@@ -290,7 +307,7 @@ final class AppState: ObservableObject {
         webServer.stop()
         guard webEnabled else { return }
         guard webServer.start(port: webPort, localOnly: webLocalOnly) else {
-            lastResult = "Status web page: port \(webPort) could not be opened."
+            lastResult = "Status web page: \(webServer.lastError ?? "could not be started")."
             return
         }
         publishStatus()

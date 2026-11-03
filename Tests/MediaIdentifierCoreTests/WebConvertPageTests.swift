@@ -216,3 +216,70 @@ final class WebConvertPageTests: XCTestCase {
         XCTAssertTrue(sink.commands.isEmpty, "nothing may be saved when the form is wrong")
     }
 }
+
+/// Tests the status-only mode the macOS app serves: authenticated and over
+/// TLS like everything else, but incapable of changing anything.
+final class WebStatusOnlyModeTests: XCTestCase {
+
+    private let token = "aaaabbbbccccddddaaaabbbbccccddddaaaabbbbccccddddaaaabbbbccccdddd"
+
+    private func router(snapshot: StatusSnapshot = StatusSnapshot()) -> WebRouter {
+        WebRouter(policy: WebSecurityPolicy(token: token, isTLS: true),
+                  mode: .statusOnly,
+                  snapshot: { snapshot })
+    }
+
+    private func get(_ router: WebRouter, _ path: String,
+                     authenticated: Bool = true) -> HTTPResponse {
+        let headers = authenticated ? ["authorization": "Bearer \(token)"] : [:]
+        return router.respond(to: HTTPRequest(method: "GET", path: path, headers: headers))
+    }
+
+    private func text(_ response: HTTPResponse) -> String {
+        String(decoding: response.body, as: UTF8.self)
+    }
+
+    func testStatusPagesAreServed() {
+        let busy = router(snapshot: StatusSnapshot(busy: true, renaming: true,
+                                                   renameProgress: 0.5))
+        XCTAssertEqual(get(busy, "/").status, 200)
+        XCTAssertTrue(text(get(busy, "/")).contains("Mediafin"))
+        XCTAssertEqual(get(busy, "/api/status").contentType, "application/json")
+        XCTAssertEqual(get(busy, "/healthz").status, 503)
+    }
+
+    /// The pages that could change something do not exist in this mode.
+    func testTheConfigurablePagesAreNotServed() {
+        for path in ["/settings", "/convert", "/history", "/history/export"] {
+            XCTAssertEqual(get(router(), path).status, 404, path)
+        }
+    }
+
+    func testEveryWriteIsRefused() {
+        let gate = router()
+        for path in ["/library/scan", "/library/apply", "/convert/start", "/settings",
+                     "/history/clear"] {
+            let request = HTTPRequest(
+                method: "POST", path: path,
+                headers: ["authorization": "Bearer \(token)"],
+                body: Data("\(CSRFToken.fieldName)=\(gate.csrf.value)".utf8)
+            )
+            XCTAssertEqual(gate.respond(to: request).status, 405, path)
+        }
+    }
+
+    func testStillNeedsTheTokenExceptForHealth() {
+        XCTAssertEqual(get(router(), "/", authenticated: false).status, 401)
+        XCTAssertEqual(get(router(), "/api/status", authenticated: false).status, 401)
+        XCTAssertEqual(get(router(), "/healthz", authenticated: false).status, 200,
+                       "an uptime monitor cannot sign in")
+    }
+
+    /// The anonymous probe must not reveal what is being worked on.
+    func testHealthRevealsNothingAboutTheFiles() {
+        let snapshot = StatusSnapshot(busy: true, converting: true, convertProgress: 0.5,
+                                      currentFile: "Private.Video.2019.mkv")
+        let body = text(get(router(snapshot: snapshot), "/healthz", authenticated: false))
+        XCTAssertFalse(body.contains("Private.Video"), body)
+    }
+}

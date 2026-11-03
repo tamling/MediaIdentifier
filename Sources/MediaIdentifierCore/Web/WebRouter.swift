@@ -8,7 +8,17 @@ import Foundation
 /// Anything slow is handed to a `WebCommandSink` and reported back through the
 /// status snapshot, so no request waits on work.
 public struct WebRouter: Sendable {
+    /// How much of the interface is served.
+    public enum Mode: Sendable, Equatable {
+        /// Everything: settings, the file list, converting, history.
+        case full
+        /// Status only, read-only. Used by the macOS app, which has its own
+        /// native interface and only needs something a monitor can poll.
+        case statusOnly
+    }
+
     public var policy: WebSecurityPolicy
+    public let mode: Mode
     /// Token required by every state-changing request, exposed so a form can
     /// embed it and a test can present it.
     public let csrf: CSRFToken
@@ -24,6 +34,7 @@ public struct WebRouter: Sendable {
     private let commands: WebCommandSink?
 
     public init(policy: WebSecurityPolicy,
+                mode: Mode = .full,
                 throttle: LoginThrottle = LoginThrottle(),
                 csrf: CSRFToken = CSRFToken(),
                 settings: @escaping @Sendable () -> WebSettings = { WebSettings() },
@@ -35,6 +46,7 @@ public struct WebRouter: Sendable {
                 commands: WebCommandSink? = nil,
                 snapshot: @escaping @Sendable () -> StatusSnapshot) {
         self.policy = policy
+        self.mode = mode
         self.throttle = throttle
         self.csrf = csrf
         self.settings = settings
@@ -66,6 +78,12 @@ public struct WebRouter: Sendable {
         if request.method == "POST", !Self.writablePaths.contains(request.path) {
             return .methodNotAllowed()
         }
+        // In status-only mode nothing can be changed at all, so a write is
+        // refused before it reaches any handler.
+        if mode == .statusOnly, request.method == "POST",
+           request.path != "/login", request.path != "/logout" {
+            return .methodNotAllowed()
+        }
 
         // A liveness probe cannot log in, so it may stay anonymous. It answers
         // with idle/busy/error only — no names, no paths.
@@ -92,6 +110,19 @@ public struct WebRouter: Sendable {
         if request.path == "/login" { return loginPage() }
 
         guard isAuthorized(request) else { return unauthorized(for: request) }
+
+        if mode == .statusOnly {
+            switch request.path {
+            case "/", "/index.html":
+                return .html(StatusHTTP.html(snapshot()))
+            case "/api/status", "/api/status/":
+                return .json(StatusHTTP.json(snapshot()))
+            case "/healthz":
+                return health()
+            default:
+                return .notFound()
+            }
+        }
 
         switch request.path {
         case "/", "/index.html":

@@ -37,6 +37,9 @@ targets:
     dependencies:
       - package: MediaIdentifierCore
         product: MediaIdentifierCore
+      # The HTTPS status server shares the Linux binary's implementation.
+      - package: MediaIdentifierCore
+        product: MediaIdentifierWeb
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.mediafin.app

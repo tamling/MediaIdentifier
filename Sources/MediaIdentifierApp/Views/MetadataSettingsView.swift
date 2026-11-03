@@ -226,7 +226,7 @@ struct MetadataSettingsView: View {
             }
 
             // Read-only status web page (FR20)
-            group("Status web page (view only)") {
+            group("Status web page (view only, HTTPS)") {
                 Toggle("Enable status web page", isOn: $state.webEnabled)
                 HStack {
                     Text("Port")
@@ -244,8 +244,28 @@ struct MetadataSettingsView: View {
                         .foregroundStyle(Theme.accentBright)
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
+                    if !state.webAccessToken.isEmpty {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Access token — needed to open the page in a browser:")
+                                .font(.caption).foregroundStyle(Theme.textSecondary)
+                            Text(state.webAccessToken)
+                                .font(.system(size: 11, design: .monospaced))
+                                .textSelection(.enabled)
+                                .fixedSize(horizontal: false, vertical: true)
+                            Button("Issue a new token") { state.rotateWebToken() }
+                                .buttonStyle(.link)
+                        }
+                    }
+                    if !state.webCertificateFingerprint.isEmpty {
+                        Text("The certificate is self-signed, so the browser warns once. "
+                             + "Check that the fingerprint matches: "
+                             + state.webCertificateFingerprint)
+                            .font(.caption).foregroundStyle(Theme.textSecondary)
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
-                Text("Provides a view-only page with the current state. Simple reachability monitoring: in Uptime Kuma set up a regular HTTP monitor on …/healthz accepting status 200 → 200 = done (100 %), 503 = still running, 500 = error; Kuma thus reports completion and errors. Alternatively JSON: …/api/status with field 'busy'. Turn on 'Local only' if Kuma runs on the same Mac (otherwise reachable on the LAN). No commands are accepted, and no tokens or full paths are shown.")
+                Text("Provides a view-only page with the current state, over HTTPS. The page itself needs the access token above; /healthz does not, so a monitor still works. In Uptime Kuma set up an HTTP monitor on https://…/healthz accepting status 200 → 200 = done (100 %), 503 = still running, 500 = error. Because the certificate is self-signed you must turn off certificate checking in Kuma, or give Mediafin your own certificate. Alternatively JSON: …/api/status with field 'busy' — that one needs the token. Turn on 'Local only' if Kuma runs on the same Mac. No commands are accepted and no full paths are shown.")
                     .font(.caption).foregroundStyle(Theme.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
             }

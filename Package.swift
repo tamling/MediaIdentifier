@@ -59,7 +59,7 @@ targets.append(
     // SwiftUI macOS front-end. Only builds on macOS.
     .executableTarget(
         name: "MediaIdentifierApp",
-        dependencies: ["MediaIdentifierCore"],
+        dependencies: ["MediaIdentifierCore", "MediaIdentifierWeb"],
         path: "Sources/MediaIdentifierApp",
         // The asset catalog (app icon) is consumed by the Xcode/XcodeGen
         // build, not by SwiftPM; exclude it so `swift build`/`swift test`
