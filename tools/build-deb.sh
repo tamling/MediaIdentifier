@@ -88,10 +88,15 @@ if [ -n "$PREBUILT" ]; then
   BIN="$PREBUILT"
   [ -f "$BIN" ] || { echo "FAIL: no file at $BIN" >&2; exit 1; }
   # A wrong file here would produce a package that installs and then fails,
-  # so check it is actually an executable for this machine before packaging.
-  case "$(file -b "$BIN" 2>/dev/null)" in
-    *ELF*executable*|*ELF*shared\ object*) : ;;
-    *) echo "FAIL: $BIN is not a Linux executable" >&2; exit 1 ;;
+  # so check it is actually an ELF binary before packaging.
+  #
+  # Read the magic number rather than asking `file`: that is not installed
+  # everywhere, and when it is missing the old form produced no output, matched
+  # nothing, and rejected a perfectly good binary with a message blaming the
+  # binary. `od` is in coreutils and is always there.
+  case "$(od -An -N4 -tx1 "$BIN" 2>/dev/null | tr -d ' \n')" in
+    7f454c46) : ;;   # 0x7F 'E' 'L' 'F'
+    *) echo "FAIL: $BIN is not an ELF binary" >&2; exit 1 ;;
   esac
   chmod +x "$BIN" 2>/dev/null || true
 else
