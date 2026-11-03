@@ -134,6 +134,8 @@ public struct HTTPResponse: Sendable, Equatable {
         case 404: return "Not Found"
         case 405: return "Method Not Allowed"
         case 413: return "Payload Too Large"
+        case 422: return "Unprocessable Content"
+        case 429: return "Too Many Requests"
         case 500: return "Internal Server Error"
         case 503: return "Service Unavailable"
         default: return status < 400 ? "OK" : "Error"

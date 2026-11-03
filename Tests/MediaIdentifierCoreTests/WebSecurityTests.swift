@@ -27,8 +27,16 @@ final class WebSecurityTests: XCTestCase {
         HTTPRequest(method: "GET", path: path, headers: headers)
     }
 
-    private func post(_ path: String, form: String, headers: [String: String] = [:]) -> HTTPRequest {
-        HTTPRequest(method: "POST", path: path, headers: headers, body: Data(form.utf8))
+    /// A POST carrying the router's CSRF token, since every state-changing
+    /// request needs one. Pass `csrf: nil` to test the check itself.
+    private func post(_ path: String, form: String = "", csrf: String?,
+                      headers: [String: String] = [:]) -> HTTPRequest {
+        var body = form
+        if let csrf {
+            if !body.isEmpty { body += "&" }
+            body += "\(CSRFToken.fieldName)=\(csrf)"
+        }
+        return HTTPRequest(method: "POST", path: path, headers: headers, body: Data(body.utf8))
     }
 
     private func bodyText(_ response: HTTPResponse) -> String {
@@ -140,8 +148,8 @@ final class WebSecurityTests: XCTestCase {
     }
 
     func testWriteMethodsAreRejectedOutsideLogin() {
-        XCTAssertEqual(router().respond(to: post("/", form: "")).status, 405)
-        XCTAssertEqual(router().respond(to: post("/api/status", form: "")).status, 405)
+        XCTAssertEqual(router().respond(to: post("/", csrf: nil)).status, 405)
+        XCTAssertEqual(router().respond(to: post("/api/status", csrf: nil)).status, 405)
         XCTAssertEqual(
             router().respond(to: HTTPRequest(method: "DELETE", path: "/login")).status, 405
         )
@@ -186,7 +194,9 @@ final class WebSecurityTests: XCTestCase {
     // MARK: Login
 
     func testSuccessfulLoginSetsHardenedCookieAndRedirects() throws {
-        let response = router().respond(to: post("/login", form: "token=\(token)"))
+        let gate = router()
+        let response = gate.respond(to: post("/login", form: "token=\(token)",
+                                             csrf: gate.csrf.value))
         XCTAssertEqual(response.status, 303)
         XCTAssertEqual(response.headers["Location"], "/")
         let cookie = try XCTUnwrap(response.headers["Set-Cookie"])
@@ -202,14 +212,17 @@ final class WebSecurityTests: XCTestCase {
     func testPlainHTTPOmitsSecureFlagAndWarns() throws {
         let plain = router(isTLS: false)
         let cookie = try XCTUnwrap(
-            plain.respond(to: post("/login", form: "token=\(token)")).headers["Set-Cookie"]
+            plain.respond(to: post("/login", form: "token=\(token)",
+                                   csrf: plain.csrf.value)).headers["Set-Cookie"]
         )
         XCTAssertFalse(cookie.contains("Secure"))
         XCTAssertTrue(bodyText(plain.loginPage()).contains("not encrypted"))
     }
 
     func testWrongTokenIsRefusedWithoutDetail() {
-        let response = router().respond(to: post("/login", form: "token=wrong"))
+        let gate = router()
+        let response = gate.respond(to: post("/login", form: "token=wrong",
+                                             csrf: gate.csrf.value))
         XCTAssertEqual(response.status, 401)
         let body = bodyText(response)
         XCTAssertTrue(body.contains("Wrong access token"))
@@ -224,7 +237,8 @@ final class WebSecurityTests: XCTestCase {
     }
 
     func testLogoutClearsTheCookie() throws {
-        let response = router().respond(to: post("/logout", form: ""))
+        let gate = router()
+        let response = gate.respond(to: post("/logout", csrf: gate.csrf.value))
         XCTAssertEqual(response.status, 303)
         XCTAssertEqual(response.headers["Location"], "/login")
         let cookie = try XCTUnwrap(response.headers["Set-Cookie"])
@@ -234,10 +248,13 @@ final class WebSecurityTests: XCTestCase {
     /// No route takes a redirect target from the request, so the interface
     /// cannot be used to bounce someone to another site.
     func testRedirectTargetIsNotTakenFromTheRequest() {
-        let request = HTTPRequest(method: "POST", path: "/login",
-                                  query: ["next": "https://evil.example"],
-                                  body: Data("token=\(token)&next=https://evil.example".utf8))
-        let response = router().respond(to: request)
+        let gate = router()
+        let request = HTTPRequest(
+            method: "POST", path: "/login",
+            query: ["next": "https://evil.example"],
+            body: Data("token=\(token)&next=https://evil.example&\(CSRFToken.fieldName)=\(gate.csrf.value)".utf8)
+        )
+        let response = gate.respond(to: request)
         XCTAssertEqual(response.headers["Location"], "/")
     }
 
@@ -246,16 +263,21 @@ final class WebSecurityTests: XCTestCase {
     func testRepeatedFailuresAreThrottled() {
         let throttle = LoginThrottle(maxAttempts: 3, window: 300)
         let guarded = router(throttle: throttle)
+        let csrf = guarded.csrf.value
         for _ in 0..<3 {
-            XCTAssertEqual(guarded.respond(to: post("/login", form: "token=wrong")).status, 401)
+            XCTAssertEqual(
+                guarded.respond(to: post("/login", form: "token=wrong", csrf: csrf)).status, 401
+            )
         }
-        let blocked = guarded.respond(to: post("/login", form: "token=wrong"))
+        let blocked = guarded.respond(to: post("/login", form: "token=wrong", csrf: csrf))
         XCTAssertEqual(blocked.status, 429)
         XCTAssertNotNil(blocked.headers["Retry-After"])
 
         // Even the correct token is refused while blocked, so the limit cannot
         // be probed around.
-        XCTAssertEqual(guarded.respond(to: post("/login", form: "token=\(token)")).status, 429)
+        XCTAssertEqual(
+            guarded.respond(to: post("/login", form: "token=\(token)", csrf: csrf)).status, 429
+        )
     }
 
     func testThrottleWindowExpires() {
@@ -274,9 +296,12 @@ final class WebSecurityTests: XCTestCase {
     func testSuccessfulLoginClearsTheThrottle() {
         let throttle = LoginThrottle(maxAttempts: 3, window: 300)
         let guarded = router(throttle: throttle)
-        _ = guarded.respond(to: post("/login", form: "token=wrong"))
-        _ = guarded.respond(to: post("/login", form: "token=wrong"))
-        XCTAssertEqual(guarded.respond(to: post("/login", form: "token=\(token)")).status, 303)
+        let csrf = guarded.csrf.value
+        _ = guarded.respond(to: post("/login", form: "token=wrong", csrf: csrf))
+        _ = guarded.respond(to: post("/login", form: "token=wrong", csrf: csrf))
+        XCTAssertEqual(
+            guarded.respond(to: post("/login", form: "token=\(token)", csrf: csrf)).status, 303
+        )
         XCTAssertFalse(throttle.isBlocked())
     }
 
