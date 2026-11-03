@@ -27,6 +27,10 @@ private struct Options {
     /// Point the engine at a throwaway library of plausible files and scan it
     /// before doing anything else.
     var demo = false
+    /// How long to let the window settle before capturing, in milliseconds.
+    /// Exposed so the capture delay can be varied from outside while the
+    /// blank-image problem is being pinned down.
+    var captureDelay: UInt32?
 }
 
 private func usage() -> String {
@@ -37,6 +41,8 @@ private func usage() -> String {
       mediafin-gtk --screenshot FILE   render the window to FILE (PNG) and exit
       mediafin-gtk --demo              work on a throwaway library of made-up
                                        files instead of your own settings
+      mediafin-gtk --delay MS          how long to let the window settle
+                                       before --screenshot captures it
       mediafin-gtk --help              this text
 
     Needs a display. Without one it exits 2 rather than hanging, so it is safe
@@ -65,6 +71,13 @@ private func parse(_ arguments: [String]) -> Options {
             exit(0)
         case "--demo":
             options.demo = true
+        case "--delay":
+            let next = arguments.index(after: index)
+            guard next < arguments.endIndex, let value = UInt32(arguments[next]) else {
+                fail("--delay needs a number of milliseconds", code: 64)
+            }
+            options.captureDelay = value
+            index = next
         case "--screenshot":
             let next = arguments.index(after: index)
             guard next < arguments.endIndex else {
@@ -200,7 +213,7 @@ case let .screenshot(path):
         }
         return Gtk.sourceRemove
     }
-    g_timeout_add(options.demo ? 3000 : 400, takeSnapshot, nil)
+    g_timeout_add(options.captureDelay ?? (options.demo ? 3000 : 400), takeSnapshot, nil)
     gtk_main()
 
     if let layout = demoLayout {
