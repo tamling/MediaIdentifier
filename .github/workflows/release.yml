@@ -100,6 +100,7 @@ jobs:
             --jq '.assets[].name' 2>/dev/null | while read -r name; do
               case "$name" in
                 Mediafin.app.zip|mediafin-linux-x86_64.tar.gz) continue ;;
+                mediafin-linux-x86_64.deb) continue ;;
               esac
               echo "Deleting stale asset: $name"
               gh release delete-asset latest "$name" --repo "$GITHUB_REPOSITORY" -y || true
@@ -143,7 +144,7 @@ jobs:
             exit 1
           fi
           ldd .build/release/mediafin
-      - name: Package
+      - name: Package the tarball
         shell: bash
         run: |
           set -euo pipefail
@@ -153,9 +154,56 @@ jobs:
           install -m 644 README.md dist/README.md
           tar -czf mediafin-linux-x86_64.tar.gz -C dist .
           sha256sum mediafin-linux-x86_64.tar.gz
+      - name: Build the .deb
+        shell: bash
+        run: |
+          set -euo pipefail
+          apt-get update -qq
+          # dpkg-shlibdeps needs dpkg-dev; lintian is optional and only
+          # reports style.
+          apt-get install -y -qq dpkg-dev lintian
+          ./tools/build-deb.sh
+          # The version lives in the package metadata; the asset name stays
+          # stable so each release replaces the last instead of piling up.
+          cp mediafin_*.deb mediafin-linux-x86_64.deb
+          dpkg-deb --field mediafin-linux-x86_64.deb Package Version Depends
+          sha256sum mediafin-linux-x86_64.deb
+      # Installing it is the only check that proves the dependency list is
+      # right: apt refuses the package if anything it declares is missing.
+      - name: Install the .deb and run it
+        shell: bash
+        run: |
+          set -euo pipefail
+          apt-get install -y -qq ./mediafin-linux-x86_64.deb
+          command -v mediafin
+          mediafin --help > /dev/null
+          echo "--- the man page is installed ---"
+          test -f /usr/share/man/man1/mediafin.1.gz
+          echo "--- the service exists but must not be enabled ---"
+          test -f /lib/systemd/system/mediafin.service
+          echo "--- the state directory belongs to the service user ---"
+          stat -c '%U %G %a' /var/lib/mediafin
+          test "$(stat -c '%U %a' /var/lib/mediafin)" = "mediafin 700"
+          echo "--- it serves HTTPS after a plain apt install ---"
+          export MEDIAFIN_CONFIG_DIR="$PWD/.deb-smoke"
+          mediafin --port 8741 --bind local > deb.log 2>&1 &
+          PID=$!
+          for _ in $(seq 1 60); do
+            curl -sk --max-time 2 https://127.0.0.1:8741/healthz >/dev/null 2>&1 && break
+            kill -0 $PID 2>/dev/null || { cat deb.log; exit 1; }
+            sleep 0.5
+          done
+          test "$(curl -sk --max-time 5 https://127.0.0.1:8741/healthz)" = "ok"
+          kill $PID
+          echo "--- removal leaves nothing behind ---"
+          apt-get purge -y -qq mediafin
+          test ! -e /usr/bin/mediafin
+          test ! -e /var/lib/mediafin
       - name: Publish to "latest" release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest
           prerelease: true
-          files: mediafin-linux-x86_64.tar.gz
+          files: |
+            mediafin-linux-x86_64.tar.gz
+            mediafin-linux-x86_64.deb

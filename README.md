@@ -30,9 +30,25 @@ It runs two ways on top of one shared, fully unit-tested domain core:
 
 ## Running on Linux
 
-Download `mediafin-linux-x86_64.tar.gz` from the
-[latest release](../../releases/tag/latest) — it carries the Swift runtime
-statically, so it needs nothing but glibc:
+On Debian or Ubuntu, install the package from the
+[latest release](../../releases/tag/latest):
+
+```bash
+sudo apt install ./mediafin-linux-x86_64.deb
+mediafin
+```
+
+It declares its dependencies, so apt pulls what is needed. The Swift runtime
+is linked statically — no Swift installation required — but Foundation still
+uses a few system libraries, and `openssl` is needed to create the first
+self-signed certificate; both come in as dependencies. `ffmpeg` is a
+*recommendation*, needed only for re-encoding. The package also installs
+`man mediafin` and a systemd unit, which it deliberately does **not** enable:
+starting a server that exposes your library should be your decision. See the
+comments at the top of `/lib/systemd/system/mediafin.service` before
+`systemctl enable --now mediafin`.
+
+Elsewhere, take the tarball — same binary, no package management:
 
 ```bash
 tar -xzf mediafin-linux-x86_64.tar.gz
