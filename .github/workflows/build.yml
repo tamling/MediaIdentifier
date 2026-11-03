@@ -137,24 +137,6 @@ jobs:
           # release names and scans it, so the picture shows the interface
           # doing its job rather than its empty state. It runs the real
           # parser and planner, so this fails if either stops working.
-          # Delay and content varied against each other, because three
-          # attempts at this have each disproved a theory without producing
-          # one. Whichever cell comes out blank names the cause.
-          shot() {
-            timeout 90 xvfb-run -a --server-args="-screen 0 1280x900x24" \
-              .build/release/mediafin-gtk $3 --delay "$2" --screenshot "$1" \
-              > "$1.log" 2>&1 || true
-            printf '  %-22s delay=%-5s %s\n' "$1" "$2" \
-              "$( [ -f "$1" ] && stat -c '%s bytes' "$1" || echo 'no file' )"
-            grep -h 'capture state' "$1.log" | sed 's/^/      /' || true
-          }
-          echo "--- capture matrix ---"
-          shot empty-fast.png 400  ""
-          shot empty-slow.png 3000 ""
-          shot demo-fast.png  400  "--demo"
-          shot demo-slow.png  3000 "--demo"
-          echo "----------------------"
-
           timeout 90 xvfb-run -a --server-args="-screen 0 1280x900x24" \
             .build/release/mediafin-gtk --demo --screenshot window.png | tee shot.log
           file window.png
@@ -182,6 +164,23 @@ jobs:
             echo "FAIL: $bytes bytes — the window rendered blank"
             exit 1
           }
+          # A window left sitting under Xvfb stops being drawable after a
+          # couple of seconds — it renders fully at 400 ms and not at all at
+          # 3000, while still reporting itself mapped and visible. That cost
+          # four rounds to find, so it is measured on every run and printed.
+          #
+          # Reported, not asserted. A check that fails when the workaround
+          # becomes unnecessary would turn a GTK update into a red build for
+          # something that is not broken.
+          timeout 60 xvfb-run -a --server-args="-screen 0 1280x900x24" \
+            .build/release/mediafin-gtk --delay 3000 --screenshot late.png || true
+          late="$(stat -c %s late.png 2>/dev/null || echo 0)"
+          if [ "$late" -lt 12000 ]; then
+            echo "late capture (3000 ms): $late bytes — still blank, as expected"
+          else
+            echo "late capture (3000 ms): $late bytes — this now renders."
+            echo "  The early-capture workaround in main.swift may be removable."
+          fi
       # Before the checks that can fail: the rendered window is the most
       # useful thing this job produces, and a later failing assertion must not
       # be what stops it being readable.

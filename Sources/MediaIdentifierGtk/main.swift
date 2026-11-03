@@ -157,13 +157,39 @@ private let configDirectory = demoLayout
     ?? MediafinPaths.configDirectory()
 
 private let coordinator = AppCoordinator(configDirectory: configDirectory)
-private let mainWindow = AppWindow(coordinator: coordinator)
-Pending.window = mainWindow.widget
 
+// The demo scan runs here, before the window exists, and this thread waits
+// for it.
+//
+// Not because waiting is tidy, but because a window cannot be photographed
+// after it has been sitting around. Measured under Xvfb with no window
+// manager: a capture at 400 ms renders fully, one at 3000 ms renders nothing
+// at all — while the widget still reports itself mapped, visible, drawable
+// and correctly sized. Three attempts to fix that from the GTK side failed,
+// because the problem was never the drawing. So the scan finishes first and
+// the capture keeps the short delay that works.
+//
+// Blocking the main thread is safe here only because GTK's loop has not
+// started: once it has, this would freeze the interface.
 if let demoLayout {
     coordinator.submit(.saveSettings(DemoLibrary.settings(for: demoLayout)))
     coordinator.submit(.scanSourceFolder)
+
+    let deadline = Date().addingTimeInterval(20)
+    while Date() < deadline {
+        if !coordinator.snapshot.busy, !coordinator.items.isEmpty { break }
+        Thread.sleep(forTimeInterval: 0.05)
+    }
+    if coordinator.items.isEmpty {
+        // Carry on and let the picture be taken: an empty one, reported as
+        // such, is more use than no picture and no explanation.
+        FileHandle.standardError.write(
+            Data("mediafin-gtk: the demo scan produced nothing\n".utf8))
+    }
 }
+
+private let mainWindow = AppWindow(coordinator: coordinator)
+Pending.window = mainWindow.widget
 
 // The coordinator works on its own queue and cannot call into GTK, which may
 // only be touched from the main thread, so the window asks instead. Twice a
@@ -188,14 +214,12 @@ case let .screenshot(path):
     // yields a 1x1 widget. A single timeout lets that settle, and the
     // callback runs exactly once.
     //
-    // A polling version of this — waiting for the scan, then capturing —
-    // produced a blank image every time, while this shape has never failed.
-    // The window reported itself mapped, visible, drawable and correctly
-    // sized in both cases, so the difference was not in its state but in
-    // drawing it from a callback that had already returned once. Rather than
-    // keep guessing at GTK's drawing rules, the demo simply waits longer: the
-    // scan is eight small files parsed offline, and the proposal count below
-    // fails the run if the picture was taken too early anyway.
+    // It must also not be much longer. Under Xvfb with no window manager a
+    // capture at 3000 ms comes out entirely blank, with the widget still
+    // claiming to be mapped, visible and drawable; 400 ms renders fully,
+    // with or without content. Whatever the window loses in those seconds,
+    // it is gone before anything can be drawn from it — so the demo does its
+    // scanning before the loop starts rather than waiting here.
     let takeSnapshot: @convention(c) (UnsafeMutableRawPointer?) -> gboolean = { _ in
         defer { gtk_main_quit() }
         // The engine works on another queue, so pull its state in here rather
@@ -213,7 +237,7 @@ case let .screenshot(path):
         }
         return Gtk.sourceRemove
     }
-    g_timeout_add(options.captureDelay ?? (options.demo ? 3000 : 400), takeSnapshot, nil)
+    g_timeout_add(options.captureDelay ?? 400, takeSnapshot, nil)
     gtk_main()
 
     if let layout = demoLayout {
