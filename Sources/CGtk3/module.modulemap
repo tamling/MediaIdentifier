@@ -1,0 +1,15 @@
+// GTK3's C API, imported directly rather than through a third-party Swift
+// binding. The reason is maintenance risk: a binding that breaks against a new
+// Swift release leaves the whole front-end unbuildable, whereas GTK's C API has
+// been stable for over a decade and Swift's C importer handles it unaided.
+//
+// `[system]` suppresses the warnings GTK's own headers produce; they are not
+// ours to fix and would otherwise bury real diagnostics.
+//
+// No `link` directive: the linker flags come from pkg-config via the
+// `pkgConfig:` argument on the systemLibrary target in Package.swift, which
+// also keeps the include paths correct across distributions.
+module CGtk3 [system] {
+    header "shim.h"
+    export *
+}

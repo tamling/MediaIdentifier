@@ -44,6 +44,15 @@ jobs:
       - uses: actions/checkout@v4
       - name: Swift version
         run: swift --version
+      # `swift build` with no product builds every target, and on Linux that
+      # now includes the GTK front-end. Its headers have to be here or the
+      # whole job fails on a target it is not even meant to exercise.
+      - name: Install GTK3 headers
+        shell: bash
+        run: |
+          set -euo pipefail
+          apt-get update -qq
+          apt-get install -y -qq pkg-config libgtk-3-dev
       - name: Build
         run: swift build
       - name: Run Swift tests
@@ -78,6 +87,77 @@ jobs:
         with:
           name: mediafin-linux-x86_64
           path: .build/release/mediafin
+          if-no-files-found: error
+
+  # A graphical interface is developed here without a screen to look at, so
+  # "it compiles" would be the only signal — and that says nothing about
+  # whether the window draws. This job runs the real binary under Xvfb, makes
+  # it render itself to a PNG, and checks the result has sensible dimensions.
+  # The PNG is kept as an artifact and also emitted base64 in the log, because
+  # artifact storage is not reachable from every environment that needs to
+  # read it.
+  gtk:
+    name: GTK front-end (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    container: swift:6.0-jammy
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install GTK3, Xvfb and a font
+        shell: bash
+        run: |
+          set -euo pipefail
+          apt-get update -qq
+          # fonts-dejavu-core is not optional: with no font installed Pango
+          # draws nothing, and the screenshot would be a blank window that
+          # still passed every check.
+          apt-get install -y -qq pkg-config libgtk-3-dev xvfb fonts-dejavu-core file
+      - name: Build
+        run: swift build -c release --product mediafin-gtk
+      - name: Render the window headless
+        shell: bash
+        env:
+          # at-spi is not running in a container; without these GTK spends
+          # seconds timing out against it and floods the log.
+          NO_AT_BRIDGE: "1"
+          GTK_A11Y: none
+        run: |
+          set -euo pipefail
+          timeout 60 xvfb-run -a --server-args="-screen 0 1280x800x24" \
+            .build/release/mediafin-gtk --screenshot window.png
+          file window.png
+          # Dimensions in the hundreds: a 1x1 PNG is what GTK produces when the
+          # widget was never laid out, and it would otherwise look like a pass.
+          file window.png | grep -qE 'PNG image data, [0-9]{3,} x [0-9]{3,}'
+          echo "bytes: $(stat -c %s window.png)"
+      - name: Refuse to hang without a display
+        shell: bash
+        run: |
+          set -uo pipefail
+          timeout 20 env -u DISPLAY -u WAYLAND_DISPLAY \
+            .build/release/mediafin-gtk --screenshot should-not-exist.png
+          code=$?
+          if [ "$code" != 2 ]; then
+            echo "FAIL: expected exit 2 with no display, got $code"
+            exit 1
+          fi
+          if [ -e should-not-exist.png ]; then
+            echo "FAIL: wrote a file although it could not start"
+            exit 1
+          fi
+          echo "ok    : exits 2 with no display and writes nothing"
+      - name: Emit the screenshot as base64
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "--- BEGIN window.png base64 ---"
+          base64 -w 120 window.png
+          echo "--- END window.png base64 ---"
+      - name: Upload the screenshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: gtk-window-screenshot
+          path: window.png
           if-no-files-found: error
 
   app:

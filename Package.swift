@@ -53,6 +53,30 @@ var targets: [Target] = [
     ),
 ]
 
+#if os(Linux)
+// The native Linux front-end. GTK3 rather than GTK4: Mint, and every other
+// desktop Mediafin is likely to meet, is GTK3 itself, so the window inherits
+// the user's theme instead of fighting it.
+//
+// Linux-only in the manifest for the same reason the SwiftUI app is
+// macOS-only: pkg-config would fail to find gtk+-3.0 on a Mac and break
+// `swift build` for everyone there.
+products.append(.executable(name: "mediafin-gtk", targets: ["mediafin-gtk"]))
+targets.append(contentsOf: [
+    .systemLibrary(
+        name: "CGtk3",
+        path: "Sources/CGtk3",
+        pkgConfig: "gtk+-3.0",
+        providers: [.apt(["libgtk-3-dev"])]
+    ),
+    .executableTarget(
+        name: "mediafin-gtk",
+        dependencies: ["MediaIdentifierCore", "CGtk3"],
+        path: "Sources/MediaIdentifierGtk"
+    ),
+])
+#endif
+
 #if os(macOS)
 products.append(.executable(name: "MediaIdentifierApp", targets: ["MediaIdentifierApp"]))
 targets.append(
