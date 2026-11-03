@@ -89,6 +89,15 @@ public struct HTTPResponse: Sendable, Equatable {
         head += "Content-Length: \(body.count)\r\n"
         head += "X-Content-Type-Options: nosniff\r\n"
         head += "Cache-Control: no-store\r\n"
+        head += "Referrer-Policy: no-referrer\r\n"
+        head += "X-Frame-Options: DENY\r\n"
+        if contentType.hasPrefix("text/html") {
+            // The interface uses no JavaScript at all, so scripting can be
+            // forbidden outright: an injected <script> would not execute.
+            head += "Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; "
+            head += "img-src 'self' data:; form-action 'self'; base-uri 'none'; "
+            head += "frame-ancestors 'none'\r\n"
+        }
         head += "Connection: close\r\n"
         for (name, value) in headers.sorted(by: { $0.key < $1.key }) {
             // Strip CR/LF so a header value can never inject extra headers.
@@ -183,11 +192,18 @@ public struct HTTPRequestParser {
     }
 
     /// Parses the request line and headers.
+    ///
+    /// Splitting happens on raw bytes, not on `Character`s: in Swift a CRLF is
+    /// a single extended grapheme cluster, so splitting a `String` on `"\n"`
+    /// would not split CRLF-terminated lines at all and every header would be
+    /// swallowed into the request line.
     static func parseHead(_ data: Data) -> HTTPRequest? {
-        guard let text = String(data: Data(data), encoding: .utf8) else { return nil }
-        let lines = text.split(whereSeparator: { $0 == "\n" }).map {
-            $0.hasSuffix("\r") ? String($0.dropLast()) : String($0)
-        }
+        let lines: [String] = Data(data)
+            .split(separator: 0x0A, omittingEmptySubsequences: false)
+            .map { line in
+                let trimmed = line.last == 0x0D ? line.dropLast() : line
+                return String(decoding: trimmed, as: UTF8.self)
+            }
         guard let requestLine = lines.first else { return nil }
 
         let parts = requestLine.split(separator: " ", omittingEmptySubsequences: true)

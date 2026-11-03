@@ -80,7 +80,7 @@ public enum StatusHTTP {
     /// Extracts the request path from a raw HTTP request (first line, e.g.
     /// `GET /api/status HTTP/1.1`). Falls back to "/".
     public static func path(from request: String) -> String {
-        guard let firstLine = request.split(whereSeparator: { $0 == "\r" || $0 == "\n" }).first
+        guard let firstLine = request.split(whereSeparator: \.isNewline).first
         else { return "/" }
         let parts = firstLine.split(separator: " ")
         guard parts.count >= 2 else { return "/" }
@@ -90,7 +90,7 @@ public enum StatusHTTP {
 
     /// Extracts the HTTP method (e.g. "GET"). Falls back to "GET".
     public static func method(from request: String) -> String {
-        guard let firstLine = request.split(whereSeparator: { $0 == "\r" || $0 == "\n" }).first,
+        guard let firstLine = request.split(whereSeparator: \.isNewline).first,
               let verb = firstLine.split(separator: " ").first else { return "GET" }
         return verb.uppercased()
     }

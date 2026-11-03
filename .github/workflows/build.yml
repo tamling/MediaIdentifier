@@ -14,6 +14,9 @@ jobs:
         with:
           xcode-version: latest-stable
       - name: Run Swift tests
+        # bash explicitly: the Linux container's default shell is dash, which
+        # has no `set -o pipefail` and would abort the step immediately.
+        shell: bash
         run: |
           set -o pipefail
           swift test 2>&1 | tee test.log
@@ -21,6 +24,7 @@ jobs:
       # interesting part is buried in the middle of it.
       - name: Failing assertions
         if: failure()
+        shell: bash
         run: |
           echo "--- failed assertions ---"
           grep -E ": error:|XCTAssert.* failed" test.log | head -60 || true
@@ -40,11 +44,15 @@ jobs:
       - name: Build
         run: swift build
       - name: Run Swift tests
+        # bash explicitly: the Linux container's default shell is dash, which
+        # has no `set -o pipefail` and would abort the step immediately.
+        shell: bash
         run: |
           set -o pipefail
           swift test 2>&1 | tee test.log
       - name: Failing assertions
         if: failure()
+        shell: bash
         run: |
           echo "--- failed assertions ---"
           grep -E ": error:|XCTAssert.* failed" test.log | head -60 || true

@@ -192,6 +192,26 @@ final class HTTPMessageTests: XCTestCase {
         XCTAssertFalse(raw.contains("\r\nX-Evil:"))
     }
 
+    /// Regression: in Swift a CRLF is one `Character`, so splitting the head
+    /// as a `String` on `"\n"` matched nothing and every header ended up
+    /// swallowed into the request line.
+    func testCRLFHeadersAreNotSwallowedIntoTheRequestLine() throws {
+        let request = try XCTUnwrap(parse("GET / HTTP/1.1\r\nA: 1\r\nB: 2\r\nC: 3\r\n\r\n"))
+        XCTAssertEqual(request.path, "/")
+        XCTAssertEqual(request.headers["a"], "1")
+        XCTAssertEqual(request.headers["b"], "2")
+        XCTAssertEqual(request.headers["c"], "3")
+    }
+
+    /// The same trap in the older raw-request helpers.
+    func testStatusHTTPReadsMethodAndPathFromCRLFRequest() {
+        XCTAssertEqual(StatusHTTP.method(from: "POST /x HTTP/1.1\r\nHost: y\r\n\r\n"), "POST")
+        XCTAssertEqual(
+            StatusHTTP.path(from: "GET /api/status?x=1 HTTP/1.1\r\nHost: y\r\n\r\n"),
+            "/api/status"
+        )
+    }
+
     // MARK: Regression — the existing status routes still behave
 
     func testStatusRoutesStillWork() {
