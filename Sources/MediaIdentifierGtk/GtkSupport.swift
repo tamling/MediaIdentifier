@@ -37,14 +37,15 @@ enum Gtk {
         UnsafeMutableRawPointer(widget).assumingMemoryBound(to: GtkLabel.self)
     }
 
-    static func button(_ widget: UnsafeMutablePointer<GtkWidget>) -> UnsafeMutablePointer<GtkButton> {
-        UnsafeMutableRawPointer(widget).assumingMemoryBound(to: GtkButton.self)
-    }
-
-    static func fileChooser(
-        _ widget: UnsafeMutablePointer<GtkWidget>
-    ) -> UnsafeMutablePointer<GtkFileChooser> {
-        UnsafeMutableRawPointer(widget).assumingMemoryBound(to: GtkFileChooser.self)
+    /// `OpaquePointer`, unlike the casts above.
+    ///
+    /// GtkFileChooser is a GInterface, not a class: the header declares
+    /// `struct _GtkFileChooser` and never defines it. Swift imports a pointer
+    /// to an incomplete C type as an OpaquePointer, so there is no
+    /// `GtkFileChooser` type to bind memory to — `assumingMemoryBound` does
+    /// not compile here.
+    static func fileChooser(_ widget: UnsafeMutablePointer<GtkWidget>) -> OpaquePointer {
+        OpaquePointer(widget)
     }
 
     // MARK: Text
