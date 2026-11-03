@@ -1,5 +1,6 @@
 import CGtk3
 import Foundation
+import MediaIdentifierCore
 
 // Mediafin's native Linux front-end.
 //
@@ -83,8 +84,16 @@ guard gtk_init_check(nil, nil) != 0 else {
         """, code: 2)
 }
 
-private let mainWindow = MainWindow()
+// The same engine the web interface drives, pointed at the same configuration
+// directory — so folders set here show up there and the other way round.
+private let coordinator = AppCoordinator(configDirectory: MediafinPaths.configDirectory())
+private let mainWindow = AppWindow(coordinator: coordinator)
 Pending.window = mainWindow.widget
+
+// The coordinator works on its own queue and cannot call into GTK, which may
+// only be touched from the main thread, so the window asks instead. Twice a
+// second: fast enough to look live, slow enough to cost nothing.
+Gtk.repeating(500, mainWindow) { $0.refresh() }
 
 private let onDestroy: @convention(c) (UnsafeMutablePointer<GtkWidget>?, UnsafeMutableRawPointer?) -> Void = { _, _ in
     gtk_main_quit()
