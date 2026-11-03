@@ -90,15 +90,6 @@ private enum Pending {
     /// Set by the snapshot callback; read after the main loop returns to decide
     /// the exit status. A GUI that silently fails to draw must not exit 0.
     static var failure: String?
-    /// True once the thing the screenshot is waiting for has happened.
-    static var isReady: () -> Bool = { true }
-    /// Gives up waiting, so a scan that never finishes still produces a
-    /// picture — of the state it got stuck in, which is what one would want
-    /// to look at.
-    static var attemptsLeft = 1
-    /// Set once the window has been given the finished state, so the shot is
-    /// taken a tick later and catches it painted rather than pending.
-    static var hasSettled = false
 }
 
 /// How many proposals were on screen when the picture was taken.
@@ -179,44 +170,28 @@ case .interactive:
 
 case let .screenshot(path):
     Pending.screenshotPath = path
-    // With --demo there is a scan in flight, and a picture taken before it
-    // lands would show the empty state — which is exactly the picture the
-    // demo exists to stop taking. Wait for proposals to appear, then for one
-    // more tick so the window has drawn them.
-    if options.demo {
-        Pending.isReady = { !coordinator.snapshot.busy && !coordinator.items.isEmpty }
-        Pending.attemptsLeft = 60   // 12 s at 200 ms
-    }
-    // One pass through the main loop is never enough on its own: GTK
-    // allocates sizes and paints asynchronously after the window is shown,
-    // and drawing too early yields a 1x1 widget.
+    // One pass through the main loop is not enough: GTK allocates sizes and
+    // paints asynchronously after the window is shown, and drawing too early
+    // yields a 1x1 widget. A single timeout lets that settle, and the
+    // callback runs exactly once.
+    //
+    // A polling version of this — waiting for the scan, then capturing —
+    // produced a blank image every time, while this shape has never failed.
+    // The window reported itself mapped, visible, drawable and correctly
+    // sized in both cases, so the difference was not in its state but in
+    // drawing it from a callback that had already returned once. Rather than
+    // keep guessing at GTK's drawing rules, the demo simply waits longer: the
+    // scan is eight small files parsed offline, and the proposal count below
+    // fails the run if the picture was taken too early anyway.
     let takeSnapshot: @convention(c) (UnsafeMutableRawPointer?) -> gboolean = { _ in
-        Pending.attemptsLeft -= 1
-        let waitedLongEnough = Pending.attemptsLeft <= 0
-
-        // Pull the engine's state into the window here rather than relying on
-        // the half-second refresh: the proposals could otherwise exist while
-        // the list that is about to be photographed is still empty.
-        mainWindow.refresh()
-        guard waitedLongEnough || Pending.isReady() else { return Gtk.sourceContinue }
-        // One more turn of the loop after the rows are built, so GTK has
-        // actually painted them before they are drawn into a surface.
-        if !waitedLongEnough, !Pending.hasSettled {
-            Pending.hasSettled = true
-            return Gtk.sourceContinue
-        }
-
         defer { gtk_main_quit() }
+        // The engine works on another queue, so pull its state in here rather
+        // than waiting for the window's own half-second refresh.
+        mainWindow.refresh()
         capturedProposals = coordinator.items.count
         guard let widget = Pending.window, let path = Pending.screenshotPath else {
             Pending.failure = "no window to render"
             return Gtk.sourceRemove
-        }
-        if waitedLongEnough, !Pending.isReady() {
-            // Not a failure: the picture is still worth having, and saying so
-            // is better than a green run that quietly shot the wrong state.
-            FileHandle.standardError.write(
-                Data("mediafin-gtk: gave up waiting; capturing as-is\n".utf8))
         }
         do {
             try WindowSnapshot.write(widget, to: path)
@@ -225,7 +200,7 @@ case let .screenshot(path):
         }
         return Gtk.sourceRemove
     }
-    g_timeout_add(options.demo ? 200 : 400, takeSnapshot, nil)
+    g_timeout_add(options.demo ? 3000 : 400, takeSnapshot, nil)
     gtk_main()
 
     if let layout = demoLayout {
