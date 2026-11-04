@@ -915,6 +915,12 @@ public struct WebRouter: Sendable {
             """
         }
 
+        let cadenceOptions = Schedule.Cadence.allCases.map { cadence in
+            let selected = cadence == current.schedule.cadence ? " selected" : ""
+            return "<option value=\"\(cadence.rawValue)\"\(selected)>"
+                + "\(Self.escape(cadence.label))</option>"
+        }.joined()
+
         let modeOptions = LibraryMode.allCases.map { mode in
             let selected = mode == current.libraryMode ? " selected" : ""
             return "<option value=\"\(mode.rawValue)\"\(selected)>"
@@ -999,6 +1005,23 @@ public struct WebRouter: Sendable {
             <h2>TMDb</h2>
             <p class="hint">Only the title and year are ever sent — never a file.</p>
             \(secretField(.tmdbAPIKey))
+
+            <h2>Looking by itself</h2>
+            <input type="hidden" name="schedulePresent" value="1">
+            <label class="inline"><input type="checkbox" name="scheduleEnabled" value="1"\
+        \(current.schedule.isEnabled ? " checked" : "")> Check without being asked</label>
+            <label for="scheduleCadence">How often</label>
+            <select id="scheduleCadence" name="scheduleCadence">\(cadenceOptions)</select>
+            \(field("scheduleTime", label: "At (24-hour clock)",
+                    value: String(format: "%02d:%02d", current.schedule.hour,
+                                  current.schedule.minute)))
+            \(field("scheduleEveryHours", label: "Or every N hours",
+                    value: String(current.schedule.everyHours)))
+            <label class="inline"><input type="checkbox" name="scheduleRename" value="1"\
+        \(current.schedule.alsoRename ? " checked" : "")> Also rename what it finds</label>
+            <label class="inline"><input type="checkbox" name="scheduleSend" value="1"\
+        \(current.schedule.alsoSend ? " checked" : "")> Also send it to the server</label>
+            <p class="hint">\(Self.escape(current.schedule.summary))</p>
 
             <h2>The library on another machine</h2>
             <input type="hidden" name="remoteEnabledPresent" value="1">

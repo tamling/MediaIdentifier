@@ -74,6 +74,37 @@ public struct Schedule: Codable, Sendable, Equatable {
         )
     }
 
+    /// Reads the form, keeping anything it does not carry.
+    public static func fromForm(_ fields: [String: String],
+                                current: Schedule) -> Schedule {
+        var schedule = current
+        // Checkboxes send nothing when unticked, so a hidden companion
+        // says the section was part of this form at all.
+        if fields["schedulePresent"] != nil {
+            schedule.isEnabled = fields["scheduleEnabled"] != nil
+            schedule.alsoRename = fields["scheduleRename"] != nil
+            schedule.alsoSend = fields["scheduleSend"] != nil
+        }
+        if let value = fields["scheduleCadence"], let cadence = Cadence(rawValue: value) {
+            schedule.cadence = cadence
+        }
+        if let value = fields["scheduleTime"] {
+            let parts = value.split(separator: ":", maxSplits: 1)
+            // Kept as typed when it is not a time: problems() then says
+            // so, rather than a silent fallback to some other hour.
+            if parts.count == 2, let hour = Int(parts[0]), let minute = Int(parts[1]) {
+                schedule.hour = hour
+                schedule.minute = minute
+            } else if !value.trimmingCharacters(in: .whitespaces).isEmpty {
+                schedule.hour = -1
+            }
+        }
+        if let value = fields["scheduleEveryHours"] {
+            schedule.everyHours = Int(value.trimmingCharacters(in: .whitespaces)) ?? -1
+        }
+        return schedule
+    }
+
     public func problems() -> [WebSettings.Problem] {
         guard isEnabled else { return [] }
         var found: [WebSettings.Problem] = []

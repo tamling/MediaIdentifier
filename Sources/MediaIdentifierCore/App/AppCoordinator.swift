@@ -69,6 +69,9 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
     private let watchInterval: TimeInterval
     /// Only touched on `queue`.
     private var watchTimer: DispatchSourceTimer?
+    private var scheduleTimer: DispatchSourceTimer?
+    /// When the last unattended run happened. Nil until one has.
+    private var _lastScheduledRun: Date?
 
     private let settingsStore: SettingsStore
     private let secretStore: SecretStore
@@ -346,6 +349,7 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
             lock.unlock()
             update { $0.lastResult = "Settings saved." }
             updateWatchState()
+            updateScheduleState()
             // So the interface stops offering a "send to the server" button
             // the moment the server is switched off, rather than at the next
             // scan.
@@ -1492,6 +1496,84 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         let watching = watchTimer != nil
         update { $0.watchActive = watching }
     }
+
+    // MARK: Running by itself
+
+    /// Starts or stops the schedule's minute tick to match the settings.
+    ///
+    /// A tick that asks "is it due yet", rather than a timer armed for the
+    /// far future. A long timer does not survive the machine sleeping, a
+    /// clock correction or a time-zone change, and all three happen to a
+    /// media server. Asking once a minute costs nothing and is right
+    /// afterwards.
+    private func updateScheduleState() {
+        let schedule = settings.schedule
+        let shouldRun = schedule.isEnabled && schedule.problems().isEmpty
+
+        if shouldRun, scheduleTimer == nil {
+            // From now, so switching it on does not fire immediately.
+            lock.lock()
+            if _lastScheduledRun == nil { _lastScheduledRun = Date() }
+            lock.unlock()
+
+            let timer = DispatchSource.makeTimerSource(queue: queue)
+            timer.schedule(deadline: .now() + .seconds(20), repeating: .seconds(60))
+            timer.setEventHandler { [weak self] in self?.runIfDue() }
+            timer.resume()
+            scheduleTimer = timer
+        } else if !shouldRun, scheduleTimer != nil {
+            scheduleTimer?.cancel()
+            scheduleTimer = nil
+        }
+    }
+
+    /// One unattended run, if one is due. Runs on the serial queue.
+    private func runIfDue() {
+        let schedule = settings.schedule
+        lock.lock()
+        let last = _lastScheduledRun
+        lock.unlock()
+        guard schedule.isDue(at: Date(), lastRun: last) else { return }
+
+        // Stamped before the work, not after: a run that takes an hour
+        // must not make the next one due the moment it finishes, and a
+        // run that throws must not repeat every minute.
+        lock.lock(); _lastScheduledRun = Date(); lock.unlock()
+
+        log.append(RenameLogEntry(oldName: "Zeitplan", newName: schedule.summary,
+                                  status: .skipped))
+        scanSourceFolder()
+
+        // Only what was asked for, and only the proposals the planner
+        // accepted — an unattended run must not widen its own remit.
+        guard schedule.alsoRename else { return }
+        let accepted = Set(items.filter(\.isAccepted).map(\.id))
+        guard !accepted.isEmpty else { return }
+        applyRenames(accepting: accepted)
+
+        guard schedule.alsoSend, settings.remote.isEnabled else { return }
+        // applyRenames has emptied _items of what it moved, so the send
+        // works from what the scan found, re-read after the rename.
+        scanSourceFolder()
+        let toSend = Set(items.filter(\.isAccepted).map(\.id))
+        guard !toSend.isEmpty else { return }
+        transferFiles(accepting: toSend)
+    }
+
+    /// When the next unattended run is due, for the interface to show.
+    public var nextScheduledRun: Date? {
+        let schedule = settings.schedule
+        lock.lock(); let last = _lastScheduledRun; lock.unlock()
+        return schedule.nextRun(after: last ?? Date())
+    }
+
+    /// Only for tests: pretend the last run happened then.
+    func setLastScheduledRunForTesting(_ moment: Date?) {
+        lock.lock(); _lastScheduledRun = moment; lock.unlock()
+    }
+
+    /// Only for tests: whether the minute tick is armed.
+    var scheduleIsArmedForTesting: Bool { queue.sync { scheduleTimer != nil } }
 
     /// Looks for files that have appeared since the last look.
     ///

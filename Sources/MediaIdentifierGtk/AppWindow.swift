@@ -50,6 +50,13 @@ final class AppWindow {
     private let downloadButton: UnsafeMutablePointer<GtkWidget>
     private let cancelDownloadButton: UnsafeMutablePointer<GtkWidget>
     private let downloadProgress: UnsafeMutablePointer<GtkWidget>
+    private let scheduleCheck: UnsafeMutablePointer<GtkWidget>
+    private let scheduleCadenceCombo: UnsafeMutablePointer<GtkWidget>
+    private let scheduleTimeEntry: UnsafeMutablePointer<GtkWidget>
+    private let scheduleHoursEntry: UnsafeMutablePointer<GtkWidget>
+    private let scheduleRenameCheck: UnsafeMutablePointer<GtkWidget>
+    private let scheduleSendCheck: UnsafeMutablePointer<GtkWidget>
+    private let scheduleSummary: UnsafeMutablePointer<GtkWidget>
     private let checksColumn: UnsafeMutablePointer<GtkWidget>
     private let checksSummary: UnsafeMutablePointer<GtkWidget>
     private let checksExpander: UnsafeMutablePointer<GtkWidget>
@@ -291,6 +298,37 @@ final class AppWindow {
         gtk_box_pack_end(Gtk.box(sendRow), cancelSendButton, 0, 0, 0)
         Self.add(sendRow, to: remote)
 
+        // MARK: Looking by itself
+
+        scheduleCheck = gtk_check_button_new_with_label("Von selbst nachsehen")!
+        scheduleCadenceCombo = gtk_combo_box_text_new()!
+        for cadence in Schedule.Cadence.allCases {
+            gtk_combo_box_text_append_text(Gtk.comboBoxText(scheduleCadenceCombo),
+                                           cadence.label)
+        }
+        scheduleTimeEntry = Self.entry(placeholder: "03:00")
+        scheduleHoursEntry = Self.entry(placeholder: "6")
+        scheduleRenameCheck = gtk_check_button_new_with_label(
+            "Dabei auch umbenennen")!
+        scheduleSendCheck = gtk_check_button_new_with_label(
+            "Dabei auch zum Server senden")!
+        scheduleSummary = Self.label("", classes: "mf-dim")
+        gtk_label_set_line_wrap(Gtk.label(scheduleSummary), 1)
+
+        let scheduleCard = Self.card(titled: "Zeitplan")
+        Self.add(scheduleCheck, to: scheduleCard)
+        Self.add(Self.row("Wann", scheduleCadenceCombo), to: scheduleCard)
+        Self.add(Self.row("Uhrzeit", scheduleTimeEntry), to: scheduleCard)
+        Self.add(Self.row("Abstand (h)", scheduleHoursEntry), to: scheduleCard)
+        Self.add(scheduleRenameCheck, to: scheduleCard)
+        Self.add(scheduleSendCheck, to: scheduleCard)
+        Self.add(scheduleSummary, to: scheduleCard)
+
+        let scheduleExpander = gtk_expander_new("Zeitplan")!
+        gtk_expander_set_expanded(Gtk.expander(scheduleExpander), expandSettings ? 1 : 0)
+        gtk_container_add(Gtk.container(scheduleExpander), scheduleCard)
+        gtk_box_pack_start(Gtk.box(page), scheduleExpander, 0, 0, 0)
+
         let remoteExpander = gtk_expander_new("Server (rsync / SFTP)")!
         gtk_expander_set_expanded(Gtk.expander(remoteExpander), expandSettings ? 1 : 0)
         gtk_container_add(Gtk.container(remoteExpander), remote)
@@ -416,6 +454,7 @@ final class AppWindow {
         if library >= 0, library < LibraryMode.allCases.count {
             settings.libraryMode = LibraryMode.allCases[library]
         }
+        settings.schedule = readScheduleFields(from: settings.schedule)
         settings.remote = readRemoteFields(from: settings.remote)
         coordinator.submit(.saveSettings(settings))
 
@@ -434,6 +473,35 @@ final class AppWindow {
             // and a password left in a field is a password on the screen.
             Gtk.setText(of: remotePasswordEntry, "")
         }
+    }
+
+    /// Reads the schedule fields.
+    ///
+    /// A time that is not a time is kept as an impossible hour rather
+    /// than quietly becoming some other hour: problems() then says so,
+    /// and the user sees why nothing was saved.
+    private func readScheduleFields(from current: Schedule) -> Schedule {
+        var schedule = current
+        schedule.isEnabled = Gtk.isChecked(scheduleCheck)
+        schedule.alsoRename = Gtk.isChecked(scheduleRenameCheck)
+        schedule.alsoSend = Gtk.isChecked(scheduleSendCheck)
+
+        let typed = Gtk.text(of: scheduleTimeEntry).trimmingCharacters(in: .whitespaces)
+        let parts = typed.split(separator: ":", maxSplits: 1)
+        if parts.count == 2, let hour = Int(parts[0]), let minute = Int(parts[1]) {
+            schedule.hour = hour
+            schedule.minute = minute
+        } else if !typed.isEmpty {
+            schedule.hour = -1
+        }
+        let hours = Gtk.text(of: scheduleHoursEntry).trimmingCharacters(in: .whitespaces)
+        if !hours.isEmpty { schedule.everyHours = Int(hours) ?? -1 }
+
+        let cadence = Int(gtk_combo_box_get_active(Gtk.comboBox(scheduleCadenceCombo)))
+        if cadence >= 0, cadence < Schedule.Cadence.allCases.count {
+            schedule.cadence = Schedule.Cadence.allCases[cadence]
+        }
+        return schedule
     }
 
     /// Reads the server fields, keeping anything the window cannot express.
@@ -581,6 +649,18 @@ final class AppWindow {
             Gtk.entry(llmKeyEntry),
             stored ? "gespeichert — zum Ersetzen neu eingeben" : "keiner hinterlegt"
         )
+
+        let schedule = settings.schedule
+        Gtk.setChecked(scheduleCheck, schedule.isEnabled)
+        Gtk.setChecked(scheduleRenameCheck, schedule.alsoRename)
+        Gtk.setChecked(scheduleSendCheck, schedule.alsoSend)
+        Gtk.setText(of: scheduleTimeEntry,
+                    String(format: "%02d:%02d", schedule.hour, schedule.minute))
+        Gtk.setText(of: scheduleHoursEntry, String(schedule.everyHours))
+        if let index = Schedule.Cadence.allCases.firstIndex(of: schedule.cadence) {
+            gtk_combo_box_set_active(Gtk.comboBox(scheduleCadenceCombo), Int32(index))
+        }
+        Gtk.setText(scheduleSummary, schedule.summary)
 
         let remote = settings.remote
         Gtk.setChecked(remoteEnabledCheck, remote.isEnabled)

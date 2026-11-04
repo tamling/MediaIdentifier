@@ -65,6 +65,8 @@ public struct WebSettings: Codable, Sendable, Equatable {
     public var conversion: WebConversionSettings
     /// Where the library lives when it is on another machine.
     public var remote: RemoteTarget
+    /// When Mediafin looks by itself.
+    public var schedule: Schedule
 
     public enum ConflictPolicyChoice: String, Codable, Sendable, CaseIterable {
         case skip, rename, replace
@@ -97,7 +99,8 @@ public struct WebSettings: Codable, Sendable, Equatable {
                 conflictPolicy: ConflictPolicyChoice = .skip,
                 watchSourceFolder: Bool = false,
                 conversion: WebConversionSettings = WebConversionSettings(),
-                remote: RemoteTarget = RemoteTarget()) {
+                remote: RemoteTarget = RemoteTarget(),
+                schedule: Schedule = Schedule()) {
         self.sourceFolder = sourceFolder
         self.moviesFolder = moviesFolder
         self.seriesFolder = seriesFolder
@@ -111,6 +114,7 @@ public struct WebSettings: Codable, Sendable, Equatable {
         self.watchSourceFolder = watchSourceFolder
         self.conversion = conversion
         self.remote = remote
+        self.schedule = schedule
     }
 
     // MARK: Decoding
@@ -122,7 +126,7 @@ public struct WebSettings: Codable, Sendable, Equatable {
         case sourceFolder, moviesFolder, seriesFolder, musicFolder, libraryMode
         case identification
         case localLLMBaseURL, localLLMModel, jellyfinBaseURL
-        case conflictPolicy, watchSourceFolder, conversion, remote
+        case conflictPolicy, watchSourceFolder, conversion, remote, schedule
     }
 
     public init(from decoder: Decoder) throws {
@@ -148,6 +152,7 @@ public struct WebSettings: Codable, Sendable, Equatable {
         watchSourceFolder = value(.watchSourceFolder, defaults.watchSourceFolder)
         conversion = value(.conversion, defaults.conversion)
         remote = value(.remote, defaults.remote)
+        schedule = value(.schedule, defaults.schedule)
     }
 
     // MARK: Validation
@@ -205,6 +210,7 @@ public struct WebSettings: Codable, Sendable, Equatable {
         }
         found.append(contentsOf: conversion.problems())
         found.append(contentsOf: remote.problems())
+        found.append(contentsOf: schedule.problems())
         return found
     }
 
@@ -282,6 +288,7 @@ public struct WebSettings: Codable, Sendable, Equatable {
         }
         settings.conversion = WebConversionSettings.fromForm(fields, current: current.conversion)
         settings.remote = RemoteTarget.fromForm(fields, current: current.remote)
+        settings.schedule = Schedule.fromForm(fields, current: current.schedule)
         return settings.normalised()
     }
 }
