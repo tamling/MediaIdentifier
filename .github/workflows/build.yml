@@ -173,6 +173,61 @@ jobs:
           unset SSHPASS
 
           echo "sshd is up on 127.0.0.1:2222"
+      # A real yt-dlp against a real HTTP server, for the same reason the
+      # transfer tests run against a real sshd: the command line can only
+      # be proved by running it. No internet is involved — the file is
+      # built here and served from 127.0.0.1.
+      - name: Serve a media file locally for the download tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          apt-get install -y -qq ffmpeg python3-pip
+          pip3 install --quiet --break-system-packages yt-dlp || pip3 install --quiet yt-dlp
+          yt-dlp --version
+
+          mkdir -p /tmp/mediafin-www
+          # Small enough to build in a couple of seconds, large enough that
+          # a rate limit produces a dozen progress updates.
+          ffmpeg -nostdin -loglevel error -y \
+            -f lavfi -i testsrc=size=640x360:rate=25 -f lavfi -i sine=frequency=440 \
+            -t 20 -c:v libx264 -preset veryfast -b:v 900k -pix_fmt yuv420p \
+            -c:a aac -shortest /tmp/mediafin-www/Sample.Video.2024.1080p.mp4
+          ls -l /tmp/mediafin-www
+
+          cd /tmp/mediafin-www
+          nohup python3 -m http.server 18080 --bind 127.0.0.1 \
+            > /tmp/mediafin-www/httpd.log 2>&1 &
+          for _ in $(seq 1 30); do
+            curl -sf --noproxy 127.0.0.1 -o /dev/null \
+              http://127.0.0.1:18080/Sample.Video.2024.1080p.mp4 && break
+            sleep 0.5
+          done
+          curl -sf --noproxy 127.0.0.1 -o /dev/null \
+            http://127.0.0.1:18080/Sample.Video.2024.1080p.mp4 || {
+            echo "FAIL: the local HTTP server did not come up"
+            cat /tmp/mediafin-www/httpd.log; exit 1; }
+
+          # Demonstrated rather than asserted in a comment, like the sftp
+          # option-ordering check above. --print implies --quiet implies
+          # noprogress, so the progress template is silently discarded
+          # unless --progress is passed. If a future yt-dlp changes that,
+          # this says so instead of a progress test failing for a reason
+          # nobody can see.
+          U=http://127.0.0.1:18080/Sample.Video.2024.1080p.mp4
+          T='download:MFPROG|%(progress.status)s'
+          mkdir -p /tmp/q1 /tmp/q2
+          n1=$(yt-dlp --ignore-config --newline --no-colors --progress-template "$T" \
+               --print after_move:filepath -P home:/tmp/q1 -o '%(id)s.%(ext)s' -- "$U" \
+               2>/dev/null | grep -c MFPROG || true)
+          n2=$(yt-dlp --ignore-config --newline --progress --no-colors \
+               --progress-template "$T" --print after_move:filepath -P home:/tmp/q2 \
+               -o '%(id)s.%(ext)s' -- "$U" 2>/dev/null | grep -c MFPROG || true)
+          echo "progress lines — without --progress: $n1, with it: $n2"
+          test "$n1" -eq 0 || echo "NOTE: --print no longer implies --quiet"
+          test "$n2" -ge 2 || {
+            echo "FAIL: no progress through a pipe even with --progress"; exit 1; }
+          rm -rf /tmp/q1 /tmp/q2
+          echo "http server is up on 127.0.0.1:18080"
       - name: Build
         run: swift build
       - name: Run Swift tests
@@ -188,6 +243,9 @@ jobs:
           MEDIAFIN_SSH_TEST_KEY: /tmp/mediafin-sshd/client_key
           MEDIAFIN_SSH_TEST_PASSWORD: transfer-test-password
           MEDIAFIN_SSH_TEST_BASE: /tmp/mediafin-remote
+          # Picked up by VideoDownloadIntegrationTests, which skip without it.
+          MEDIAFIN_HTTP_TEST_URL: http://127.0.0.1:18080/Sample.Video.2024.1080p.mp4
+          MEDIAFIN_HTTP_TEST_FILE: /tmp/mediafin-www/Sample.Video.2024.1080p.mp4
         run: |
           set -o pipefail
           swift test 2>&1 | tee test.log
@@ -199,6 +257,25 @@ jobs:
           grep -E ": error:|XCTAssert.* failed" test.log | head -60 || true
           echo "--- totals ---"
           grep -E "Executed [0-9]+ tests" test.log | tail -2 || true
+      # Same reasoning as the transfer guard below: a skipped test reports
+      # success, and this suite has already had one silently skip itself
+      # five runs in a row.
+      - name: The download tests must have run
+        shell: bash
+        run: |
+          set -uo pipefail
+          if grep -q "VideoDownloadIntegrationTests.*skipped" test.log; then
+            echo "FAIL: the download tests were skipped; the HTTP server did not come up"
+            grep -E "VideoDownloadIntegrationTests" test.log | head -20
+            exit 1
+          fi
+          ran=$(grep -cE "Test Case .*VideoDownloadIntegrationTests.* passed" test.log \
+                || true)
+          echo "download tests passed: $ran"
+          test "$ran" -ge 5 || {
+            echo "FAIL: expected at least 5 download tests, saw $ran"
+            exit 1
+          }
       # A skipped transfer test is a test that proves nothing, and a skip is
       # quiet. This makes it loud: if the sshd setup silently stops working,
       # the job fails here instead of going green with the feature untested.
