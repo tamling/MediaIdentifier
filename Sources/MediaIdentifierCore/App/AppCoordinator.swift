@@ -978,7 +978,12 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         lock.lock()
         _convertible.removeAll { converted.contains($0.id) }
         let stopped = _cancelConversions
-        _cancelConversions = false
+        // As for transfers, and the declaration of this flag already says
+        // why: it is "deliberately not cleared when a run starts" so that a
+        // cancel pressed while a run was still queued is not lost. Clearing
+        // it unconditionally at the end of a run lost it anyway, and the
+        // queued run re-encoded everything the user had already stopped.
+        if _queuedConversionRuns == 0 { _cancelConversions = false }
         lock.unlock()
 
         update {
@@ -1555,7 +1560,15 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         lock.lock()
         _items.removeAll { done.contains($0.id) }
         let stopped = _cancelTransfers
-        _cancelTransfers = false
+        // Only when no other run is waiting. The page redirects the moment a
+        // button is pressed, so pressing "send" twice leaves two runs on the
+        // queue; a cancel during the first was armed for both — that is why
+        // `cancelTransfers` arms it when `_queuedTransferRuns > 0`. Clearing
+        // it here unconditionally threw that away, and the queued run then
+        // sent every file the cancel was meant to save and, with "remove the
+        // local copy" on, deleted each original afterwards. The interface had
+        // already confirmed the stop.
+        if _queuedTransferRuns == 0 { _cancelTransfers = false }
         lock.unlock()
 
         update {
@@ -1605,8 +1618,27 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         }
     }
 
+    /// Clears a cancel request, unless it still covers a queued run.
+    ///
+    /// Called on the paths where a run gives up before sending anything — no
+    /// server, no password, nothing ticked. Those are exactly the paths where
+    /// the cancel is still owed to the run behind this one, and clearing it
+    /// unconditionally handed that run a clean slate.
     private func clearTransferCancelRequest() {
-        lock.lock(); _cancelTransfers = false; lock.unlock()
+        lock.lock()
+        if _queuedTransferRuns == 0 { _cancelTransfers = false }
+        lock.unlock()
+    }
+
+    /// Only for tests: arm a cancel with `queuedRuns` still waiting, end a
+    /// run, and report whether the cancel survived.
+    func cancelSurvivesRunEndForTesting(queuedRuns: Int) -> Bool {
+        lock.lock()
+        _queuedTransferRuns = queuedRuns
+        _cancelTransfers = true
+        lock.unlock()
+        clearTransferCancelRequest()
+        lock.lock(); defer { lock.unlock() }; return _cancelTransfers
     }
 
     static func describe(_ error: Error) -> String {
@@ -1964,7 +1996,12 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
             // so the window printed the same number twice.
             $0.ready = accepted
             $0.done = done
-            $0.watchActive = settings.watchSourceFolder
+            // Deliberately NOT set here. `updateWatchState` sets it from
+            // whether the timer is really armed, and this runs after it in
+            // `save` — so writing the raw setting back meant that with
+            // watching on and no import folder set, nothing was polled while
+            // every lamp and the status row said "active".
+            //   $0.watchActive = settings.watchSourceFolder
             $0.jellyfinConfigured = hasJellyfin
             $0.remoteConfigured = settings.remote.isEnabled
                 && settings.remote.problems().isEmpty

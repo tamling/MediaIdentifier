@@ -419,4 +419,26 @@ final class WatchFolderTests: XCTestCase {
         coordinator.pollWatchFolderForTesting()
         XCTAssertTrue(coordinator.items.isEmpty)
     }
+
+    // MARK: The watch lamp
+
+    /// `updateWatchState` sets this from whether the timer is really armed,
+    /// and `refreshSnapshotCounts` ran after it and wrote the raw setting
+    /// back — so with watching on and no import folder, nothing was polled
+    /// while the status row and every lamp said "active". The sibling test
+    /// asserts `isWatching` only, so it passed throughout.
+    func testTheWatchLampSaysWhatIsActuallyBeingWatched() {
+        var settings = configuredSettings()
+        settings.watchSourceFolder = true
+        settings.sourceFolder = ""
+        run(.saveSettings(settings))
+        XCTAssertFalse(coordinator.isWatching)
+        XCTAssertFalse(coordinator.snapshot.watchActive,
+                       "the interface claimed the import folder was being watched")
+
+        settings.sourceFolder = source.path
+        run(.saveSettings(settings))
+        XCTAssertTrue(coordinator.isWatching)
+        XCTAssertTrue(coordinator.snapshot.watchActive)
+    }
 }

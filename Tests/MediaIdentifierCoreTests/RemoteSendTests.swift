@@ -392,4 +392,24 @@ final class RemoteSendTests: XCTestCase {
                           outputRoot: URL(fileURLWithPath: "/library", isDirectory: true),
                           proposedRelativePath: relative)
     }
+
+    // MARK: A cancel that covered a queued run
+
+    /// The page redirects the moment a button is pressed, so pressing "send"
+    /// twice leaves two runs on the queue. `cancelTransfers` arms the flag
+    /// precisely because one is queued — and the end of the first run then
+    /// cleared it, so the queued run sent every file the cancel was meant to
+    /// save and, with "remove the local copy" on, deleted each original. The
+    /// interface had already confirmed the stop.
+    func testACancelIsNotDiscardedWhileAnotherRunIsStillQueued() {
+        XCTAssertTrue(coordinator.cancelSurvivesRunEndForTesting(queuedRuns: 1),
+                      "the cancel was thrown away while a run was still queued")
+    }
+
+    /// And it must be cleared once nothing is waiting, or the next send the
+    /// user starts would refuse to send anything.
+    func testACancelIsClearedOnceNothingIsQueued() {
+        XCTAssertFalse(coordinator.cancelSurvivesRunEndForTesting(queuedRuns: 0),
+                       "a stale cancel would stop the user's next send")
+    }
 }
