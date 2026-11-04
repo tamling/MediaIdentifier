@@ -257,4 +257,45 @@ final class SystemCheckTests: XCTestCase {
         ])
         XCTAssertEqual(summary, "2 bereit · 1 Problem")
     }
+
+    // MARK: The schedule lamp
+
+    /// The state worth a red lamp is the one that looks fine everywhere
+    /// else: switched on in the settings, with nothing armed to run it. That
+    /// was every restart, before the schedule was armed at startup, and the
+    /// panel could not see it.
+    func testAScheduleThatIsOnButNotRunningIsAProblem() {
+        let check = SystemChecks.schedule(Schedule(isEnabled: true, hour: 3),
+                                          nextRun: nil)
+        XCTAssertEqual(check.state, .failed)
+        XCTAssertTrue(check.detail.contains("l\u{00E4}uft aber nicht"), check.detail)
+    }
+
+    func testAnArmedScheduleSaysWhenItWillRun() {
+        let check = SystemChecks.schedule(Schedule(isEnabled: true, hour: 3),
+                                          nextRun: Date().addingTimeInterval(3600))
+        XCTAssertEqual(check.state, .ok)
+        XCTAssertTrue(check.detail.contains("N\u{00E4}chster Lauf"), check.detail)
+    }
+
+    /// Grey, not red: a schedule nobody asked for is not a fault.
+    func testAScheduleThatIsOffIsGrey() {
+        XCTAssertEqual(SystemChecks.schedule(Schedule(), nextRun: nil).state, .off)
+    }
+
+    /// An impossible time is a fault the user can fix, so the lamp carries
+    /// the sentence that says how.
+    func testAnImpossibleTimeIsReportedWithItsOwnMessage() {
+        let check = SystemChecks.schedule(Schedule(isEnabled: true, hour: 25),
+                                          nextRun: nil)
+        XCTAssertEqual(check.state, .failed)
+        XCTAssertTrue(check.detail.contains("00:00"), check.detail)
+    }
+
+    /// Every lamp has a word beside it, colour or no colour.
+    func testTheScheduleLampHasAWordLikeEveryOther() {
+        for state in [SystemCheck.State.ok, .warning, .failed, .off] {
+            XCTAssertFalse(state.word.isEmpty)
+        }
+    }
 }

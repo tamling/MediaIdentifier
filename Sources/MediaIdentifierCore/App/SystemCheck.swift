@@ -82,6 +82,7 @@ public enum SystemChecks {
         ffmpegAvailable: Bool,
         secrets: Set<SecretKey>,
         probes: [ProbeSubject: ProbeResult],
+        nextScheduledRun: Date? = nil,
         fileManager: FileManager = .default,
         now: Date = Date()
     ) -> [SystemCheck] {
@@ -122,7 +123,38 @@ public enum SystemChecks {
                                probes: probes, now: now))
         checks.append(contentsOf: remote(settings: settings, tools: tools,
                                          secrets: secrets, probes: probes, now: now))
+        checks.append(schedule(settings.schedule, nextRun: nextScheduledRun, now: now))
         return checks
+    }
+
+    /// Whether the unattended run is really going to happen.
+    ///
+    /// The lamp this panel most needed and did not have. A schedule is a
+    /// promise about a time nobody is present for, so the only way to know
+    /// it was kept is to be told beforehand that it will be — and the
+    /// state worth a red lamp is the one that looks fine everywhere else:
+    /// switched on in the settings, with nothing armed to run it.
+    static func schedule(_ schedule: Schedule, nextRun: Date?,
+                         now: Date = Date()) -> SystemCheck {
+        let name = "Zeitplan"
+        guard schedule.isEnabled else {
+            return SystemCheck(id: "schedule", name: name, state: .off,
+                               detail: "Aus — es läuft nichts von selbst.")
+        }
+        let problems = schedule.problems()
+        if let first = problems.first {
+            return SystemCheck(id: "schedule", name: name, state: .failed,
+                               detail: first.message)
+        }
+        guard let nextRun else {
+            return SystemCheck(id: "schedule", name: name, state: .failed,
+                               detail: "Eingeschaltet, läuft aber nicht. "
+                                   + "‚Speichern‘ in den Einstellungen "
+                                   + "schaltet ihn wieder scharf.")
+        }
+        return SystemCheck(id: "schedule", name: name, state: .ok,
+                           detail: schedule.summary + " Nächster Lauf: "
+                               + Schedule.describe(nextRun, now: now) + ".")
     }
 
     /// The worst lamp on the panel, for a single badge in a header bar.

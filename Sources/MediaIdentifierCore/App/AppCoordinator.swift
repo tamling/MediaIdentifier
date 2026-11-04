@@ -1198,7 +1198,11 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
                                 tools: RemoteTools.locate(),
                                 ffmpegAvailable: ffmpegAvailable,
                                 secrets: secretStore.configuredKeys(),
-                                probes: probes)
+                                probes: probes,
+                                // From the snapshot rather than recomputed:
+                                // this says whether the tick is actually
+                                // armed, which is the thing worth a lamp.
+                                nextScheduledRun: snapshot.nextScheduledRun)
     }
 
     private func record(_ subject: ProbeSubject, ok: Bool, detail: String) {
