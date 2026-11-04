@@ -319,4 +319,42 @@ final class UnattendedRunTests: XCTestCase {
                                          now: now, calendar: calendar),
                        "14.06. 03:00")
     }
+
+    // MARK: Two Mediafins at once
+
+    /// The window and `mediafin` in a terminal share ~/.config/mediafin, and
+    /// both arm the schedule at startup — so without a lock both would find
+    /// the same run overdue and both would rename, the loser's moves failing
+    /// against files the winner had already moved.
+    func testOnlyOneProcessRunsTheSameJob() throws {
+        let lockFile = config.appendingPathComponent("test.lock")
+        var inner: Bool?
+        let outer = RunLock.withLock(at: lockFile) {
+            // Re-entered from the same process: flock is per open file
+            // description, so a second `open` of the same path is a second
+            // contender exactly as another process would be.
+            inner = RunLock.withLock(at: lockFile) { }
+        }
+        XCTAssertTrue(outer)
+        XCTAssertEqual(inner, false, "two runs of the same job were allowed at once")
+    }
+
+    /// And it has to be released, or the schedule fires once and never again.
+    func testTheLockIsFreeAgainAfterwards() {
+        let lockFile = config.appendingPathComponent("released.lock")
+        XCTAssertTrue(RunLock.withLock(at: lockFile) { })
+        XCTAssertTrue(RunLock.withLock(at: lockFile) { },
+                      "the lock was not released, so nothing would ever run again")
+    }
+
+    /// A directory that cannot hold a lock file must not silently stop the
+    /// schedule for ever: running unlocked is the lesser evil.
+    func testAnUnusableLockPathStillRuns() {
+        var ran = false
+        let outcome = RunLock.withLock(at: URL(fileURLWithPath: "/proc/nowhere/x.lock")) {
+            ran = true
+        }
+        XCTAssertTrue(outcome)
+        XCTAssertTrue(ran)
+    }
 }

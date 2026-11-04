@@ -76,6 +76,7 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
     /// — has tonight's run happened? — outlives the process.
     private var _lastScheduledRun: Date?
 
+    private let configDirectory: URL
     private let settingsStore: SettingsStore
     private let scheduleState: ScheduleStateStore
     private let secretStore: SecretStore
@@ -129,6 +130,7 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
     ///   when watching is on. Injectable so the tests do not wait.
     public init(configDirectory: URL, watchInterval: TimeInterval = 15) {
         self.watchInterval = max(1, watchInterval)
+        self.configDirectory = configDirectory
         settingsStore = SettingsStore(directory: configDirectory)
         scheduleState = ScheduleStateStore(directory: configDirectory)
         secretStore = SecretStore(directory: configDirectory)
@@ -1711,14 +1713,28 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         lock.unlock()
         guard schedule.isDue(at: Date(), lastRun: previousRun) else { return }
 
-        // Stamped before the work, not after: a run that takes an hour
-        // must not make the next one due the moment it finishes, and a
-        // run that throws must not repeat every minute.
-        recordScheduledRun(Date())
+        // Under a lock on the configuration directory, because the window
+        // and `mediafin` in a terminal share one and both now arm the
+        // schedule at startup: without this they would both find the run
+        // overdue and both rename.
+        let ours = RunLock.withLock(at: configDirectory
+            .appendingPathComponent("schedule-run.lock")) {
+            // Stamped before the work, not after: a run that takes an hour
+            // must not make the next one due the moment it finishes, and a
+            // run that throws must not repeat every minute.
+            recordScheduledRun(Date())
 
-        log.append(RenameLogEntry(oldName: "Zeitplan", newName: schedule.summary,
-                                  status: .skipped))
-        performScheduledRun(schedule)
+            log.append(RenameLogEntry(oldName: "Zeitplan", newName: schedule.summary,
+                                      status: .skipped))
+            performScheduledRun(schedule)
+        }
+        if !ours {
+            // The other Mediafin is doing it. Its stamp is the shared
+            // answer, so take that rather than asking again in a minute and
+            // finding the same run still overdue.
+            let stored = scheduleState.lastRun()
+            lock.lock(); _lastScheduledRun = stored ?? Date(); lock.unlock()
+        }
         // Read before `update`, never inside it: the lock is not recursive
         // and these accessors take it.
         let next = nextScheduledRun
