@@ -142,6 +142,50 @@ public enum RemoteCommand {
         return "\(trimmedBase)/\(trimmedPath)"
     }
 
+    /// `user@host` goes into ssh's argument list as one bare word.
+    ///
+    /// A user name beginning with a dash is therefore read as an option,
+    /// and ssh has options that run local commands. Neither field was
+    /// checked anywhere: `problems()` looks at the host for spaces and
+    /// slashes and at the user only for emptiness.
+    static func checkDestination(_ target: RemoteTarget) throws {
+        for (value, what) in [(target.user, "Der Benutzername"),
+                              (target.host, "Die Serveradresse")] {
+            _ = try rejectingSplittableCharacters(value, what: what)
+            guard !value.hasPrefix("-") else {
+                throw Failure.unsafePath("\(what) darf nicht mit einem Bindestrich "
+                    + "beginnen: ssh würde das als Option lesen.")
+            }
+        }
+    }
+
+    /// `ssh … test -e <path>` — is that file already on the server?
+    ///
+    /// sftp has no "refuse an existing file" switch, so the only way to
+    /// honour "skip the file" over sftp is to ask first.
+    public static func exists(_ target: RemoteTarget,
+                              relativePath: String,
+                              sshPath: String,
+                              password: String?) throws -> Invocation {
+        try checkDestination(target)
+        let remote = remotePath(relativePath, under: target.basePath)
+        _ = try rejectingControlCharacters(remote, what: "Der Zielpfad")
+        let quoted = "'" + remote.replacingOccurrences(of: "'", with: "'\\''") + "'"
+        var arguments = ["-p", String(target.port)] + sshOptions(target)
+        arguments.append(target.destination)
+        arguments.append("test -e \(quoted)")
+
+        if target.authentication == .password {
+            guard let password, !password.isEmpty else {
+                throw Failure.notConfigured("Passwort fehlt")
+            }
+            return Invocation(executable: "sshpass",
+                              arguments: ["-e", sshPath] + arguments,
+                              environment: ["SSHPASS": password])
+        }
+        return Invocation(executable: sshPath, arguments: arguments)
+    }
+
     // MARK: Checking the server
 
     /// `ssh … test -d <base>` — does the login work, and is the target there?
@@ -164,6 +208,7 @@ public enum RemoteCommand {
         // Single-quoted for the remote shell, with embedded quotes escaped
         // the only way POSIX sh allows. The base path comes from a settings
         // field, so it is not trusted to be shell-safe.
+        try checkDestination(target)
         _ = try rejectingControlCharacters(target.basePath, what: "Der Zielpfad")
         let quoted = "'" + target.basePath.replacingOccurrences(of: "'", with: "'\\''") + "'"
         var arguments = ["-p", String(target.port)] + sshOptions(target)
@@ -189,11 +234,13 @@ public enum RemoteCommand {
                              relativePath: String,
                              rsyncPath: String,
                              sshPath: String,
+                             sshpassPath: String = "sshpass",
                              password: String?,
                              keepExisting: Bool = false) throws -> Invocation {
         guard !target.host.isEmpty, !target.basePath.isEmpty else {
             throw Failure.notConfigured("Adresse oder Zielpfad fehlt")
         }
+        try checkDestination(target)
         let destination = remotePath(relativePath, under: target.basePath)
 
         // The ssh command rsync should use. rsync splits this on spaces, so
@@ -212,12 +259,24 @@ public enum RemoteCommand {
         var sshCommand = ([sshPath, "-p", String(target.port)] + sshOptions(target))
             .joined(separator: " ")
         if target.authentication == .password {
-            sshCommand = "sshpass -e " + sshCommand
+            // The resolved path, not the bare name: rsync runs this string
+            // itself, so a bare name would be looked up in whatever PATH
+            // the service inherited — which is the thing RemoteTools was
+            // written to avoid, undone inside a string.
+            _ = try rejectingSplittableCharacters(sshpassPath, what: "Der Pfad zu sshpass")
+            sshCommand = sshpassPath + " -e " + sshCommand
         }
 
         var arguments = [
             "--archive",             // keep times and permissions
-            "--partial",             // keep a half-sent file so it can resume
+            // --partial-dir, not --partial. Plain --partial leaves the
+            // fragment under the FINAL name, and --ignore-existing then
+            // skips it on the next attempt: rsync transfers nothing, exits
+            // 0, we report "sent", and with "delete the local copy" the
+            // complete original is removed while the server keeps a
+            // truncated file. The fragment now waits in a subdirectory and
+            // is only renamed into place when it is whole.
+            "--partial-dir=.mediafin-partial",
             // Creates Serien/Name/Staffel on the way. rsync 3.2.3 and
             // newer only: an older one fails with "unknown option" and says
             // nothing about paths. Nothing here can check that — this file
@@ -268,6 +327,7 @@ public enum RemoteCommand {
         guard !target.host.isEmpty, !target.basePath.isEmpty else {
             throw Failure.notConfigured("Adresse oder Zielpfad fehlt")
         }
+        try checkDestination(target)
         let destination = remotePath(relativePath, under: target.basePath)
         _ = try rejectingControlCharacters(localFile.path, what: "Der Dateiname")
         _ = try rejectingControlCharacters(destination, what: "Der Zielpfad")

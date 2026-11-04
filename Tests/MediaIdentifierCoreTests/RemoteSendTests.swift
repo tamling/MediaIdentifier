@@ -110,11 +110,20 @@ final class RemoteSendTests: XCTestCase {
 
     /// An empty tick list means the user unticked everything, which must send
     /// nothing rather than everything.
+    /// With proposals on the list, so the message means "you ticked
+    /// nothing" rather than "there is nothing". Without them the test
+    /// passed whatever the code did.
     func testAnEmptySelectionSendsNothing() {
         enableRemote()
+        coordinator.setItemsForTesting([
+            Self.item(source: "/downloads/a.mkv", relative: "A.mkv"),
+            Self.item(source: "/downloads/b.mkv", relative: "B.mkv"),
+        ])
         coordinator.executeForTesting(.transferFiles(accepting: []))
         XCTAssertEqual(coordinator.snapshot.lastResult,
                        "Es war nichts angehakt, also wurde nichts gesendet.")
+        XCTAssertEqual(coordinator.items.count, 2, "the proposals were consumed anyway")
+        XCTAssertTrue(coordinator.logEntries.isEmpty, "something was sent")
     }
 
     /// The configuration is only reported as usable when it is complete, so

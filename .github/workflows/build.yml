@@ -292,13 +292,21 @@ jobs:
         shell: bash
         run: |
           set -uo pipefail
-          if grep -q "RemoteTransferIntegrationTests.*skipped" test.log; then
-            echo "FAIL: the transfer tests were skipped; the SSH server did not come up"
-            grep -E "RemoteTransferIntegrationTests" test.log | head -20
+          # Both suites: RemoteSendIntegrationTests covers the deletion
+          # path and was not named here, although its own header said the
+          # CI step guarded it.
+          if grep -qE "Remote(Transfer|Send)IntegrationTests.*skipped" test.log; then
+            echo "FAIL: transfer tests were skipped; the SSH server did not come up"
+            grep -E "Remote(Transfer|Send)IntegrationTests" test.log | head -20
             exit 1
           fi
           ran=$(grep -cE "Test Case .*RemoteTransferIntegrationTests.* passed" test.log || true)
-          echo "transfer tests passed: $ran"
+          sent=$(grep -cE "Test Case .*RemoteSendIntegrationTests.* passed" test.log || true)
+          echo "transfer tests passed: $ran, send tests passed: $sent"
+          test "$sent" -ge 5 || {
+            echo "FAIL: expected at least 5 send tests, saw $sent"
+            exit 1
+          }
           test "$ran" -ge 7 || {
             echo "FAIL: expected at least 7 transfer tests to run, saw $ran"
             exit 1

@@ -86,7 +86,11 @@ public struct RemoteTarget: Codable, Sendable, Equatable {
                 removeLocalAfterSend: Bool = false) {
         self.isEnabled = isEnabled
         self.host = host.trimmingCharacters(in: .whitespacesAndNewlines)
-        self.port = (1...65535).contains(port) ? port : 22
+        // Kept as given. Clamping it here meant problems() could never see
+        // an out-of-range port, so "Der Port muss 1–65535 sein." was
+        // unreachable and a mistyped port silently became 22 — which is a
+        // different machine's SSH port, not a correction.
+        self.port = port
         self.user = user.trimmingCharacters(in: .whitespacesAndNewlines)
         self.basePath = basePath.trimmingCharacters(in: .whitespacesAndNewlines)
         self.transport = transport

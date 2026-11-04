@@ -27,6 +27,8 @@ public final class RemoteTransfer {
         case toolsMissing([String])
         case failed(code: Int32, message: String)
         case cancelled
+        /// The server already has it and the policy says to skip.
+        case alreadyThere(String)
 
         public var description: String {
             switch self {
@@ -39,6 +41,9 @@ public final class RemoteTransfer {
                     : "Die Übertragung schlug fehl (Code \(code)): \(message)"
             case .cancelled:
                 return "Die Übertragung wurde abgebrochen."
+            case .alreadyThere(let path):
+                return "Auf dem Server liegt bereits \(path); laut Einstellung wird "
+                    + "übersprungen."
             }
         }
     }
@@ -66,12 +71,24 @@ public final class RemoteTransfer {
         let absent = tools.missing(for: target)
         guard absent.isEmpty else { throw Failure.toolsMissing(absent) }
 
+        // sftp has no "refuse an existing file" switch, so for it the
+        // question has to be asked. Without this, "skip the file" was
+        // honoured over rsync and silently ignored over sftp — and the
+        // comment on the rsync side described protecting exactly the case
+        // sftp was overwriting.
+        if keepExisting, target.transport == .sftp,
+           remoteFileExists(target, relativePath: relativePath, password: password) {
+            throw Failure.alreadyThere(
+                RemoteCommand.remotePath(relativePath, under: target.basePath))
+        }
+
         let invocation: RemoteCommand.Invocation
         switch target.transport {
         case .rsync:
             invocation = try RemoteCommand.rsync(
                 target, localFile: localFile, relativePath: relativePath,
                 rsyncPath: tools.rsync ?? "rsync", sshPath: tools.ssh ?? "ssh",
+                sshpassPath: tools.sshpass ?? "sshpass",
                 password: password, keepExisting: keepExisting)
         case .sftp:
             invocation = try RemoteCommand.sftp(
@@ -135,6 +152,41 @@ public final class RemoteTransfer {
                                  message: Self.explain(state.errorText))
         }
         progress?(Progress(fraction: 1))
+    }
+
+    /// Whether the destination is already on the server.
+    ///
+    /// Answers false when the question cannot be asked: a failed check must
+    /// not be read as "it is there" and quietly skip a file the user asked
+    /// to send.
+    func remoteFileExists(_ target: RemoteTarget, relativePath: String,
+                          password: String?) -> Bool {
+        guard let invocation = try? RemoteCommand.exists(
+            target, relativePath: relativePath,
+            sshPath: tools.ssh ?? "ssh", password: password) else { return false }
+        var executable = invocation.executable
+        if executable == "sshpass" { executable = tools.sshpass ?? "sshpass" }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: executable)
+        process.arguments = invocation.arguments
+        if !invocation.environment.isEmpty {
+            var environment = ProcessInfo.processInfo.environment
+            for (key, value) in invocation.environment { environment[key] = value }
+            process.environment = environment
+        }
+        process.standardOutput = Pipe()
+        process.standardError = Pipe()
+        let inPipe = Pipe()
+        process.standardInput = inPipe
+        try? inPipe.fileHandleForWriting.close()
+
+        guard (try? process.run()) != nil else { return false }
+        guard Self.wait(for: process, upTo: 30) else {
+            process.terminate()
+            return false
+        }
+        return process.terminationStatus == 0
     }
 
     /// Asks the server whether a transfer would work, and says why not.

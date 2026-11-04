@@ -638,8 +638,11 @@ final class AppWindow {
         } else {
             Gtk.setProgress(downloadProgress, fraction: 0, text: "Kein Download")
         }
+        // Emptied when nothing is running: the bar used to stay visually
+        // full after a run while the words beside it said "Keine
+        // Übertragung", which reads as a transfer stuck at 100 %.
         Gtk.setProgress(remoteProgress,
-                        fraction: state.transferProgress,
+                        fraction: state.transferring ? state.transferProgress : 0,
                         text: state.transferSummary)
 
         refreshList()

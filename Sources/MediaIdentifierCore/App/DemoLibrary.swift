@@ -17,7 +17,6 @@ public enum DemoLibrary {
 
     /// Names chosen to cover what the parser has to survive, not to look
     /// tidy: a plain film, a 4K release with a long tag list, two series
-    /// episodes, a German release, a title containing an ampersand — which is
     /// the one that breaks Pango markup if the escaping is ever dropped — and
     /// a file that already looks converted.
     public static let fileNames = [

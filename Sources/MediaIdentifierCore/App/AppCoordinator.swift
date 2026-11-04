@@ -1087,6 +1087,7 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         // originals. Refused, with both named, rather than resolved
         // silently: which of a 1080p and a 720p rip to keep is not a
         // decision this code should make on its own.
+        var collided = false
         var byDestination: [String: [RenameItem]] = [:]
         for item in pending {
             byDestination[item.proposedRelativePath, default: []].append(item)
@@ -1097,6 +1098,7 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
                 .map(\.originalFileName).sorted().joined(separator: ", ")
             let colliding = Set(collisions.values.flatMap { $0 }.map(\.id))
             pending = pending.filter { !colliding.contains($0.id) }
+            collided = true
             update {
                 $0.hasError = true
                 $0.lastResult = "Mehrere Dateien sollen an dieselbe Stelle auf dem Server: "
@@ -1217,6 +1219,16 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
                                                   newName: relative,
                                                   status: .sent))
                     }
+                } catch RemoteTransfer.Failure.alreadyThere(let remote) {
+                    // The policy says skip, and the server has it. Not a
+                    // failure — but not a success either, so the item stays
+                    // on the list and nothing local is deleted for it.
+                    itemFailed = true
+                    log.append(RenameLogEntry(oldName: local.lastPathComponent,
+                                              newName: relative,
+                                              status: .skipped,
+                                              errorDescription: "Liegt schon auf dem "
+                                                  + "Server: \(remote)"))
                 } catch {
                     failed += 1
                     itemFailed = true
@@ -1269,7 +1281,9 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
             $0.transferDetail = nil
             $0.currentFile = nil
             $0.pendingTransfers = 0
-            $0.hasError = failed > 0
+            // `collided` too: the refusal set hasError and this line used
+            // to clear it again, so the warning vanished with the run.
+            $0.hasError = failed > 0 || collided
             $0.lastResult = "\(sent) Datei\(sent == 1 ? "" : "en") gesendet"
                 + (failed > 0 ? ", \(failed) fehlgeschlagen" : "")
                 + (stopped ? " — vorzeitig gestoppt" : "")
