@@ -31,6 +31,19 @@ final class AppWindow {
     private let llmKeyEntry: UnsafeMutablePointer<GtkWidget>
     private let logColumn: UnsafeMutablePointer<GtkWidget>
     private let logCountLabel: UnsafeMutablePointer<GtkWidget>
+    private let remoteEnabledCheck: UnsafeMutablePointer<GtkWidget>
+    private let remoteHostEntry: UnsafeMutablePointer<GtkWidget>
+    private let remotePortEntry: UnsafeMutablePointer<GtkWidget>
+    private let remoteUserEntry: UnsafeMutablePointer<GtkWidget>
+    private let remoteBaseEntry: UnsafeMutablePointer<GtkWidget>
+    private let remoteIdentityEntry: UnsafeMutablePointer<GtkWidget>
+    private let remotePasswordEntry: UnsafeMutablePointer<GtkWidget>
+    private let remoteTransportCombo: UnsafeMutablePointer<GtkWidget>
+    private let remoteAuthCombo: UnsafeMutablePointer<GtkWidget>
+    private let remoteRemoveLocalCheck: UnsafeMutablePointer<GtkWidget>
+    private let remoteProgress: UnsafeMutablePointer<GtkWidget>
+    private let sendButton: UnsafeMutablePointer<GtkWidget>
+    private let cancelSendButton: UnsafeMutablePointer<GtkWidget>
 
     /// The log rows on screen, so they can be replaced without walking the
     /// container.
@@ -142,6 +155,62 @@ final class AppWindow {
         gtk_container_add(Gtk.container(detectionExpander), detection)
         gtk_box_pack_start(Gtk.box(page), detectionExpander, 0, 0, 0)
 
+        // MARK: The library on another machine
+        //
+        // Also behind an expander, for the same reason: it is configured once.
+        // The progress bar lives in here rather than in the header, because
+        // a transfer is the one job in this window that runs for minutes and
+        // the question while it does is "how far", not "is it busy".
+        remoteEnabledCheck = gtk_check_button_new_with_label(
+            "Die Bibliothek liegt auf einem Server")!
+        remoteHostEntry = Self.entry(placeholder: "nas.fritz.box")
+        remotePortEntry = Self.entry(placeholder: "22")
+        remoteUserEntry = Self.entry(placeholder: "benutzer")
+        remoteBaseEntry = Self.entry(placeholder: "/volume1/Medien")
+        remoteIdentityEntry = Self.entry(placeholder: "~/.ssh/id_ed25519 (leer = Standard)")
+        // Write-only, like the model server's key: never filled in from
+        // storage, so the password cannot end up in a screenshot.
+        remotePasswordEntry = Self.entry(placeholder: "")
+        gtk_entry_set_visibility(Gtk.entry(remotePasswordEntry), 0)
+        remoteTransportCombo = gtk_combo_box_text_new()!
+        for transport in RemoteTarget.Transport.allCases {
+            gtk_combo_box_text_append_text(Gtk.comboBoxText(remoteTransportCombo),
+                                           transport.label)
+        }
+        remoteAuthCombo = gtk_combo_box_text_new()!
+        for auth in RemoteTarget.Authentication.allCases {
+            gtk_combo_box_text_append_text(Gtk.comboBoxText(remoteAuthCombo), auth.label)
+        }
+        remoteRemoveLocalCheck = gtk_check_button_new_with_label(
+            "Lokale Datei nach erfolgreicher Übertragung löschen")!
+
+        let remote = Self.card(titled: "Server")
+        Self.add(remoteEnabledCheck, to: remote)
+        Self.add(Self.row("Adresse", remoteHostEntry), to: remote)
+        Self.add(Self.row("Port", remotePortEntry), to: remote)
+        Self.add(Self.row("Benutzer", remoteUserEntry), to: remote)
+        Self.add(Self.row("Zielpfad", remoteBaseEntry), to: remote)
+        Self.add(Self.row("Übertragung", remoteTransportCombo), to: remote)
+        Self.add(Self.row("Anmeldung", remoteAuthCombo), to: remote)
+        Self.add(Self.row("Schlüsseldatei", remoteIdentityEntry), to: remote)
+        Self.add(Self.row("Passwort", remotePasswordEntry), to: remote)
+        Self.add(remoteRemoveLocalCheck, to: remote)
+
+        remoteProgress = gtk_progress_bar_new()!
+        Self.add(remoteProgress, to: remote)
+
+        let sendRow = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8)!
+        sendButton = gtk_button_new_with_label("Zum Server senden")!
+        cancelSendButton = gtk_button_new_with_label("Stopp")!
+        gtk_box_pack_end(Gtk.box(sendRow), sendButton, 0, 0, 0)
+        gtk_box_pack_end(Gtk.box(sendRow), cancelSendButton, 0, 0, 0)
+        Self.add(sendRow, to: remote)
+
+        let remoteExpander = gtk_expander_new("Server (rsync / SFTP)")!
+        gtk_expander_set_expanded(Gtk.expander(remoteExpander), expandSettings ? 1 : 0)
+        gtk_container_add(Gtk.container(remoteExpander), remote)
+        gtk_box_pack_start(Gtk.box(page), remoteExpander, 0, 0, 0)
+
         // MARK: Proposals
 
         let proposals = Self.card(titled: "Vorschläge")
@@ -211,6 +280,8 @@ final class AppWindow {
         Gtk.onClick(allButton, self) { $0.setAllChecked(true) }
         Gtk.onClick(noneButton, self) { $0.setAllChecked(false) }
         Gtk.onClick(testButton, self) { $0.testModelServer() }
+        Gtk.onClick(sendButton, self) { $0.sendSelected() }
+        Gtk.onClick(cancelSendButton, self) { $0.cancelSending() }
 
         loadFolders()
         refresh()
@@ -244,6 +315,7 @@ final class AppWindow {
         if mode >= 0, mode < IdentificationMode.allCases.count {
             settings.identification = IdentificationMode.allCases[mode]
         }
+        settings.remote = readRemoteFields(from: settings.remote)
         coordinator.submit(.saveSettings(settings))
 
         // Only when something was typed. An empty field means "leave the
@@ -254,6 +326,55 @@ final class AppWindow {
             coordinator.submit(.setSecret(.localLLMAPIKey, key))
             Gtk.setText(of: llmKeyEntry, "")
         }
+        let serverPassword = Gtk.text(of: remotePasswordEntry)
+        if !serverPassword.isEmpty {
+            coordinator.submit(.setSecret(.remotePassword, serverPassword))
+            // Cleared from the widget at once: it is in the secret store now,
+            // and a password left in a field is a password on the screen.
+            Gtk.setText(of: remotePasswordEntry, "")
+        }
+    }
+
+    /// Reads the server fields, keeping anything the window cannot express.
+    ///
+    /// The port is the one field that can be typed wrong in a way worth
+    /// catching here: an empty or non-numeric box keeps the stored port
+    /// rather than quietly becoming 22, which would send the library to
+    /// whatever answers there.
+    private func readRemoteFields(from current: RemoteTarget) -> RemoteTarget {
+        var target = current
+        target.isEnabled = Gtk.isChecked(remoteEnabledCheck)
+        target.removeLocalAfterSend = Gtk.isChecked(remoteRemoveLocalCheck)
+        target.host = Gtk.text(of: remoteHostEntry).trimmingCharacters(in: .whitespaces)
+        target.user = Gtk.text(of: remoteUserEntry).trimmingCharacters(in: .whitespaces)
+        target.basePath = Gtk.text(of: remoteBaseEntry).trimmingCharacters(in: .whitespaces)
+        target.identityFile =
+            Gtk.text(of: remoteIdentityEntry).trimmingCharacters(in: .whitespaces)
+        if let port = Int(Gtk.text(of: remotePortEntry).trimmingCharacters(in: .whitespaces)),
+           (1...65535).contains(port) {
+            target.port = port
+        }
+        let transport = Int(gtk_combo_box_get_active(Gtk.comboBox(remoteTransportCombo)))
+        if transport >= 0, transport < RemoteTarget.Transport.allCases.count {
+            target.transport = RemoteTarget.Transport.allCases[transport]
+        }
+        let auth = Int(gtk_combo_box_get_active(Gtk.comboBox(remoteAuthCombo)))
+        if auth >= 0, auth < RemoteTarget.Authentication.allCases.count {
+            target.authentication = RemoteTarget.Authentication.allCases[auth]
+        }
+        return target
+    }
+
+    /// Saves first, for the same reason scanning does: sending to an address
+    /// that was typed but never saved would send to the old one.
+    func sendSelected() {
+        saveFolders()
+        let ticked = rowChecks.filter { Gtk.isChecked($0.check) }.map(\.id)
+        coordinator.submit(.transferFiles(accepting: Set(ticked)))
+    }
+
+    func cancelSending() {
+        coordinator.submit(.cancelTransfers)
     }
 
     /// Saves first: testing an address the user typed but has not saved would
@@ -306,6 +427,28 @@ final class AppWindow {
             Gtk.entry(llmKeyEntry),
             stored ? "gespeichert — zum Ersetzen neu eingeben" : "keiner hinterlegt"
         )
+
+        let remote = settings.remote
+        Gtk.setChecked(remoteEnabledCheck, remote.isEnabled)
+        Gtk.setChecked(remoteRemoveLocalCheck, remote.removeLocalAfterSend)
+        Gtk.setText(of: remoteHostEntry, remote.host)
+        Gtk.setText(of: remoteUserEntry, remote.user)
+        Gtk.setText(of: remoteBaseEntry, remote.basePath)
+        Gtk.setText(of: remoteIdentityEntry, remote.identityFile)
+        Gtk.setText(of: remotePortEntry, String(remote.port))
+        if let index = RemoteTarget.Transport.allCases.firstIndex(of: remote.transport) {
+            gtk_combo_box_set_active(Gtk.comboBox(remoteTransportCombo), Int32(index))
+        }
+        if let index = RemoteTarget.Authentication.allCases
+            .firstIndex(of: remote.authentication) {
+            gtk_combo_box_set_active(Gtk.comboBox(remoteAuthCombo), Int32(index))
+        }
+        // As with the model key: whether one is stored, never the password.
+        let hasPassword = coordinator.configuredSecrets.contains(.remotePassword)
+        gtk_entry_set_placeholder_text(
+            Gtk.entry(remotePasswordEntry),
+            hasPassword ? "gespeichert — zum Ersetzen neu eingeben" : "keines hinterlegt"
+        )
     }
 
     // MARK: Reading the engine back
@@ -337,6 +480,17 @@ final class AppWindow {
         gtk_widget_set_sensitive(scanButton, (hasSource && !state.busy) ? 1 : 0)
         gtk_widget_set_sensitive(applyButton, (!rowChecks.isEmpty && !state.busy) ? 1 : 0)
         gtk_widget_set_sensitive(undoButton, state.busy ? 0 : 1)
+
+        // Sending needs somewhere to send to and something to send; stopping
+        // needs something to stop. A button that would answer "nothing is
+        // configured" is better off visibly unavailable.
+        gtk_widget_set_sensitive(
+            sendButton,
+            (state.remoteConfigured && !rowChecks.isEmpty && !state.busy) ? 1 : 0)
+        gtk_widget_set_sensitive(cancelSendButton, state.transferring ? 1 : 0)
+        Gtk.setProgress(remoteProgress,
+                        fraction: state.transferProgress,
+                        text: state.transferSummary)
 
         refreshList()
         refreshLog()

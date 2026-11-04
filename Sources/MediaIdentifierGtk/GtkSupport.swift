@@ -59,6 +59,22 @@ enum Gtk {
         UnsafeMutableRawPointer(widget).assumingMemoryBound(to: GtkExpander.self)
     }
 
+    static func progressBar(
+        _ widget: UnsafeMutablePointer<GtkWidget>
+    ) -> UnsafeMutablePointer<GtkProgressBar> {
+        UnsafeMutableRawPointer(widget).assumingMemoryBound(to: GtkProgressBar.self)
+    }
+
+    /// Sets the bar and the words on it in one call, because a bar without a
+    /// number on it only says "something is happening".
+    static func setProgress(_ widget: UnsafeMutablePointer<GtkWidget>,
+                            fraction: Double, text: String) {
+        let bar = progressBar(widget)
+        gtk_progress_bar_set_fraction(bar, min(max(fraction, 0), 1))
+        gtk_progress_bar_set_show_text(bar, 1)
+        gtk_progress_bar_set_text(bar, text)
+    }
+
     /// The text in an entry. GTK owns the buffer, so this copies it and does
     /// not free it — the usual mistake in both directions.
     static func text(of widget: UnsafeMutablePointer<GtkWidget>) -> String {

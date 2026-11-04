@@ -96,6 +96,22 @@ public struct StatusSnapshot: Codable, Sendable, Equatable {
         return max(0, min(100, Int((fraction * 100).rounded())))
     }
 
+    /// One line for the transfer progress bar.
+    ///
+    /// A bar with no words on it only says "something is happening". This
+    /// says which file, how far, and how fast — and when nothing is being
+    /// sent it says that instead of showing a stale last percentage.
+    public var transferSummary: String {
+        guard transferring else {
+            return pendingTransfers > 0 ? "Wartet …" : "Keine Übertragung"
+        }
+        var parts: [String] = []
+        if let file = currentFile { parts.append(file) }
+        parts.append(transferDetail ?? "\(Int((transferProgress * 100).rounded())) %")
+        if pendingTransfers > 0 { parts.append("noch \(pendingTransfers)") }
+        return parts.joined(separator: " · ")
+    }
+
     public static let empty = StatusSnapshot()
 }
 

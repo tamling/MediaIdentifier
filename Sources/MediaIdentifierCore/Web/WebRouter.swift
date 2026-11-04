@@ -207,6 +207,13 @@ public struct WebRouter: Sendable {
         case "/library/apply":
             submit(.applyProposedRenames(accepting: Self.selectedItemIDs(in: request)))
             return redirect(to: "/")
+        case "/library/send":
+            // Only the ticked files, and only because a button was pressed.
+            submit(.transferFiles(accepting: Self.selectedItemIDs(in: request) ?? []))
+            return redirect(to: "/")
+        case "/library/send-cancel":
+            submit(.cancelTransfers)
+            return redirect(to: "/")
         case "/library/undo":
             submit(.undoLastRename)
             return redirect(to: "/")
@@ -380,6 +387,14 @@ public struct WebRouter: Sendable {
             """
         }
 
+        // The same ticked rows, sent somewhere else. `formaction` reuses the
+        // one form rather than duplicating the table into a second one,
+        // which would let the two lists of ticks drift apart.
+        let sendButton = state.remoteConfigured ? """
+        <button type="submit" formaction="/library/send">Send the ticked files to the \
+        server</button>
+        """ : ""
+
         let list = proposals.isEmpty ? """
         <p class="hint">Nothing proposed yet.\(needsSetup ? "" : " Use “Look for new files”.")</p>
         """ : """
@@ -388,8 +403,17 @@ public struct WebRouter: Sendable {
           <input type="hidden" name="\(Self.selectionPresentField)" value="1">
           <table>\(rows)</table>
           <button type="submit">Rename the ticked files</button>
+          \(sendButton)
         </form>
         """
+
+        let transfer = state.transferring ? """
+        <form method="post" action="/library/send-cancel" class="card inline-form">
+          \(csrf.hiddenField)
+          <p>\(Self.escape(state.transferSummary))</p>
+          <button type="submit">Stop sending</button>
+        </form>
+        """ : ""
 
         let counts = "\(state.totalItems) proposed · \(state.done) renamed so far"
 
@@ -417,6 +441,8 @@ public struct WebRouter: Sendable {
             <h2>Proposed renames</h2>
             \(list)
           </div>
+
+          \(transfer)
 
           <div class="card actions">
             <form method="post" action="/library/scan">
@@ -760,6 +786,18 @@ public struct WebRouter: Sendable {
             return "<option value=\"\(choice.rawValue)\"\(selected)>\(Self.escape(choice.label))</option>"
         }.joined()
 
+        let transportOptions = RemoteTarget.Transport.allCases.map { transport in
+            let selected = transport == current.remote.transport ? " selected" : ""
+            return "<option value=\"\(transport.rawValue)\"\(selected)>"
+                + "\(Self.escape(transport.label))</option>"
+        }.joined()
+
+        let authOptions = RemoteTarget.Authentication.allCases.map { auth in
+            let selected = auth == current.remote.authentication ? " selected" : ""
+            return "<option value=\"\(auth.rawValue)\"\(selected)>"
+                + "\(Self.escape(auth.label))</option>"
+        }.joined()
+
         let banner = notice.map { "<p class=\"hint\">\(Self.escape($0))</p>" } ?? ""
         return .html("""
         <!DOCTYPE html>
@@ -807,6 +845,31 @@ public struct WebRouter: Sendable {
             <h2>TMDb</h2>
             <p class="hint">Only the title and year are ever sent — never a file.</p>
             \(secretField(.tmdbAPIKey))
+
+            <h2>The library on another machine</h2>
+            <input type="hidden" name="remoteEnabledPresent" value="1">
+            <label class="inline"><input type="checkbox" name="remoteEnabled" value="1"\
+        \(current.remote.isEnabled ? " checked" : "")> Send the sorted files to a server</label>
+            \(field("remoteHost", label: "Server address", value: current.remote.host,
+                    hint: "A host name or address — no path, no scheme."))
+            \(field("remotePort", label: "Port", value: String(current.remote.port)))
+            \(field("remoteUser", label: "User", value: current.remote.user))
+            \(field("remoteBasePath", label: "Target path on the server",
+                    value: current.remote.basePath,
+                    hint: "Absolute. The sorted folders are created under it."))
+            <label for="remoteTransport">Transfer with</label>
+            <select id="remoteTransport" name="remoteTransport">\(transportOptions)</select>
+            <label for="remoteAuthentication">Sign in with</label>
+            <select id="remoteAuthentication" name="remoteAuthentication">\(authOptions)</select>
+            \(field("remoteIdentityFile", label: "Key file", value: current.remote.identityFile,
+                    hint: "Leave empty to use whatever your ssh configuration already does."))
+            \(secretField(.remotePassword))
+            <input type="hidden" name="remoteRemoveLocalPresent" value="1">
+            <label class="inline"><input type="checkbox" name="remoteRemoveLocal" value="1"\
+        \(current.remote.removeLocalAfterSend ? " checked" : "")> Delete the local file once \
+        the server has it</label>
+            <p class="hint">Off by default. Sending is a copy, which can be undone by deleting \
+        what arrived; deleting the local file cannot.</p>
 
             <button type="submit">Save</button>
           </form>
