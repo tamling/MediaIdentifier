@@ -581,6 +581,12 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
                                    proposedRelativePath: relative))
         }
 
+        // The same detection the video path gets from RenamePlanner. Built
+        // by hand here, these items had no conflict set at all — so two
+        // copies of one album, which resolve to byte-identical paths, were
+        // shown without a warning and then handed to the conflict policy.
+        plan = Self.markingConflicts(in: plan)
+
         lock.lock(); _items = plan; lock.unlock()
         update {
             $0.busy = false
@@ -615,6 +621,33 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
                 return
             }
         }
+        // Two ticked proposals that want the same name would be resolved by
+        // the policy — and under "replace" the first one, already filed, is
+        // moved aside to make room for the second. Which of two rips to
+        // keep is not a decision this code should make, so the pair is
+        // refused and named, exactly as the transfer does.
+        var byDestination: [String: [RenameItem]] = [:]
+        for item in plan {
+            byDestination[item.primaryDestination.standardizedFileURL.path,
+                          default: []].append(item)
+        }
+        let collisions = byDestination.filter { $0.value.count > 1 }
+        var collided = false
+        if !collisions.isEmpty {
+            let names = collisions.values.flatMap { $0 }
+                .map(\.originalFileName).sorted().joined(separator: ", ")
+            let ids = Set(collisions.values.flatMap { $0 }.map(\.id))
+            plan = plan.filter { !ids.contains($0.id) }
+            collided = true
+            update {
+                $0.hasError = true
+                $0.lastResult = "Mehrere Dateien sollen denselben Namen bekommen: "
+                    + names + ". Diese wurden nicht umbenannt — bitte eine davon "
+                    + "abwählen."
+            }
+            guard !plan.isEmpty else { return }
+        }
+
         let policy = settings.conflictPolicy.policy
         update { $0.busy = true; $0.renaming = true; $0.renameProgress = 0; $0.hasError = false }
 
@@ -629,13 +662,39 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
             $0.busy = false
             $0.renaming = false
             $0.renameProgress = 1
-            $0.hasError = outcome.failed > 0
-            $0.lastResult = "Renamed \(outcome.succeeded), skipped \(outcome.skipped)"
+            $0.hasError = outcome.failed > 0 || collided
+            $0.lastResult = (collided
+                ? "Namenskonflikte übersprungen. " : "")
+                + "Renamed \(outcome.succeeded), skipped \(outcome.skipped)"
                 + (outcome.failed > 0 ? ", failed \(outcome.failed)" : "") + "."
         }
         if settings.libraryMode == .music { writeAlbumCovers(for: plan) }
         refreshSnapshotCounts()
         refreshJellyfinLibrary()
+    }
+
+    /// Flags items that would land on top of each other, or on a file that
+    /// is already there.
+    ///
+    /// Pure, so the rule is testable. The video path gets this from
+    /// `RenamePlanner.detectConflicts`; music items are built by hand and
+    /// were getting nothing.
+    static func markingConflicts(in plan: [RenameItem],
+                                 fileManager: FileManager = .default) -> [RenameItem] {
+        var counts: [String: Int] = [:]
+        for item in plan {
+            counts[item.primaryDestination.standardizedFileURL.path, default: 0] += 1
+        }
+        return plan.map { item in
+            var flagged = item
+            let path = item.primaryDestination.standardizedFileURL.path
+            if counts[path, default: 0] > 1 {
+                flagged.conflict = .duplicateInBatch
+            } else if fileManager.fileExists(atPath: path) {
+                flagged.conflict = .existingFile
+            }
+            return flagged
+        }
     }
 
     /// Writes each album's cover next to its tracks, once.

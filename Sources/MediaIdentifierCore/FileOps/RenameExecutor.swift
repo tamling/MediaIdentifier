@@ -204,8 +204,9 @@ public final class RenameExecutor {
         case .skip, .ask:
             return nil
         case .replace:
-            // Move the existing file to the Trash instead of deleting it, and
-            // record it so the operation stays reversible (no silent data loss).
+            // Aside rather than deleted, and journalled, so undo can put it
+            // back. On Linux "aside" is a hidden folder beside the library;
+            // see trashExisting.
             let backup = try trashExisting(at: move.destination)
             return Resolution(destination: move.destination, backup: backup)
         case .rename:
@@ -213,9 +214,21 @@ public final class RenameExecutor {
         }
     }
 
-    /// Sends `url` to the Trash and returns a journal move (original location →
-    /// trashed location) so undo can put it back. Falls back to a hard delete on
-    /// platforms without a Trash (e.g. Linux CI).
+    /// Where a replaced file waits on a system with no desktop Trash.
+    public static let trashFolderName = ".mediafin-trash"
+
+    /// Puts `url` out of the way and returns a journal move, so undo can put
+    /// it back.
+    ///
+    /// On Linux this used to be `removeItem`: a hard delete, returning nil,
+    /// so nothing was journalled and undo could not restore it — while the
+    /// setting's own label promised "the old file goes to the trash" and the
+    /// comment here claimed "no silent data loss". Both were false on the
+    /// platform this ships to.
+    ///
+    /// The file now moves into a hidden folder beside the library, which is
+    /// on the same filesystem (so it is a rename, not a copy) and is skipped
+    /// by every scanner. Deleting that folder is the user's to do.
     private func trashExisting(at url: URL) throws -> RenameTransaction.Move? {
         #if os(macOS)
         var resulting: NSURL?
@@ -225,8 +238,17 @@ public final class RenameExecutor {
         }
         return nil
         #else
-        try fileManager.removeItem(at: url)
-        return nil
+        let folder = url.deletingLastPathComponent()
+            .appendingPathComponent(Self.trashFolderName)
+        try fileManager.createDirectory(at: folder, withIntermediateDirectories: true)
+        // A unique name, so replacing the same title twice does not have the
+        // second replacement destroy the first one's backup.
+        let stem = url.deletingPathExtension().lastPathComponent
+        let suffix = url.pathExtension.isEmpty ? "" : "." + url.pathExtension
+        let aside = folder.appendingPathComponent(
+            "\(stem)-\(UUID().uuidString.prefix(8))\(suffix)")
+        try fileManager.moveItem(at: url, to: aside)
+        return RenameTransaction.Move(from: url, to: aside)
         #endif
     }
 

@@ -202,6 +202,39 @@ final class MusicTaggingTests: XCTestCase {
             "C/B (2001)/cover.jpg")
     }
 
+    // MARK: Two files that want one name
+
+    private func item(_ name: String, to relative: String) -> RenameItem {
+        let url = URL(fileURLWithPath: "/downloads/" + name)
+        let parsed = ParsedRelease(originalFileName: name, title: name, kind: .unknown)
+        return RenameItem(mediaFile: MediaFile(url: url, parsed: parsed),
+                          outputRoot: URL(fileURLWithPath: "/music", isDirectory: true),
+                          proposedRelativePath: relative)
+    }
+
+    /// The same album downloaded twice resolves to byte-identical paths,
+    /// because the name is a pure function of the tags. Music items were
+    /// built by hand and got no conflict at all, so the preview showed
+    /// nothing and the pair went to the conflict policy — which, under
+    /// "replace", moves the first one aside to make room for the second.
+    func testTwoTracksWantingOnePathAreFlagged() {
+        let flagged = AppCoordinator.markingConflicts(in: [
+            item("a-16bit.flac", to: "AC-DC/Back in Black/01 - Hells Bells.flac"),
+            item("a-24bit.flac", to: "AC-DC/Back in Black/01 - Hells Bells.flac"),
+            item("b.flac", to: "AC-DC/Back in Black/02 - Shoot to Thrill.flac"),
+        ])
+        XCTAssertEqual(flagged[0].conflict, .duplicateInBatch)
+        XCTAssertEqual(flagged[1].conflict, .duplicateInBatch)
+        XCTAssertNil(flagged[2].conflict, "a track that collides with nothing was flagged")
+    }
+
+    func testAPathThatIsFreeIsNotFlagged() {
+        let flagged = AppCoordinator.markingConflicts(in: [
+            item("a.flac", to: "Artist/Album/01 - A.flac"),
+        ])
+        XCTAssertNil(flagged[0].conflict)
+    }
+
     // MARK: Which files are claimed
 
     func testTheUsualMusicFormatsAreRecognised() {
