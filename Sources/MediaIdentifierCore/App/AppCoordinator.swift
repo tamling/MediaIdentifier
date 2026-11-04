@@ -220,6 +220,8 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         case .cancelConversions:
             // Handled in `submit`, off the queue.
             break
+        case .setAllAccepted(let accepted):
+            setAllAccepted(accepted)
         case .transferFiles(let accepting):
             transferFiles(accepting: accepting)
         case .cancelTransfers:
@@ -465,6 +467,19 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
                         + " Jellyfin could not be told to rescan: " + Self.reason(for: error)
                 }
             }
+        }
+    }
+
+    /// Ticks or unticks every proposal at once.
+    private func setAllAccepted(_ accepted: Bool) {
+        lock.lock()
+        for index in _items.indices { _items[index].isAccepted = accepted }
+        let count = _items.count
+        lock.unlock()
+        update {
+            $0.lastResult = count == 0
+                ? "Es gibt nichts zum Anhaken."
+                : (accepted ? "Alle \(count) angehakt." : "Alle abgehakt.")
         }
     }
 

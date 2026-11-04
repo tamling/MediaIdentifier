@@ -69,6 +69,7 @@ public struct WebRouter: Sendable {
         "/settings/test-llm", "/settings/test-jellyfin",
         "/library/scan", "/library/apply", "/library/undo",
         "/library/send", "/library/send-cancel",
+        "/library/select-all", "/library/select-none",
         "/convert/scan", "/convert/start", "/convert/cancel",
         "/system/check",
         "/history/clear",
@@ -211,6 +212,12 @@ public struct WebRouter: Sendable {
             return redirect(to: "/")
         case "/library/apply":
             submit(.applyProposedRenames(accepting: Self.selectedItemIDs(in: request)))
+            return redirect(to: "/")
+        case "/library/select-all":
+            submit(.setAllAccepted(true))
+            return redirect(to: "/")
+        case "/library/select-none":
+            submit(.setAllAccepted(false))
             return redirect(to: "/")
         case "/library/send":
             // Only the ticked files, and only because a button was pressed.
@@ -386,7 +393,7 @@ public struct WebRouter: Sendable {
             rows += """
             <tr>
               <td class="tick"><input type="checkbox" name="\(Self.selectionField)" \
-            value="\(item.id.uuidString)" checked></td>
+            value="\(item.id.uuidString)"\(item.isAccepted ? " checked" : "")></td>
               <td>
                 <div class="from">\(Self.escape(item.originalFileName))</div>
                 <div class="to">→ \(Self.escape(item.proposedRelativePath)) \(conflict)</div>
@@ -413,14 +420,28 @@ public struct WebRouter: Sendable {
           <button type="submit">Rename the ticked files</button>
           \(sendButton)
         </form>
+        <form method="post" action="/library/select-all" class="inline-form">
+          \(csrf.hiddenField)<button type="submit" class="link">Tick all</button>
+        </form>
+        <form method="post" action="/library/select-none" class="inline-form">
+          \(csrf.hiddenField)<button type="submit" class="link">Tick none</button>
+        </form>
         """
 
+        // A bar as well as the sentence. <progress> is plain HTML, so it
+        // works under a policy that forbids scripts outright. sftp reports
+        // nothing, so the bar then tracks whole files rather than bytes —
+        // which is what transferSummary says in words.
         let transfer = state.transferring ? """
-        <form method="post" action="/library/send-cancel" class="card inline-form">
-          \(csrf.hiddenField)
-          <p>\(Self.escape(state.transferSummary))</p>
-          <button type="submit">Stop sending</button>
-        </form>
+        <div class="card">
+          <h2>Sending to the server</h2>
+          <progress max="100" value="\(state.activePercent)"></progress>
+          <p class="sub">\(Self.escape(state.transferSummary))</p>
+          <form method="post" action="/library/send-cancel">
+            \(csrf.hiddenField)
+            <button type="submit">Stop sending</button>
+          </form>
+        </div>
         """ : ""
 
         let counts = "\(state.totalItems) proposed · \(state.done) renamed so far"
@@ -439,17 +460,23 @@ public struct WebRouter: Sendable {
             </tr>
             """
         }.joined()
+        // <details> rather than a permanently open card, so seven rows of
+        // detail do not push the proposals off the screen — the same reason
+        // the window puts it behind an expander. Open when something is
+        // wrong, because then it is the thing to read.
+        let worst = SystemChecks.worst(checks)
         let panel = checks.isEmpty ? "" : """
-        <div class="card">
-          <h2>Status</h2>
-          <p class="sub">\(Self.escape(SystemChecks.summary(checks)))</p>
+        <details class="card"\(worst == .failed ? " open" : "")>
+          <summary><strong>Status</strong> — \(Self.escape(SystemChecks.summary(checks)))</summary>
           <table>\(lamps)</table>
           <form method="post" action="/system/check">
             \(csrf.hiddenField)
             <button type="submit">Check everything</button>
           </form>
-        </div>
+        </details>
         """
+
+        let logAside = Self.logAside(logEntries())
 
         return .html("""
         <!DOCTYPE html>
@@ -461,38 +488,45 @@ public struct WebRouter: Sendable {
         \(Self.styles)
         </head>
         <body>
-        <div class="page">
+        <div class="page wide">
           \(Self.navigation(current: "/"))
-          <div class="card">
-            <h1>Mediafin</h1>
-            <span class="badge \(stateClass)">\(Self.escape(stateLabel))</span>
-            <p class="sub">\(Self.escape(counts))</p>
-            \(result)
-            \(setupHint)
-          </div>
+          <div class="split">
+            <div class="work">
+              <div class="card">
+                <h1>Mediafin</h1>
+                <span class="badge \(stateClass)">\(Self.escape(stateLabel))</span>
+                <p class="sub">\(Self.escape(counts))</p>
+                \(result)
+                \(setupHint)
+              </div>
 
-          \(panel)
+              \(panel)
 
-          <div class="card">
-            <h2>Proposed renames</h2>
-            \(list)
-          </div>
+              <div class="card">
+                <h2>Proposed renames</h2>
+                \(list)
+              </div>
 
-          \(transfer)
+              \(transfer)
 
-          <div class="card actions">
-            <form method="post" action="/library/scan">
-              \(csrf.hiddenField)
-              <button type="submit"\(needsSetup ? " disabled" : "")>Look for new files</button>
-            </form>
-            <form method="post" action="/library/undo">
-              \(csrf.hiddenField)
-              <button type="submit"\(state.done == 0 ? " disabled" : "")>Undo the last run</button>
-            </form>
-            <form method="post" action="/history/clear">
-              \(csrf.hiddenField)
-              <button type="submit"\(state.done == 0 ? " disabled" : "")>Clear the history</button>
-            </form>
+              <div class="card actions">
+                <form method="post" action="/library/scan">
+                  \(csrf.hiddenField)
+                  <button type="submit"\(needsSetup ? " disabled" : "")>Look for new files</button>
+                </form>
+                <form method="post" action="/library/undo">
+                  \(csrf.hiddenField)
+                  <button type="submit"\(state.done == 0 ? " disabled" : "")>Undo the last run</button>
+                </form>
+                <form method="post" action="/history/clear">
+                  \(csrf.hiddenField)
+                  <button type="submit"\(state.done == 0 ? " disabled" : "")>Clear the history</button>
+                </form>
+              </div>
+
+              <p class="footer">Mediafin \(Self.escape(MediafinVersion.display))</p>
+            </div>
+            \(logAside)
           </div>
         </div>
         </body></html>
@@ -934,6 +968,62 @@ public struct WebRouter: Sendable {
     }
 
     /// Links shared by the pages.
+    /// How many log entries the column beside the work shows.
+    ///
+    /// The same number the window keeps. Enough that a whole run is still
+    /// there, few enough that the page stays a page.
+    static let visibleLogEntries = 200
+
+    /// The log, always beside the work rather than on a page of its own.
+    ///
+    /// A rename that failed is the thing you most need to see, and a panel
+    /// you have to navigate to is a panel you look at after wondering for a
+    /// while why nothing happened. Newest first, because the question is
+    /// almost always "what just happened" and a column that grows downwards
+    /// puts that answer off the bottom of the screen.
+    static func logAside(_ entries: [RenameLogEntry]) -> String {
+        let recent = entries.reversed().prefix(visibleLogEntries)
+        let rows = recent.map { entry -> String in
+            let word: String
+            let cssClass: String
+            switch entry.status {
+            case .success: word = "renamed"; cssClass = "lamp-ok"
+            case .converted: word = "converted"; cssClass = "lamp-ok"
+            case .sent: word = "sent"; cssClass = "lamp-ok"
+            case .skipped: word = "skipped"; cssClass = "lamp-off"
+            case .failure: word = "failed"; cssClass = "lamp-failed"
+            }
+            // The error is the reason this column exists, so it is not
+            // truncated and not hidden behind anything.
+            let error = entry.errorDescription.map {
+                "<div class=\"log-error\">\(Self.escape($0))</div>"
+            } ?? ""
+            return """
+            <li>
+              <span class="\(cssClass)">\(word)</span>
+              <div class="log-name">\(Self.escape(entry.oldName))</div>
+              <div class="log-to">→ \(Self.escape(entry.newName))</div>
+              \(error)
+            </li>
+            """
+        }.joined()
+
+        let more = entries.count > visibleLogEntries
+            ? "<p class=\"hint\">\(entries.count - visibleLogEntries) older entries are on "
+                + "the <a href=\"/history\">history page</a>.</p>"
+            : ""
+
+        return """
+        <aside class="logside">
+          <h2>History</h2>
+          <p class="sub">\(entries.count) \(entries.count == 1 ? "entry" : "entries")</p>
+          \(entries.isEmpty
+            ? "<p class=\"hint\">Nothing has happened yet.</p>"
+            : "<ul class=\"log\">\(rows)</ul>\(more)")
+        </aside>
+        """
+    }
+
     static func navigation(current: String) -> String {
         let items = [("/", "Overview"), ("/convert", "Convert"),
                      ("/history", "History"), ("/settings", "Settings")]
@@ -1011,6 +1101,31 @@ public struct WebRouter: Sendable {
       .lamp-warning { color:#f0a020; }
       .lamp-failed { color:#e05a4f; }
       .lamp-off { color:#55555f; }
+
+      /* Work on the left, log on the right — the window's layout, so the
+         two interfaces are the same shape. Below 900px the aside drops
+         underneath instead of squeezing the work into a gutter. */
+      .page.wide { max-width:1180px; }
+      .split { display:flex; gap:20px; align-items:flex-start; }
+      .work { flex:1 1 auto; min-width:0; }
+      .logside { flex:0 0 320px; background:#1e1e24; border:1px solid #2a2a32;
+                 border-radius:16px; padding:18px 20px; box-sizing:border-box;
+                 max-height:80vh; overflow-y:auto; }
+      .logside h2 { margin-top:0; }
+      @media (max-width: 900px) {
+        .split { display:block; }
+        .logside { width:100%; margin-top:16px; max-height:none; }
+      }
+      ul.log { list-style:none; margin:0; padding:0; }
+      ul.log li { padding:8px 0; border-top:1px solid #26262e; font-size:12px; }
+      ul.log li:first-child { border-top:0; }
+      .log-name { color:#8a8a92; word-break:break-all; }
+      .log-to { color:#e6e6ea; word-break:break-all; }
+      .log-error { color:#e05a4f; margin-top:4px; }
+      .footer { color:#55555f; font-size:12px; text-align:right; margin:4px 2px 0; }
+      details.card > summary { cursor:pointer; list-style:revert; }
+      details.card > summary strong { color:#e6e6ea; }
+      progress { width:100%; height:10px; }
     </style>
     """
 

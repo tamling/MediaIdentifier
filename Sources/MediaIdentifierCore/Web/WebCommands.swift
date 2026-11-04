@@ -25,6 +25,12 @@ public enum WebCommand: Sendable, Equatable {
     case cancelConversions
     /// Sends the files the user ticked to the remote library, sorted into the
     /// proposed folders. Never started on its own.
+    /// Ticks or unticks every proposal.
+    ///
+    /// Server-side because the web interface forbids JavaScript outright in
+    /// its own Content-Security-Policy, so "select all" cannot be a script.
+    /// Keeping the state in the engine also means a reload does not lose it.
+    case setAllAccepted(Bool)
     case transferFiles(accepting: Set<UUID>)
     case cancelTransfers
     /// Logs in to the server and checks the target path, for the status panel.
