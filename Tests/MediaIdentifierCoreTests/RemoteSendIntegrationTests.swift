@@ -175,10 +175,15 @@ final class RemoteSendIntegrationTests: XCTestCase {
         // skipped itself every run while reporting nothing.
         let path = source.path + "/" + name
         let marker = "/tmp/mediafin-pwned-\(UUID().uuidString)"
-        try XCTSkipUnless(
-            FileManager.default.createFile(
-                atPath: path, contents: Data(repeating: 0x41, count: 1_000)),
-            "this filesystem will not store a newline in a name")
+        // NOT XCTSkipUnless. Under swift-corelibs-xctest it skips when the
+        // expression is TRUE — "required false value but got true" — which
+        // is the opposite of Apple's XCTest, and is why this test silently
+        // skipped itself on three consecutive runs while reporting nothing
+        // wrong. A plain throw cannot be read two ways.
+        if !FileManager.default.createFile(
+            atPath: path, contents: Data(repeating: 0x41, count: 1_000)) {
+            throw XCTSkip("this filesystem will not store a newline in a name")
+        }
 
         // The injected command writes the marker if the batch script runs it.
         let injected = "Dark.S01E05\n!touch \(marker)\n.1080p.mkv"
