@@ -1,4 +1,9 @@
 import XCTest
+#if canImport(Glibc)
+import Glibc
+#else
+import Darwin
+#endif
 @testable import MediaIdentifierCore
 
 /// The send, end to end, through the coordinator and onto a real server.
@@ -175,21 +180,24 @@ final class RemoteSendIntegrationTests: XCTestCase {
         // skipped itself every run while reporting nothing.
         let path = source.path + "/" + name
         let marker = "/tmp/mediafin-pwned-\(UUID().uuidString)"
-        // NOT XCTSkipUnless. Under swift-corelibs-xctest it skips when the
-        // expression is TRUE — "required false value but got true" — which
-        // is the opposite of Apple's XCTest, and is why this test silently
-        // skipped itself on three consecutive runs while reporting nothing
-        // wrong. A plain throw cannot be read two ways.
-        if !FileManager.default.createFile(
-            atPath: path, contents: Data(repeating: 0x41, count: 1_000)) {
-            throw XCTSkip("this filesystem will not store a newline in a name")
+        // Created through POSIX, not Foundation. FileManager.createFile
+        // returns false for a path containing a newline on this platform —
+        // it is URL-based underneath — which is why the fixture could not
+        // be built and the test skipped itself for a fourth run. A
+        // download client writes such a file with open(2) and does not
+        // care what Foundation thinks of the name.
+        //
+        // (Not XCTSkipUnless either: under swift-corelibs-xctest that skips
+        // when the expression is TRUE, the opposite of Apple's XCTest.)
+        guard Self.createRaw(path) else {
+            throw XCTSkip("could not create a file with a newline in its name: "
+                + "errno \(errno)")
         }
 
         // The injected command writes the marker if the batch script runs it.
         let injected = "Dark.S01E05\n!touch \(marker)\n.1080p.mkv"
         let injectedPath = source.path + "/" + injected
-        _ = FileManager.default.createFile(
-            atPath: injectedPath, contents: Data(repeating: 0x41, count: 1_000))
+        _ = Self.createRaw(injectedPath)
 
         scanAndSend()
 
@@ -197,6 +205,17 @@ final class RemoteSendIntegrationTests: XCTestCase {
                        "a filename ran a command on this machine")
         XCTAssertTrue(FileManager.default.fileExists(atPath: path),
                       "a file that was refused was deleted anyway")
+    }
+
+    /// Writes a small file at a path Foundation will not touch.
+    private static func createRaw(_ path: String) -> Bool {
+        return path.withCString { cPath -> Bool in
+            let fd = open(cPath, O_CREAT | O_WRONLY | O_TRUNC, 0o644)
+            guard fd >= 0 else { return false }
+            defer { close(fd) }
+            var bytes = [UInt8](repeating: 0x41, count: 1_000)
+            return write(fd, &bytes, bytes.count) == bytes.count
+        }
     }
 
     // MARK: Stopping
