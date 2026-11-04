@@ -260,7 +260,7 @@ public enum RemoteCommand {
         _ = try rejectingControlCharacters(destination, what: "Der Zielpfad")
         let directory = (destination as NSString).deletingLastPathComponent
 
-        var script = """
+        var script = ""
         for level in parentDirectories(of: directory) {
             script += "-mkdir \(quote(level))\n"
         }
