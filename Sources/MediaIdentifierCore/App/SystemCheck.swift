@@ -96,10 +96,10 @@ public enum SystemChecks {
         // the library lives, so demanding them would be a red lamp for a
         // setup that is working exactly as the user set it up.
         if settings.remote.isEnabled {
-            checks.append(SystemCheck(
-                id: "library", name: "Bibliothek", state: .ok,
-                detail: "Liegt auf dem Server \(settings.remote.host.isEmpty
-                    ? "(Adresse fehlt)" : settings.remote.host)."))
+            let where_ = settings.remote.host.isEmpty
+                ? "(Adresse fehlt)" : settings.remote.host
+            checks.append(SystemCheck(id: "library", name: "Bibliothek", state: .ok,
+                                      detail: "Liegt auf dem Server \(where_)."))
         } else {
             checks.append(folder(id: "movies", name: "Filme", path: settings.moviesFolder,
                                  missingDetail: "Kein Ordner gewählt — Filme werden dort "
