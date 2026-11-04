@@ -142,29 +142,26 @@ public struct Schedule: Codable, Sendable, Equatable {
     ///
     /// Shared by both front-ends so they cannot drift apart, and given its
     /// `now` and calendar so "heute" can be tested rather than only seen.
-    /// Deliberately not `DateFormatter.dateStyle`: on a server with no
-    /// locale set that produces American month-first dates in a German
-    /// interface.
+    ///
+    /// `DateComponents` and `String(format:)` rather than a `DateFormatter`,
+    /// for two reasons. A formatter's `dateStyle` on a server with no locale
+    /// set produces American month-first dates in a German interface. And a
+    /// formatter is expensive to build and unsafe to share: the GTK window
+    /// calls this twice a second on the main thread while the web server
+    /// calls it from its own, so a cached one would be a data race and an
+    /// uncached one four allocations a second. A `Calendar` is a value, so
+    /// neither applies.
     public static func describe(_ moment: Date,
                                 now: Date = Date(),
                                 calendar: Calendar = .current) -> String {
-        let clock = DateFormatter()
-        clock.calendar = calendar
-        clock.timeZone = calendar.timeZone
-        clock.locale = Locale(identifier: "de_DE")
-        clock.dateFormat = "HH:mm"
-        let time = clock.string(from: moment)
+        let parts = calendar.dateComponents([.month, .day, .hour, .minute], from: moment)
+        let time = String(format: "%02d:%02d", parts.hour ?? 0, parts.minute ?? 0)
 
         if calendar.isDate(moment, inSameDayAs: now) { return "heute \(time)" }
         if let tomorrow = calendar.date(byAdding: .day, value: 1, to: now),
            calendar.isDate(moment, inSameDayAs: tomorrow) { return "morgen \(time)" }
 
-        let day = DateFormatter()
-        day.calendar = calendar
-        day.timeZone = calendar.timeZone
-        day.locale = Locale(identifier: "de_DE")
-        day.dateFormat = "dd.MM."
-        return "\(day.string(from: moment)) \(time)"
+        return String(format: "%02d.%02d. ", parts.day ?? 0, parts.month ?? 0) + time
     }
 
     // MARK: When next

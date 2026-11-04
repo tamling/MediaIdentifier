@@ -120,6 +120,33 @@ files, review each proposed name, tick the ones you want, rename, undo).
 `/healthz` answers without a token for uptime monitors — `200` idle, `503`
 while running, `500` after a run with failures — and reveals nothing but that.
 
+### Running by itself
+
+The schedule in the settings runs either daily at a fixed time or every few
+hours, and may scan, rename and send — each asked for separately, all three
+off by default. A run that only scans leaves a list for you to look at,
+which is what most people mean by "check overnight".
+
+Two things it deliberately does and does not do:
+
+- **It survives a restart.** The last run is recorded in
+  `schedule-state.json` beside the settings, so a machine that was off at
+  03:00 does the missed run when it comes back rather than skipping the
+  night — or, worse, running the moment it boots every time.
+- **It does not catch up.** Three days asleep produces one run, not three.
+- **It refuses to rename without a library folder.** Without one the
+  proposal is a folder beside the file itself, so each run would bury it a
+  level deeper. Looking at the proposal would show you that; nobody is
+  looking at this one.
+
+The traffic light carries a lamp for it, and the settings page says when the
+next run is due — a schedule that is switched on but not running says so
+there, in red.
+
+Two Mediafins sharing a configuration directory — the window and `mediafin`
+in a terminal — will not both do the same run; the second one waits for the
+next.
+
 ## Building
 
 The repository is a Swift Package plus an XcodeGen spec.
