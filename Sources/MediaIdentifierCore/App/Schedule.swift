@@ -138,6 +138,35 @@ public struct Schedule: Codable, Sendable, Equatable {
         return "\(when.prefix(1).uppercased())\(when.dropFirst()): \(what)."
     }
 
+    /// A moment, written the way a person reads a clock.
+    ///
+    /// Shared by both front-ends so they cannot drift apart, and given its
+    /// `now` and calendar so "heute" can be tested rather than only seen.
+    /// Deliberately not `DateFormatter.dateStyle`: on a server with no
+    /// locale set that produces American month-first dates in a German
+    /// interface.
+    public static func describe(_ moment: Date,
+                                now: Date = Date(),
+                                calendar: Calendar = .current) -> String {
+        let clock = DateFormatter()
+        clock.calendar = calendar
+        clock.timeZone = calendar.timeZone
+        clock.locale = Locale(identifier: "de_DE")
+        clock.dateFormat = "HH:mm"
+        let time = clock.string(from: moment)
+
+        if calendar.isDate(moment, inSameDayAs: now) { return "heute \(time)" }
+        if let tomorrow = calendar.date(byAdding: .day, value: 1, to: now),
+           calendar.isDate(moment, inSameDayAs: tomorrow) { return "morgen \(time)" }
+
+        let day = DateFormatter()
+        day.calendar = calendar
+        day.timeZone = calendar.timeZone
+        day.locale = Locale(identifier: "de_DE")
+        day.dateFormat = "dd.MM."
+        return "\(day.string(from: moment)) \(time)"
+    }
+
     // MARK: When next
 
     /// The next moment this should run, strictly after `after`.
@@ -182,5 +211,27 @@ public struct Schedule: Codable, Sendable, Equatable {
         guard let lastRun else { return false }
         guard let next = nextRun(after: lastRun, calendar: calendar) else { return false }
         return moment >= next
+    }
+}
+
+/// The two lines the interface shows about the schedule: what was asked for,
+/// and what will actually happen.
+///
+/// In Core and not in either front-end, because both show it and they must
+/// not drift apart — and because the interesting case, a schedule that is
+/// set but is not running, is worth a test of its own rather than something
+/// only visible by looking at a window.
+public enum ScheduleLine {
+    public static func describe(_ schedule: Schedule, _ state: StatusSnapshot) -> String {
+        guard schedule.isEnabled else { return schedule.summary }
+        guard let next = state.nextScheduledRun else {
+            return schedule.summary
+                + "\nL\u{00E4}uft gerade nicht \u{2014} \u{201A}Speichern\u{2018} schaltet ihn wieder scharf."
+        }
+        var line = schedule.summary + "\nN\u{00E4}chster Lauf: " + Schedule.describe(next) + "."
+        if let last = state.lastScheduledRun {
+            line += " Zuletzt: " + Schedule.describe(last) + "."
+        }
+        return line
     }
 }

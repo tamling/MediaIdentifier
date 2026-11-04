@@ -137,4 +137,65 @@ final class PlannerExecutorTests: XCTestCase {
         XCTAssertFalse(fm.fileExists(atPath: source.path))
         XCTAssertTrue(fm.fileExists(atPath: destDir.appendingPathComponent("Interstellar (2014) (1).mkv").path))
     }
+
+    // MARK: Where the files actually went
+
+    /// The counts cannot answer "which files are now in the library", and a
+    /// caller that goes on to send them, or to write a cover beside them,
+    /// has to know. Working it out from the plan instead is what made a
+    /// scheduled run send exactly the files whose rename had failed.
+    func testTheOutcomeSaysWhereEachItemLanded() throws {
+        let source = try touch("Arrival.2016.1080p.mkv")
+        let files = MediaScanner().scan(urls: [source])
+        let plan = RenamePlanner().makePlan(for: files, outputRoot: tempDir)
+        let log = RenameLog(url: tempDir.appendingPathComponent("log.json"))
+        let journal = RenameJournal(url: tempDir.appendingPathComponent("journal.json"))
+
+        let outcome = RenameExecutor(log: log, journal: journal)
+            .execute(plan: plan, policy: .rename)
+        let landed = outcome.landed[plan[0].id]
+        XCTAssertNotNil(landed)
+        XCTAssertTrue(fm.fileExists(atPath: landed!.path), landed!.path)
+    }
+
+    /// Under the rename policy the file is not where the plan said: it is
+    /// "… (1).mkv". The outcome must give the resolved name, or whatever is
+    /// sent next is the file that was already there.
+    func testLandedGivesTheResolvedNameNotThePlannedOne() throws {
+        let source = try touch("Dune.2021.1080p.mkv")
+        let destDir = tempDir.appendingPathComponent("Dune (2021)")
+        try fm.createDirectory(at: destDir, withIntermediateDirectories: true)
+        try Data("older rip".utf8).write(
+            to: destDir.appendingPathComponent("Dune (2021).mkv"))
+
+        let files = MediaScanner().scan(urls: [source])
+        let plan = RenamePlanner().makePlan(for: files, outputRoot: tempDir)
+        let log = RenameLog(url: tempDir.appendingPathComponent("log.json"))
+        let journal = RenameJournal(url: tempDir.appendingPathComponent("journal.json"))
+
+        let outcome = RenameExecutor(log: log, journal: journal)
+            .execute(plan: plan, policy: .rename)
+        XCTAssertEqual(outcome.landed[plan[0].id]?.lastPathComponent,
+                       "Dune (2021) (1).mkv")
+    }
+
+    /// A skipped item is still where it was, so it must not be reported as
+    /// having landed: a caller that then deletes "the local copy" would
+    /// destroy the only copy.
+    func testASkippedItemDidNotLand() throws {
+        let source = try touch("Tenet.2020.1080p.mkv")
+        let destDir = tempDir.appendingPathComponent("Tenet (2020)")
+        try fm.createDirectory(at: destDir, withIntermediateDirectories: true)
+        try Data("y".utf8).write(to: destDir.appendingPathComponent("Tenet (2020).mkv"))
+
+        let files = MediaScanner().scan(urls: [source])
+        let plan = RenamePlanner().makePlan(for: files, outputRoot: tempDir)
+        let log = RenameLog(url: tempDir.appendingPathComponent("log.json"))
+        let journal = RenameJournal(url: tempDir.appendingPathComponent("journal.json"))
+
+        let outcome = RenameExecutor(log: log, journal: journal)
+            .execute(plan: plan, policy: .skip)
+        XCTAssertEqual(outcome.skipped, 1)
+        XCTAssertNil(outcome.landed[plan[0].id])
+    }
 }

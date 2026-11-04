@@ -71,9 +71,13 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
     private var watchTimer: DispatchSourceTimer?
     private var scheduleTimer: DispatchSourceTimer?
     /// When the last unattended run happened. Nil until one has.
+    ///
+    /// Mirrored to disk by `scheduleState`, because the question it answers
+    /// — has tonight's run happened? — outlives the process.
     private var _lastScheduledRun: Date?
 
     private let settingsStore: SettingsStore
+    private let scheduleState: ScheduleStateStore
     private let secretStore: SecretStore
     private let log: RenameLog
     private let journal: RenameJournal
@@ -126,6 +130,7 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
     public init(configDirectory: URL, watchInterval: TimeInterval = 15) {
         self.watchInterval = max(1, watchInterval)
         settingsStore = SettingsStore(directory: configDirectory)
+        scheduleState = ScheduleStateStore(directory: configDirectory)
         secretStore = SecretStore(directory: configDirectory)
         log = RenameLog(url: configDirectory.appendingPathComponent("rename-log.json"))
         journal = RenameJournal(url: configDirectory.appendingPathComponent("undo-journal.json"))
@@ -148,11 +153,21 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         }
         refreshSnapshotCounts()
         // Not on the queue yet, so hand it over rather than touching the timer.
-        queue.async { [weak self] in self?.updateWatchState() }
+        //
+        // The schedule is armed here as well, which it used to not be: it was
+        // only ever started from `save`, so it ran in the session where the
+        // user pressed Apply and never again. On a media server that is
+        // exactly the opposite of the point — the machine restarts, and the
+        // nightly run stops happening without a word.
+        queue.async { [weak self] in
+            self?.updateWatchState()
+            self?.updateScheduleState(.startup)
+        }
     }
 
     deinit {
         watchTimer?.cancel()
+        scheduleTimer?.cancel()
     }
 
     // MARK: State the interface reads
@@ -349,7 +364,10 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
             lock.unlock()
             update { $0.lastResult = "Settings saved." }
             updateWatchState()
-            updateScheduleState()
+            // Only a changed schedule resets the clock. Saving an unrelated
+            // setting at 02:59 must not push tonight's 03:00 run to tomorrow.
+            updateScheduleState(settings.schedule == previous.schedule
+                                ? .settingsSaved : .scheduleChanged)
             // So the interface stops offering a "send to the server" button
             // the moment the server is switched off, rather than at the next
             // scan.
@@ -460,24 +478,37 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
 
     // MARK: Scanning and renaming
 
-    private func scanSourceFolder() {
+    /// Scans the import folder and replaces the plan.
+    ///
+    /// - Returns: true when this call produced a plan of its own — including
+    ///   an empty one, when the folder holds nothing. False means it could
+    ///   not run, and that whatever `items` holds is from an earlier scan.
+    ///   The unattended run needs that distinction: acting on a stale plan
+    ///   means renaming and sending a list nobody has looked at.
+    @discardableResult
+    private func scanSourceFolder() -> Bool {
         let settings = self.settings
         let source = settings.sourceFolder
         guard !source.isEmpty else {
-            update { $0.lastResult = "Set the import folder in the settings first." }
-            return
+            update {
+                $0.hasError = true
+                $0.lastResult = "Set the import folder in the settings first."
+            }
+            return false
         }
         let root = URL(fileURLWithPath: source, isDirectory: true)
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: root.path, isDirectory: &isDirectory),
               isDirectory.boolValue else {
-            update { $0.lastResult = "The import folder does not exist: \(source)" }
-            return
+            update {
+                $0.hasError = true
+                $0.lastResult = "The import folder does not exist: \(source)"
+            }
+            return false
         }
 
         if settings.libraryMode == .music {
-            scanForMusic(under: root, settings: settings)
-            return
+            return scanForMusic(under: root, settings: settings)
         }
 
         update { $0.busy = true; $0.convertStatus = "Looking for media…" }
@@ -487,10 +518,11 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
             update {
                 $0.busy = false
                 $0.convertStatus = nil
+                $0.hasError = false
                 $0.lastResult = "No video files found in \(source)."
             }
             refreshSnapshotCounts()
-            return
+            return true
         }
 
         var mediaFiles = scanner.scan(urls: urls)
@@ -528,9 +560,11 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         update {
             $0.busy = false
             $0.convertStatus = nil
+            $0.hasError = false
             $0.lastResult = "\(plan.count) file\(plan.count == 1 ? "" : "s") ready to rename."
         }
         refreshSnapshotCounts()
+        return true
     }
 
     /// Proposes a place for every music file, from its own tags.
@@ -539,7 +573,8 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
     /// album and a title gets no proposal at all: filing it somewhere
     /// plausible puts it where the user will not think to look, which is
     /// worse than leaving it where they put it.
-    private func scanForMusic(under root: URL, settings: WebSettings) {
+    @discardableResult
+    private func scanForMusic(under root: URL, settings: WebSettings) -> Bool {
         guard !settings.musicFolder.isEmpty else {
             update {
                 $0.busy = false
@@ -547,7 +582,7 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
                 $0.lastResult = "Für den Musikmodus fehlt der Musikordner in den "
                     + "Einstellungen."
             }
-            return
+            return false
         }
         guard let reader = AudioTagReader() else {
             update {
@@ -556,7 +591,7 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
                 $0.lastResult = "ffmpeg/ffprobe wurden nicht gefunden; ohne sie lassen "
                     + "sich die Tags nicht lesen: sudo apt install ffmpeg"
             }
-            return
+            return false
         }
 
         update { $0.busy = true; $0.convertStatus = "Musik wird gelesen …" }
@@ -604,13 +639,16 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
             }
         }
         refreshSnapshotCounts()
+        return true
     }
 
-    private func applyRenames(accepting: Set<UUID>?) {
+    /// - Returns: the outcome, or nil when nothing was attempted.
+    @discardableResult
+    private func applyRenames(accepting: Set<UUID>?) -> RenameOutcome? {
         var plan = items
         guard !plan.isEmpty else {
             update { $0.lastResult = "Nothing to rename — scan the import folder first." }
-            return
+            return nil
         }
         // The page sends the ids the user ticked. An empty selection means they
         // unticked everything, which must do nothing rather than everything.
@@ -618,7 +656,7 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
             plan = plan.filter { accepting.contains($0.id) }
             guard !plan.isEmpty else {
                 update { $0.lastResult = "No files were ticked, so nothing was renamed." }
-                return
+                return nil
             }
         }
         // Two ticked proposals that want the same name would be resolved by
@@ -645,7 +683,7 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
                     + names + ". Diese wurden nicht umbenannt — bitte eine davon "
                     + "abwählen."
             }
-            guard !plan.isEmpty else { return }
+            guard !plan.isEmpty else { return nil }
         }
 
         let policy = settings.conflictPolicy.policy
@@ -668,9 +706,14 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
                 + "Renamed \(outcome.succeeded), skipped \(outcome.skipped)"
                 + (outcome.failed > 0 ? ", failed \(outcome.failed)" : "") + "."
         }
-        if settings.libraryMode == .music { writeAlbumCovers(for: plan) }
+        // Only for the files that are now in the library, and only for the
+        // audio ones. Driving this off `libraryMode` instead meant a plan
+        // scanned as video, applied after the user had switched the mode to
+        // music, had ffmpeg asked for a cover inside every film.
+        writeAlbumCovers(landed: outcome.landed, in: plan)
         refreshSnapshotCounts()
         refreshJellyfinLibrary()
+        return outcome
     }
 
     /// Flags items that would land on top of each other, or on a file that
@@ -703,18 +746,34 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
     /// network: most tagged music carries its art. An album that already
     /// has an image under any of the four names Jellyfin accepts is left
     /// alone — overwriting one the user chose would be presumptuous.
-    private func writeAlbumCovers(for plan: [RenameItem]) {
-        guard let reader = AudioTagReader() else { return }
+    ///
+    /// - Parameter landed: where each item's file actually is, from the
+    ///   rename outcome. Only those get a cover: an item that was skipped or
+    ///   that failed has no album folder to put one in, and the old version,
+    ///   which worked from the plan, asked ffmpeg for a picture from files
+    ///   that had never moved and wrote it beside nothing.
+    private func writeAlbumCovers(landed: [UUID: URL], in plan: [RenameItem]) {
+        // Per file rather than per library mode: a plan scanned as video and
+        // applied after the user switched the mode to music used to have
+        // ffmpeg asked for a cover inside every film.
+        let audio = plan.filter {
+            landed[$0.id] != nil && AudioFileTypes.isAudio($0.mediaFile.url)
+        }
+        guard !audio.isEmpty, let reader = AudioTagReader() else { return }
         var done: Set<String> = []
         var written = 0
 
-        for item in plan {
+        for item in audio {
+            guard let moved = landed[item.id] else { continue }
             let coverRelative = MusicNamer.coverPath(forTrackAt: item.proposedRelativePath)
             let folder = (coverRelative as NSString).deletingLastPathComponent
             guard done.insert(folder).inserted else { continue }
 
-            let destination = item.outputRoot.appendingPathComponent(coverRelative)
-            let albumFolder = destination.deletingLastPathComponent()
+            // Beside the file as it now is, not beside where it was planned
+            // to go: under the "rename" conflict policy the two differ.
+            let albumFolder = moved.deletingLastPathComponent()
+            let destination = albumFolder
+                .appendingPathComponent((coverRelative as NSString).lastPathComponent)
             // Any of folder/poster/cover/default, any of the image
             // extensions: Jellyfin accepts all of them, so any one of
             // them means this album is already covered.
@@ -724,12 +783,7 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
                 AudioFileTypes.isCoverImage(URL(fileURLWithPath: $0))
             }) { continue }
 
-            // The track has moved by now, so read the picture from where
-            // it landed rather than from where it came from.
-            let moved = item.outputRoot.appendingPathComponent(item.proposedRelativePath)
-            let source = FileManager.default.fileExists(atPath: moved.path)
-                ? moved : item.mediaFile.url
-            if reader.extractCover(from: source, to: destination) { written += 1 }
+            if reader.extractCover(from: moved, to: destination) { written += 1 }
         }
 
         guard written > 0 else { return }
@@ -1241,7 +1295,15 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
     /// collapsing into one file on the server.
     private func transferFiles(accepting: Set<UUID>) {
         lock.lock(); _queuedTransferRuns = max(0, _queuedTransferRuns - 1); lock.unlock()
+        send(items.filter { accepting.contains($0.id) })
+    }
 
+    /// Sends the given items, which need not be in `items` any more.
+    ///
+    /// Taking the items rather than their ids is what lets an unattended run
+    /// send the files it has just renamed: by then they have left `items` and
+    /// moved on disk, so there is nothing left to look up.
+    private func send(_ requested: [RenameItem]) {
         let settings = self.settings
         let target = settings.remote
         guard target.isEnabled else {
@@ -1275,7 +1337,7 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
             }
         }
 
-        var pending = items.filter { accepting.contains($0.id) }
+        var pending = requested
         guard !pending.isEmpty else {
             clearTransferCancelRequest()
             update { $0.lastResult = "Es war nichts angehakt, also wurde nichts gesendet." }
@@ -1558,6 +1620,22 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
 
     // MARK: Running by itself
 
+    /// Why the schedule is being (re-)armed, which decides what happens to
+    /// the last-run time.
+    enum ScheduleArming {
+        /// The program has just started: take the last-run time from disk, so
+        /// a run missed while the machine was off still happens.
+        case startup
+        /// Settings were saved but the schedule itself is unchanged: leave the
+        /// last-run time alone.
+        case settingsSaved
+        /// The user has just changed the schedule: treat now as the last run,
+        /// so pressing Apply never sets an unattended rename going twenty
+        /// seconds later — which is what it used to do whenever the schedule
+        /// had been switched off and on again.
+        case scheduleChanged
+    }
+
     /// Starts or stops the schedule's minute tick to match the settings.
     ///
     /// A tick that asks "is it due yet", rather than a timer armed for the
@@ -1565,16 +1643,25 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
     /// clock correction or a time-zone change, and all three happen to a
     /// media server. Asking once a minute costs nothing and is right
     /// afterwards.
-    private func updateScheduleState() {
+    private func updateScheduleState(_ arming: ScheduleArming = .settingsSaved) {
         let schedule = settings.schedule
         let shouldRun = schedule.isEnabled && schedule.problems().isEmpty
 
-        if shouldRun, scheduleTimer == nil {
-            // From now, so switching it on does not fire immediately.
-            lock.lock()
-            if _lastScheduledRun == nil { _lastScheduledRun = Date() }
-            lock.unlock()
+        switch arming {
+        case .startup:
+            let stored = scheduleState.lastRun()
+            lock.lock(); _lastScheduledRun = stored; lock.unlock()
+            // Nothing recorded — first start, or an upgrade from a version
+            // that kept it in memory. Start the clock now rather than
+            // treating "never run" as "overdue".
+            if stored == nil, shouldRun { recordScheduledRun(Date()) }
+        case .scheduleChanged:
+            if shouldRun { recordScheduledRun(Date()) }
+        case .settingsSaved:
+            break
+        }
 
+        if shouldRun, scheduleTimer == nil {
             let timer = DispatchSource.makeTimerSource(queue: queue)
             timer.schedule(deadline: .now() + .seconds(20), repeating: .seconds(60))
             timer.setEventHandler { [weak self] in self?.runIfDue() }
@@ -1584,39 +1671,141 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
             scheduleTimer?.cancel()
             scheduleTimer = nil
         }
+        // Read before `update`, never inside it: the lock is not recursive
+        // and these accessors take it.
+        let next = nextScheduledRun
+        let last = lastScheduledRun
+        update { $0.nextScheduledRun = next; $0.lastScheduledRun = last }
+    }
+
+    /// Stamps the last-run time, in memory and on disk together.
+    private func recordScheduledRun(_ moment: Date) {
+        lock.lock(); _lastScheduledRun = moment; lock.unlock()
+        scheduleState.setLastRun(moment)
     }
 
     /// One unattended run, if one is due. Runs on the serial queue.
     private func runIfDue() {
         let schedule = settings.schedule
         lock.lock()
-        let last = _lastScheduledRun
+        let previousRun = _lastScheduledRun
         lock.unlock()
-        guard schedule.isDue(at: Date(), lastRun: last) else { return }
+        guard schedule.isDue(at: Date(), lastRun: previousRun) else { return }
 
         // Stamped before the work, not after: a run that takes an hour
         // must not make the next one due the moment it finishes, and a
         // run that throws must not repeat every minute.
-        lock.lock(); _lastScheduledRun = Date(); lock.unlock()
+        recordScheduledRun(Date())
 
         log.append(RenameLogEntry(oldName: "Zeitplan", newName: schedule.summary,
                                   status: .skipped))
-        scanSourceFolder()
+        performScheduledRun(schedule)
+        // Read before `update`, never inside it: the lock is not recursive
+        // and these accessors take it.
+        let next = nextScheduledRun
+        let last = lastScheduledRun
+        update { $0.nextScheduledRun = next; $0.lastScheduledRun = last }
+    }
 
-        // Only what was asked for, and only the proposals the planner
-        // accepted — an unattended run must not widen its own remit.
-        guard schedule.alsoRename else { return }
-        let accepted = Set(items.filter(\.isAccepted).map(\.id))
-        guard !accepted.isEmpty else { return }
-        applyRenames(accepting: accepted)
+    /// The work of one unattended run. Separate from `runIfDue` so the tests
+    /// can run it without waiting for a timer or faking a clock.
+    func performScheduledRun(_ schedule: Schedule) {
+        // A scan that could not run at all — no import folder, the folder
+        // gone, ffprobe missing — leaves the previous plan in place. Acting
+        // on it would rename and send a list the user last saw hours ago,
+        // against a folder that has moved on since. So the run stops here
+        // and the reason it gives is the scan's own.
+        guard scanSourceFolder() else { return }
+        let scanned = items.filter(\.isAccepted)
+        guard !scanned.isEmpty else { return }
 
-        guard schedule.alsoSend, settings.remote.isEnabled else { return }
-        // applyRenames has emptied _items of what it moved, so the send
-        // works from what the scan found, re-read after the rename.
-        scanSourceFolder()
-        let toSend = Set(items.filter(\.isAccepted).map(\.id))
+        // Collected rather than written straight to `lastResult`, because
+        // the rename and the send each replace that line with their own
+        // summary — so a warning put there first vanished unread.
+        var notes: [String] = []
+        var failedSomething = false
+        defer {
+            guard !notes.isEmpty else { return }
+            let appended = notes.joined(separator: " ")
+            let bad = failedSomething
+            update { snapshot in
+                if bad { snapshot.hasError = true }
+                let existing = snapshot.lastResult
+                snapshot.lastResult = existing == nil ? appended : existing! + " " + appended
+            }
+        }
+
+        var toSend = scanned
+
+        if schedule.alsoRename {
+            // Without a library root the planner proposes a folder beside the
+            // file itself, so an unattended run buries it one level deeper
+            // every night: Film/Film.mkv, then Film/Film/Film.mkv. Somebody
+            // looking at the proposal would see that; nobody is looking here.
+            let (renameable, blocked) = Self.unattendedRenameable(scanned,
+                                                                  settings: settings)
+            if !blocked.isEmpty {
+                failedSomething = true
+                notes.append("\(blocked.count) Datei"
+                    + (blocked.count == 1 ? " wurde" : "en wurden")
+                    + " nicht umbenannt, weil der Zielordner in den Einstellungen "
+                    + "fehlt — sonst landen sie in Unterordnern neben sich selbst.")
+                for item in blocked {
+                    log.append(RenameLogEntry(
+                        oldName: item.originalFileName, newName: "—",
+                        status: .skipped,
+                        errorDescription: "Geplanter Lauf: kein Zielordner gesetzt."))
+                }
+            }
+            guard !renameable.isEmpty else { return }
+
+            let outcome = applyRenames(accepting: Set(renameable.map(\.id)))
+            // Only what actually moved, and from where it actually landed.
+            // This used to re-scan the import folder instead, which finds
+            // precisely the files whose rename had *failed* — so "also send"
+            // sent the failures and left the library untouched.
+            toSend = renameable.compactMap { item in
+                guard let now = outcome?.landed[item.id] else { return nil }
+                var moved = item
+                moved.mediaFile.url = now
+                return moved
+            }
+        }
+
+        guard schedule.alsoSend else { return }
+        guard settings.remote.isEnabled else {
+            failedSomething = true
+            notes.append("Senden war geplant, aber der Server ist abgeschaltet.")
+            return
+        }
+        // Reached whether or not renaming was asked for: "also send" used to
+        // sit behind `guard alsoRename`, so ticking send on its own did
+        // nothing at all while the summary promised it.
         guard !toSend.isEmpty else { return }
-        transferFiles(accepting: toSend)
+        send(toSend)
+    }
+
+    /// Of a scanned plan, the items an unattended run may safely rename, and
+    /// the ones it must leave alone.
+    ///
+    /// Pure, so the rule is testable without a scheduler.
+    static func unattendedRenameable(_ plan: [RenameItem],
+                                     settings: WebSettings)
+        -> (renameable: [RenameItem], blocked: [RenameItem]) {
+        var renameable: [RenameItem] = []
+        var blocked: [RenameItem] = []
+        for item in plan {
+            let hasRoot: Bool
+            if settings.libraryMode == .music {
+                hasRoot = !settings.musicFolder.isEmpty
+            } else if item.mediaFile.parsed.kind == .episode {
+                hasRoot = !settings.seriesFolder.isEmpty
+            } else {
+                hasRoot = !settings.moviesFolder.isEmpty
+            }
+            if hasRoot { renameable.append(item) } else { blocked.append(item) }
+        }
+        return (renameable, blocked)
     }
 
     /// When the next unattended run is due, for the interface to show.
@@ -1626,9 +1815,29 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         return schedule.nextRun(after: last ?? Date())
     }
 
+    /// When the last unattended run happened, for the interface to show.
+    public var lastScheduledRun: Date? {
+        lock.lock(); defer { lock.unlock() }; return _lastScheduledRun
+    }
+
     /// Only for tests: pretend the last run happened then.
     func setLastScheduledRunForTesting(_ moment: Date?) {
         lock.lock(); _lastScheduledRun = moment; lock.unlock()
+        scheduleState.setLastRun(moment)
+    }
+
+    /// Only for tests: one tick of the schedule, synchronously.
+    func runIfDueForTesting() {
+        queue.sync { self.runIfDue() }
+    }
+
+    /// Only for tests: waits for the work `init` handed to the queue.
+    ///
+    /// Arming the schedule happens there, so a test that reads the last-run
+    /// time straight after constructing a coordinator would otherwise race
+    /// it and pass or fail by luck.
+    func waitForStartupForTesting() {
+        queue.sync { }
     }
 
     /// Only for tests: whether the minute tick is armed.

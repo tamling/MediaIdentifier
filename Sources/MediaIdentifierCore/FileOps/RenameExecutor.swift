@@ -6,12 +6,25 @@ public struct RenameOutcome: Sendable {
     public var failed: Int
     public var skipped: Int
     public var transaction: RenameTransaction?
+    /// Where each item's primary file now is, for the items whose primary
+    /// move actually happened.
+    ///
+    /// The counts alone cannot answer "which files are now in the library",
+    /// and a caller that wants to do something with the renamed files — send
+    /// them on, write a cover beside them — has to know. Working it out from
+    /// the plan instead is what produced the scheduled run that sent exactly
+    /// the files whose rename had failed. An item that was skipped or that
+    /// failed is absent: its file is still where it was.
+    public var landed: [UUID: URL]
 
-    public init(succeeded: Int = 0, failed: Int = 0, skipped: Int = 0, transaction: RenameTransaction? = nil) {
+    public init(succeeded: Int = 0, failed: Int = 0, skipped: Int = 0,
+                transaction: RenameTransaction? = nil,
+                landed: [UUID: URL] = [:]) {
         self.succeeded = succeeded
         self.failed = failed
         self.skipped = skipped
         self.transaction = transaction
+        self.landed = landed
     }
 }
 
@@ -47,14 +60,20 @@ public final class RenameExecutor {
         askResolution: ((PlannedMove) -> ConflictPolicy)? = nil,
         progress: ((Double) -> Void)? = nil
     ) -> RenameOutcome {
-        let moves = plan.filter { $0.isAccepted }.flatMap { $0.allMoves }
+        // Each move carries the item it belongs to, and whether it is that
+        // item's primary file, so the outcome can say where each item ended
+        // up. Flattened as before, so progress is still per file.
+        let moves: [(owner: UUID, isPrimary: Bool, move: PlannedMove)] =
+            plan.filter { $0.isAccepted }.flatMap { item in
+                item.allMoves.enumerated().map { (item.id, $0.offset == 0, $0.element) }
+            }
         let total = moves.count
         var completed = 0
         var outcome = RenameOutcome()
         var performed: [RenameTransaction.Move] = []
         progress?(0)
 
-        for move in moves {
+        for (owner, isPrimary, move) in moves {
             defer {
                 completed += 1
                 progress?(total == 0 ? 1 : Double(completed) / Double(total))
@@ -62,6 +81,9 @@ public final class RenameExecutor {
 
             // No-op: source already at destination.
             if move.source.standardizedFileURL == move.destination.standardizedFileURL {
+                // Nothing moved, but the file is at the destination, which is
+                // what `landed` is asked about.
+                if isPrimary { outcome.landed[owner] = move.destination }
                 continue
             }
 
@@ -73,6 +95,9 @@ public final class RenameExecutor {
 
             do {
                 guard let resolution = try resolveDestination(for: move, policy: effectivePolicy) else {
+                    // Deliberately not recorded in `landed`: a skipped file is
+                    // still where it was, and a caller that goes on to send or
+                    // delete it must not be told otherwise.
                     outcome.skipped += 1
                     log.append(RenameLogEntry(
                         oldName: move.source.lastPathComponent,
@@ -93,6 +118,9 @@ public final class RenameExecutor {
                                      base: completed, total: total, progress: progress)
 
                 performed.append(.init(from: move.source, to: resolution.destination, createdDirectories: createdDirs))
+                // The resolved destination, not the planned one: under the
+                // "rename" policy the file is now "… (1).mkv".
+                if isPrimary { outcome.landed[owner] = resolution.destination }
                 outcome.succeeded += 1
                 log.append(RenameLogEntry(
                     oldName: move.source.lastPathComponent,

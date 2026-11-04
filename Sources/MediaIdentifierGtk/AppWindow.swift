@@ -660,7 +660,7 @@ final class AppWindow {
         if let index = Schedule.Cadence.allCases.firstIndex(of: schedule.cadence) {
             gtk_combo_box_set_active(Gtk.comboBox(scheduleCadenceCombo), Int32(index))
         }
-        Gtk.setText(scheduleSummary, schedule.summary)
+        Gtk.setText(scheduleSummary, ScheduleLine.describe(schedule, coordinator.snapshot))
 
         let remote = settings.remote
         Gtk.setChecked(remoteEnabledCheck, remote.isEnabled)
@@ -748,10 +748,17 @@ final class AppWindow {
                         fraction: state.transferring ? state.transferProgress : 0,
                         text: state.transferSummary)
 
+        // The schedule line too, so "Nächster Lauf" stays true while the
+        // window is open rather than being whatever it was when the settings
+        // were last loaded.
+        Gtk.setText(scheduleSummary,
+                    ScheduleLine.describe(coordinator.settings.schedule, state))
+
         refreshList()
         refreshLog()
         refreshChecks()
     }
+
 
     /// Rebuilds the traffic light, and only when a lamp actually changed.
     ///

@@ -434,4 +434,42 @@ final class WebSettingsRouteTests: XCTestCase {
     private func authorizedGet(_ path: String, router: WebRouter) -> HTTPRequest {
         HTTPRequest(method: "GET", path: path, headers: ["authorization": "Bearer \(token)"])
     }
+
+    // MARK: What the settings page says about the schedule
+
+    private func pageWithSchedule(_ schedule: Schedule,
+                                  state: StatusSnapshot) -> String {
+        var settings = WebSettings()
+        settings.schedule = schedule
+        let holder = SettingsBox(settings)
+        let router = WebRouter(
+            policy: WebSecurityPolicy(token: token, isTLS: true),
+            settings: { holder.current },
+            commands: sink,
+            snapshot: { state }
+        )
+        return bodyText(router.respond(to: authorizedGet("/settings", router: router)))
+    }
+
+    /// The summary says what was asked for. This says what will happen —
+    /// which is not the same thing, and used not to be shown at all.
+    func testThePageShowsWhenTheNextUnattendedRunIsDue() {
+        let page = pageWithSchedule(
+            Schedule(isEnabled: true, hour: 3),
+            state: StatusSnapshot(nextScheduledRun: Date().addingTimeInterval(7200)))
+        XCTAssertTrue(page.contains("N\u{00E4}chster Lauf"), page)
+    }
+
+    /// The one state the user has to be able to see: set, but not running.
+    func testThePageSaysWhenAScheduleIsSetButNotRunning() {
+        let page = pageWithSchedule(Schedule(isEnabled: true, hour: 3),
+                                    state: StatusSnapshot())
+        XCTAssertTrue(page.contains("L\u{00E4}uft gerade nicht"), page)
+    }
+
+    func testThePageSaysNothingExtraWhenTheScheduleIsOff() {
+        let page = pageWithSchedule(Schedule(isEnabled: false), state: StatusSnapshot())
+        XCTAssertFalse(page.contains("N\u{00E4}chster Lauf"))
+        XCTAssertFalse(page.contains("L\u{00E4}uft gerade nicht"))
+    }
 }

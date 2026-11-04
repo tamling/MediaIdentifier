@@ -915,6 +915,23 @@ public struct WebRouter: Sendable {
             """
         }
 
+        // What the program will actually do, beside what was asked for. A
+        // schedule can be set and not running — it was, for every restart,
+        // before it was armed at startup — and this is the line that says so.
+        let scheduleState: String = {
+            guard current.schedule.isEnabled else { return "" }
+            let state = snapshot()
+            // The same sentence the GTK window shows, from the same place.
+            // Its second line is the part that matters; the first is the
+            // summary already printed above.
+            let lines = ScheduleLine.describe(current.schedule, state)
+                .split(separator: "\n").dropFirst()
+            guard let line = lines.first else { return "" }
+            // A schedule that is set but not armed is a fault, not a hint.
+            let style = state.nextScheduledRun == nil ? "note" : "hint"
+            return "<p class=\"\(style)\">\(Self.escape(String(line)))</p>"
+        }()
+
         let cadenceOptions = Schedule.Cadence.allCases.map { cadence in
             let selected = cadence == current.schedule.cadence ? " selected" : ""
             return "<option value=\"\(cadence.rawValue)\"\(selected)>"
@@ -1022,6 +1039,7 @@ public struct WebRouter: Sendable {
             <label class="inline"><input type="checkbox" name="scheduleSend" value="1"\
         \(current.schedule.alsoSend ? " checked" : "")> Also send it to the server</label>
             <p class="hint">\(Self.escape(current.schedule.summary))</p>
+            \(scheduleState)
 
             <h2>The library on another machine</h2>
             <input type="hidden" name="remoteEnabledPresent" value="1">

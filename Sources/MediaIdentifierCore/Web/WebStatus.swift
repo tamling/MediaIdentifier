@@ -47,6 +47,15 @@ public struct StatusSnapshot: Codable, Sendable, Equatable {
     public var downloadProgress: Double?
     /// "12,4 MB von 48,0 MB · 1,2 MB/s" as the interface should show it.
     public var downloadDetail: String?
+    /// When the next unattended run is due, or nil when none is.
+    ///
+    /// Worth showing next to the schedule's own sentence rather than instead
+    /// of it: the sentence is what was asked for, this is what the program
+    /// will actually do. A schedule that is set but not running shows a
+    /// sentence and no date, which is the one state the user needs to see.
+    public var nextScheduledRun: Date?
+    /// When the last unattended run happened, or nil if none has.
+    public var lastScheduledRun: Date?
 
     public init(
         updated: Date = Date(),
@@ -74,7 +83,9 @@ public struct StatusSnapshot: Codable, Sendable, Equatable {
         queuedWork: Int = 0,
         downloading: Bool = false,
         downloadProgress: Double? = nil,
-        downloadDetail: String? = nil
+        downloadDetail: String? = nil,
+        nextScheduledRun: Date? = nil,
+        lastScheduledRun: Date? = nil
     ) {
         self.updated = updated
         self.busy = busy
@@ -102,6 +113,8 @@ public struct StatusSnapshot: Codable, Sendable, Equatable {
         self.downloading = downloading
         self.downloadProgress = downloadProgress
         self.downloadDetail = downloadDetail
+        self.nextScheduledRun = nextScheduledRun
+        self.lastScheduledRun = lastScheduledRun
     }
 
     /// Something is happening, or is about to. What the interface should
