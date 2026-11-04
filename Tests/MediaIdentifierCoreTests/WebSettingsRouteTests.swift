@@ -364,8 +364,6 @@ final class WebSettingsRouteTests: XCTestCase {
             ("/library/undo", .undoLastRename),
             ("/convert/scan", .findConvertible),
             ("/history/clear", .clearHistory),
-            ("/settings/test-llm", .testLocalLLMConnection),
-            ("/settings/test-jellyfin", .testJellyfinConnection),
         ]
         for (path, command) in expected {
             sink = RecordingSink()
@@ -373,6 +371,29 @@ final class WebSettingsRouteTests: XCTestCase {
             let response = router.respond(to: authorizedPost(path, [:], router: router))
             XCTAssertEqual(response.status, 303, path)
             XCTAssertEqual(sink.commands, [command], path)
+        }
+    }
+
+    /// The three test buttons submit the settings form, so each saves what
+    /// is on screen before testing it — otherwise the test reports on the
+    /// stored address while the user is looking at a corrected one, and
+    /// records a red lamp for a setting they never saved.
+    func testTheConnectionTestsSaveBeforeTheyTest() {
+        let expected: [(String, WebCommand)] = [
+            ("/settings/test-llm", .testLocalLLMConnection),
+            ("/settings/test-jellyfin", .testJellyfinConnection),
+            ("/settings/test-remote", .testRemoteConnection),
+        ]
+        for (path, command) in expected {
+            sink = RecordingSink()
+            let router = makeRouter()
+            let response = router.respond(to: authorizedPost(path, [:], router: router))
+            XCTAssertEqual(response.status, 303, path)
+            XCTAssertEqual(sink.commands.count, 2, path)
+            if case .saveSettings = sink.commands.first {} else {
+                XCTFail("\(path) tested without saving first")
+            }
+            XCTAssertEqual(sink.commands.last, command, path)
         }
     }
 

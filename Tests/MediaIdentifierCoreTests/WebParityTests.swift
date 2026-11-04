@@ -211,6 +211,7 @@ final class WebParityTests: XCTestCase {
 
     func testATransferShowsABarAndNotOnlyASentence() {
         var state = StatusSnapshot()
+        state.remoteConfigured = true
         state.transferring = true
         state.transferProgress = 0.42
         state.currentFile = "Dark - S01E01.mkv"
