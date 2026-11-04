@@ -70,6 +70,7 @@ public struct WebRouter: Sendable {
         "/library/scan", "/library/apply", "/library/undo",
         "/library/send", "/library/send-cancel",
         "/library/select-all", "/library/select-none",
+        "/library/download", "/library/download-cancel",
         "/convert/scan", "/convert/start", "/convert/cancel",
         "/system/check",
         "/history/clear",
@@ -224,6 +225,12 @@ public struct WebRouter: Sendable {
             return redirect(to: "/")
         case "/library/apply":
             submit(.applyProposedRenames(accepting: Self.selectedItemIDs(in: request)))
+            return redirect(to: "/")
+        case "/library/download":
+            submit(.downloadURL(fields["url"] ?? ""))
+            return redirect(to: "/")
+        case "/library/download-cancel":
+            submit(.cancelDownload)
             return redirect(to: "/")
         case "/library/select-all":
             submit(.setAllAccepted(true))
@@ -473,6 +480,20 @@ public struct WebRouter: Sendable {
         </div>
         """ : ""
 
+        // Only while something is being fetched: a bar at zero when nothing
+        // is happening reads as a stall. No value attribute at all when the
+        // size is unknown, which renders as an indeterminate bar — honest
+        // for a stream with no Content-Length.
+        let download = state.downloading ? """
+        <progress max="100" \(state.downloadProgress.map {
+            "value=\"\(Int(($0 * 100).rounded()))\""
+        } ?? "")></progress>
+        <p class="sub">\(Self.escape(state.downloadDetail ?? "Wird geladen …"))</p>
+        <form method="post" action="/library/download-cancel" class="bare inline-form">
+          \(csrf.hiddenField)<button type="submit" class="link">Stop fetching</button>
+        </form>
+        """ : ""
+
         let counts = "\(state.totalItems) proposed · \(state.done) renamed so far"
 
         // The traffic light. A dot carries the colour and a word carries the
@@ -530,6 +551,21 @@ public struct WebRouter: Sendable {
               </div>
 
               \(panel)
+
+              <div class="card">
+                <h2>Fetch from a link</h2>
+                <form method="post" action="/library/download">
+                  \(csrf.hiddenField)
+                  <label for="url">Address of the video</label>
+                  <input id="url" name="url" type="text" placeholder="https://…"\
+        \(state.isWorking ? " disabled" : "")>
+                  <p class="hint">It lands in the import folder and is then proposed \
+        like anything else found there. Only http and https.</p>
+                  <button type="submit"\(needsSetup || state.isWorking ? " disabled" : "")>\
+        Fetch</button>
+                </form>
+                \(download)
+              </div>
 
               <div class="card">
                 <h2>Proposed renames</h2>
@@ -750,6 +786,7 @@ public struct WebRouter: Sendable {
             case .failure: status = "<span class=\"bad-text\">failed</span>"
             case .converted: status = "<span class=\"ok-text\">converted</span>"
             case .sent: status = "<span class=\"ok-text\">sent</span>"
+            case .downloaded: status = "<span class=\"ok-text\">downloaded</span>"
             }
             let detail = entry.errorDescription.map {
                 "<div class=\"hint\">\(Self.escape($0))</div>"
@@ -1031,6 +1068,7 @@ public struct WebRouter: Sendable {
             case .success: word = "renamed"; cssClass = "lamp-ok"
             case .converted: word = "converted"; cssClass = "lamp-ok"
             case .sent: word = "sent"; cssClass = "lamp-ok"
+            case .downloaded: word = "downloaded"; cssClass = "lamp-ok"
             case .skipped: word = "skipped"; cssClass = "lamp-off"
             case .failure: word = "failed"; cssClass = "lamp-failed"
             }

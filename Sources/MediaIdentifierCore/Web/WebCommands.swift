@@ -33,6 +33,11 @@ public enum WebCommand: Sendable, Equatable {
     case setAllAccepted(Bool)
     case transferFiles(accepting: Set<UUID>)
     case cancelTransfers
+    /// Fetches one URL into the import folder with yt-dlp, then scans, so
+    /// the download appears as a proposal like anything else that lands
+    /// there. Never started on its own.
+    case downloadURL(String)
+    case cancelDownload
     /// Logs in to the server and checks the target path, for the status panel.
     case testRemoteConnection
     /// Runs every connection test there is, so one press answers "is

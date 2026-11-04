@@ -78,6 +78,9 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
     /// True from the moment a send starts until it ends, including the gaps
     /// between files when no process exists.
     private var _transferRunning = false
+    private var _runningDownload: Process?
+    private var _cancelDownload = false
+    private var _queuedDownloads = 0
     private var _probes: [ProbeSubject: ProbeResult] = [:]
     /// Commands accepted but not finished.
     ///
@@ -163,6 +166,10 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
             cancelTransfers()
             return
         }
+        if case .cancelDownload = command {
+            cancelDownload()
+            return
+        }
         // Counted here rather than when the run starts, so a cancel issued
         // while the command is still waiting its turn is not mistaken for a
         // cancel with nothing to cancel.
@@ -171,6 +178,9 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         }
         if case .transferFiles = command {
             lock.lock(); _queuedTransferRuns += 1; lock.unlock()
+        }
+        if case .downloadURL = command {
+            lock.lock(); _queuedDownloads += 1; lock.unlock()
         }
         if Self.isWork(command) {
             // The count is read out while the lock is held and then used
@@ -205,10 +215,10 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
     static func isWork(_ command: WebCommand) -> Bool {
         switch command {
         case .saveSettings, .setSecret, .setAllAccepted, .clearHistory,
-             .cancelConversions, .cancelTransfers:
+             .cancelConversions, .cancelTransfers, .cancelDownload:
             return false
         case .scanSourceFolder, .applyProposedRenames, .undoLastRename,
-             .findConvertible, .convertFiles, .transferFiles,
+             .findConvertible, .convertFiles, .transferFiles, .downloadURL,
              .testLocalLLMConnection, .testJellyfinConnection,
              .testRemoteConnection, .checkEverything:
             return true
@@ -276,6 +286,11 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         case .transferFiles(let accepting):
             transferFiles(accepting: accepting)
         case .cancelTransfers:
+            // Handled in `submit`, off the queue.
+            break
+        case .downloadURL(let url):
+            downloadURL(url)
+        case .cancelDownload:
             // Handled in `submit`, off the queue.
             break
         case .testRemoteConnection:
@@ -752,6 +767,152 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
     /// into the next run.
     private func clearCancelRequest() {
         lock.lock(); _cancelConversions = false; lock.unlock()
+    }
+
+    // MARK: Fetching from a URL
+
+    /// Downloads one URL into the import folder, then scans.
+    ///
+    /// The scan is the point: the file lands where everything else lands,
+    /// and the existing identify–propose–rename–send pipeline takes it from
+    /// there. Nothing about a downloaded file is special afterwards.
+    private func downloadURL(_ url: String) {
+        lock.lock(); _queuedDownloads = max(0, _queuedDownloads - 1); lock.unlock()
+
+        let settings = self.settings
+        guard !settings.sourceFolder.isEmpty else {
+            clearDownloadCancelRequest()
+            update {
+                $0.hasError = true
+                $0.lastResult = "Es ist kein Importordner eingestellt, in den geladen "
+                    + "werden könnte."
+            }
+            return
+        }
+        let importFolder = URL(fileURLWithPath: settings.sourceFolder, isDirectory: true)
+
+        lock.lock()
+        let alreadyCancelled = _cancelDownload
+        _cancelDownload = false
+        lock.unlock()
+        if alreadyCancelled {
+            update { $0.lastResult = "Der Download wurde abgebrochen, bevor er begann." }
+            return
+        }
+
+        update {
+            $0.busy = true
+            $0.downloading = true
+            $0.downloadProgress = nil
+            $0.downloadDetail = "Wird geladen …"
+            $0.hasError = false
+        }
+
+        let downloader = VideoDownloader()
+        do {
+            let file = try downloader.download(
+                url, into: importFolder,
+                onStart: { [weak self] process in
+                    guard let self else { return }
+                    self.lock.lock()
+                    self._runningDownload = process
+                    self.lock.unlock()
+                },
+                progress: { [weak self] progress in
+                    self?.update {
+                        $0.downloadProgress = progress.fraction
+                        $0.downloadDetail = Self.describe(progress)
+                    }
+                }
+            )
+            lock.lock(); _runningDownload = nil; lock.unlock()
+
+            log.append(RenameLogEntry(oldName: url, newName: file.lastPathComponent,
+                                      status: .downloaded))
+            update {
+                $0.busy = false
+                $0.downloading = false
+                $0.downloadProgress = 1
+                $0.downloadDetail = nil
+                $0.lastResult = "Geladen: \(file.lastPathComponent)"
+            }
+            // Straight into the ordinary pipeline.
+            scanSourceFolder()
+        } catch {
+            lock.lock()
+            _runningDownload = nil
+            let stopped = _cancelDownload
+            _cancelDownload = false
+            lock.unlock()
+
+            let message = stopped
+                ? "Der Download wurde abgebrochen."
+                : Self.describe(error)
+            log.append(RenameLogEntry(oldName: url, newName: "—", status: .failure,
+                                      errorDescription: message))
+            update {
+                $0.busy = false
+                $0.downloading = false
+                $0.downloadProgress = nil
+                $0.downloadDetail = nil
+                $0.hasError = !stopped
+                $0.lastResult = message
+            }
+        }
+    }
+
+    /// "12,4 MB von 48,0 MB · 1,2 MB/s · noch 0:32", leaving out whatever
+    /// the tool did not report rather than inventing it.
+    static func describe(_ progress: VideoDownloader.Progress) -> String {
+        var parts: [String] = []
+        if let done = progress.downloadedBytes {
+            if let total = progress.totalBytes {
+                parts.append("\(bytes(done)) von \(bytes(total))")
+            } else {
+                parts.append(bytes(done))
+            }
+        }
+        if let speed = progress.bytesPerSecond, speed > 0 {
+            parts.append("\(bytes(Int64(speed)))/s")
+        }
+        if let eta = progress.secondsRemaining, eta > 0 {
+            parts.append(String(format: "noch %d:%02d", eta / 60, eta % 60))
+        }
+        return parts.isEmpty ? "Wird geladen …" : parts.joined(separator: " · ")
+    }
+
+    static func bytes(_ count: Int64) -> String {
+        let units = ["B", "kB", "MB", "GB", "TB"]
+        var value = Double(count)
+        var unit = 0
+        while value >= 1000, unit < units.count - 1 { value /= 1000; unit += 1 }
+        return unit == 0
+            ? "\(count) B"
+            : String(format: "%.1f %@", value, units[unit])
+    }
+
+    private func cancelDownload() {
+        lock.lock()
+        let hasTarget = _runningDownload != nil || _queuedDownloads > 0
+        if hasTarget { _cancelDownload = true }
+        let process = _runningDownload
+        lock.unlock()
+
+        guard hasTarget else {
+            update { $0.lastResult = "Es läuft kein Download." }
+            return
+        }
+        process?.terminate()
+        update { $0.lastResult = "Der Download wird abgebrochen." }
+    }
+
+    private func clearDownloadCancelRequest() {
+        lock.lock(); _cancelDownload = false; lock.unlock()
+    }
+
+    /// Whether a download cancel is armed. Only for tests.
+    var downloadCancelIsArmedForTesting: Bool {
+        lock.lock(); defer { lock.unlock() }; return _cancelDownload
     }
 
     // MARK: The traffic light

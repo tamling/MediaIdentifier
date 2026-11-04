@@ -13,6 +13,8 @@ public struct RenameLogEntry: Identifiable, Codable, Equatable, Sendable {
         /// file did not move on this machine, and an entry that said
         /// "renamed" would send the user looking for it in the wrong place.
         case sent
+        /// Fetched from a URL into the import folder.
+        case downloaded
     }
 
     public var id: UUID

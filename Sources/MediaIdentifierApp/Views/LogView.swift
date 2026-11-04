@@ -113,6 +113,7 @@ private struct LogRow: View {
         case .skipped: return "minus.circle.fill"
         case .converted: return "wand.and.stars"
         case .sent: return "arrow.up.circle.fill"
+        case .downloaded: return "arrow.down.circle.fill"
         }
     }
     private var color: Color {
@@ -122,6 +123,7 @@ private struct LogRow: View {
         case .skipped: return Theme.mono
         case .converted: return Theme.accentBright
         case .sent: return Theme.accentBright
+        case .downloaded: return Theme.accentBright
         }
     }
 }

@@ -40,6 +40,13 @@ public struct StatusSnapshot: Codable, Sendable, Equatable {
     /// redirects before that happens — so a page that refreshed on `busy`
     /// alone stopped refreshing exactly when the user was waiting.
     public var queuedWork: Int
+    /// A download from a URL is running.
+    public var downloading: Bool
+    /// 0…1, or nil when the server sent no size — which is normal for a
+    /// stream, and where a bar would be a guess.
+    public var downloadProgress: Double?
+    /// "12,4 MB von 48,0 MB · 1,2 MB/s" as the interface should show it.
+    public var downloadDetail: String?
 
     public init(
         updated: Date = Date(),
@@ -64,7 +71,10 @@ public struct StatusSnapshot: Codable, Sendable, Equatable {
         transferDetail: String? = nil,
         pendingTransfers: Int = 0,
         remoteConfigured: Bool = false,
-        queuedWork: Int = 0
+        queuedWork: Int = 0,
+        downloading: Bool = false,
+        downloadProgress: Double? = nil,
+        downloadDetail: String? = nil
     ) {
         self.updated = updated
         self.busy = busy
@@ -89,6 +99,9 @@ public struct StatusSnapshot: Codable, Sendable, Equatable {
         self.pendingTransfers = pendingTransfers
         self.remoteConfigured = remoteConfigured
         self.queuedWork = queuedWork
+        self.downloading = downloading
+        self.downloadProgress = downloadProgress
+        self.downloadDetail = downloadDetail
     }
 
     /// Something is happening, or is about to. What the interface should

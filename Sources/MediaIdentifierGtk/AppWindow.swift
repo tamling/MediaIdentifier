@@ -44,6 +44,10 @@ final class AppWindow {
     private let remoteProgress: UnsafeMutablePointer<GtkWidget>
     private let sendButton: UnsafeMutablePointer<GtkWidget>
     private let cancelSendButton: UnsafeMutablePointer<GtkWidget>
+    private let urlEntry: UnsafeMutablePointer<GtkWidget>
+    private let downloadButton: UnsafeMutablePointer<GtkWidget>
+    private let cancelDownloadButton: UnsafeMutablePointer<GtkWidget>
+    private let downloadProgress: UnsafeMutablePointer<GtkWidget>
     private let checksColumn: UnsafeMutablePointer<GtkWidget>
     private let checksSummary: UnsafeMutablePointer<GtkWidget>
     private let checksExpander: UnsafeMutablePointer<GtkWidget>
@@ -149,6 +153,27 @@ final class AppWindow {
         gtk_expander_set_expanded(Gtk.expander(checksExpander), expandSettings ? 1 : 0)
         gtk_container_add(Gtk.container(checksExpander), checks)
         gtk_box_pack_start(Gtk.box(page), checksExpander, 0, 0, 0)
+
+        // MARK: Fetching from a link
+        //
+        // Above the folders because this is where a file comes from; what
+        // happens to it afterwards is the rest of the window.
+        urlEntry = Self.entry(placeholder: "https://…")
+        downloadButton = gtk_button_new_with_label("Laden")!
+        cancelDownloadButton = gtk_button_new_with_label("Stopp")!
+        downloadProgress = gtk_progress_bar_new()!
+
+        let fetch = Self.card(titled: "Aus dem Netz laden")
+        let urlRow = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8)!
+        gtk_box_pack_start(Gtk.box(urlRow), urlEntry, 1, 1, 0)
+        gtk_box_pack_start(Gtk.box(urlRow), downloadButton, 0, 0, 0)
+        gtk_box_pack_start(Gtk.box(urlRow), cancelDownloadButton, 0, 0, 0)
+        Self.add(urlRow, to: fetch)
+        Self.add(downloadProgress, to: fetch)
+        Self.add(Self.label("Landet im Importordner und wird dann wie jede andere "
+                                + "gefundene Datei vorgeschlagen.", classes: "mf-dim"),
+                 to: fetch)
+        gtk_box_pack_start(Gtk.box(page), fetch, 0, 0, 0)
 
         // MARK: Folders
 
@@ -337,6 +362,8 @@ final class AppWindow {
         Gtk.onClick(cancelSendButton, self) { $0.cancelSending() }
         Gtk.onClick(checkButton, self) { $0.checkEverything() }
         Gtk.onClick(testServerButton, self) { $0.testServer() }
+        Gtk.onClick(downloadButton, self) { $0.startDownload() }
+        Gtk.onClick(cancelDownloadButton, self) { $0.cancelDownload() }
 
         loadFolders()
         refresh()
@@ -447,6 +474,22 @@ final class AppWindow {
 
     func cancelSending() {
         coordinator.submit(.cancelTransfers)
+    }
+
+    /// Saves first, so the file lands in the folder currently shown rather
+    /// than in whichever one was stored when the window opened.
+    func startDownload() {
+        let url = Gtk.text(of: urlEntry).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !url.isEmpty else { return }
+        saveFolders()
+        coordinator.submit(.downloadURL(url))
+        // Cleared on submission: the field is for the next one, and a link
+        // left sitting there invites a second press that fetches it twice.
+        Gtk.setText(of: urlEntry, "")
+    }
+
+    func cancelDownload() {
+        coordinator.submit(.cancelDownload)
     }
 
     /// Saves first, for the same reason the model-server test does: testing
@@ -576,6 +619,25 @@ final class AppWindow {
             sendButton,
             (state.remoteConfigured && !rowChecks.isEmpty && !state.busy) ? 1 : 0)
         gtk_widget_set_sensitive(cancelSendButton, state.transferring ? 1 : 0)
+
+        gtk_widget_set_sensitive(downloadButton, (!hasSource || state.busy) ? 0 : 1)
+        gtk_widget_set_sensitive(cancelDownloadButton, state.downloading ? 1 : 0)
+        if state.downloading {
+            // No fraction means no size was reported — a stream with no
+            // Content-Length. Pulsing says "working" without claiming a
+            // percentage nobody measured.
+            if let fraction = state.downloadProgress {
+                Gtk.setProgress(downloadProgress, fraction: fraction,
+                                text: state.downloadDetail ?? "")
+            } else {
+                gtk_progress_bar_pulse(Gtk.progressBar(downloadProgress))
+                gtk_progress_bar_set_show_text(Gtk.progressBar(downloadProgress), 1)
+                gtk_progress_bar_set_text(Gtk.progressBar(downloadProgress),
+                                          state.downloadDetail ?? "Wird geladen …")
+            }
+        } else {
+            Gtk.setProgress(downloadProgress, fraction: 0, text: "Kein Download")
+        }
         Gtk.setProgress(remoteProgress,
                         fraction: state.transferProgress,
                         text: state.transferSummary)
@@ -726,12 +788,13 @@ final class AppWindow {
         case .skipped: return "übersprungen"
         case .converted: return "konvertiert"
         case .sent: return "gesendet"
+        case .downloaded: return "geladen"
         }
     }
 
     private static func statusClass(_ status: RenameLogEntry.Status) -> String {
         switch status {
-        case .success, .converted, .sent: return "mf-ok"
+        case .success, .converted, .sent, .downloaded: return "mf-ok"
         case .failure: return "mf-fail"
         case .skipped: return "mf-skip"
         }
