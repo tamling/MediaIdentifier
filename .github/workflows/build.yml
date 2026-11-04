@@ -53,12 +53,75 @@ jobs:
           set -euo pipefail
           apt-get update -qq
           apt-get install -y -qq pkg-config libgtk-3-dev
+      # A real SSH server, so the transfer code is tested by transferring
+      # rather than by reading its own arguments back. Everything else about
+      # that feature can be checked without a network; whether the command
+      # lines actually work cannot.
+      - name: Start an SSH server for the transfer tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          apt-get install -y -qq openssh-server openssh-client rsync sshpass
+
+          # A separate sshd on a high port with its own config: nothing here
+          # touches the container's own ssh setup, and the whole thing dies
+          # with the job.
+          mkdir -p /run/sshd /tmp/mediafin-sshd /tmp/mediafin-remote
+          ssh-keygen -q -t ed25519 -f /tmp/mediafin-sshd/host_key -N ""
+
+          # The account the tests log in as. A throwaway password, printed
+          # here on purpose: it exists for ninety seconds inside a container
+          # that is discarded, and pretending it is a secret would only make
+          # the next person wonder where the real one is.
+          useradd -m -s /bin/bash mediafintest
+          echo 'mediafintest:transfer-test-password' | chpasswd
+          chmod 777 /tmp/mediafin-remote
+
+          ssh-keygen -q -t ed25519 -f /tmp/mediafin-sshd/client_key -N ""
+          install -d -m 700 -o mediafintest -g mediafintest /home/mediafintest/.ssh
+          install -m 600 -o mediafintest -g mediafintest \
+            /tmp/mediafin-sshd/client_key.pub /home/mediafintest/.ssh/authorized_keys
+
+          cat > /tmp/mediafin-sshd/sshd_config <<CONF
+          Port 2222
+          ListenAddress 127.0.0.1
+          HostKey /tmp/mediafin-sshd/host_key
+          PidFile /tmp/mediafin-sshd/sshd.pid
+          PasswordAuthentication yes
+          PubkeyAuthentication yes
+          UsePAM no
+          PermitRootLogin no
+          Subsystem sftp /usr/lib/openssh/sftp-server
+          CONF
+          /usr/sbin/sshd -f /tmp/mediafin-sshd/sshd_config
+          for _ in $(seq 1 30); do
+            ss -ltn 2>/dev/null | grep -q ':2222' && break
+            sleep 0.5
+          done
+
+          # The host key goes into known_hosts the same way a user would put
+          # it there: by looking at it once. StrictHostKeyChecking stays on,
+          # and one test deliberately uses a name that is NOT in here to
+          # prove the check still bites.
+          install -d -m 700 ~/.ssh
+          ssh-keyscan -p 2222 -H 127.0.0.1 >> ~/.ssh/known_hosts 2>/dev/null
+          chmod 600 ~/.ssh/known_hosts
+          echo "sshd is up on 127.0.0.1:2222"
       - name: Build
         run: swift build
       - name: Run Swift tests
         # bash explicitly: the Linux container's default shell is dash, which
         # has no `set -o pipefail` and would abort the step immediately.
         shell: bash
+        env:
+          # Picked up by RemoteTransferIntegrationTests, which skip entirely
+          # when this is unset — as they do on macOS, where there is no sshd.
+          MEDIAFIN_SSH_TEST_HOST: 127.0.0.1
+          MEDIAFIN_SSH_TEST_PORT: "2222"
+          MEDIAFIN_SSH_TEST_USER: mediafintest
+          MEDIAFIN_SSH_TEST_KEY: /tmp/mediafin-sshd/client_key
+          MEDIAFIN_SSH_TEST_PASSWORD: transfer-test-password
+          MEDIAFIN_SSH_TEST_BASE: /tmp/mediafin-remote
         run: |
           set -o pipefail
           swift test 2>&1 | tee test.log
@@ -70,6 +133,24 @@ jobs:
           grep -E ": error:|XCTAssert.* failed" test.log | head -60 || true
           echo "--- totals ---"
           grep -E "Executed [0-9]+ tests" test.log | tail -2 || true
+      # A skipped transfer test is a test that proves nothing, and a skip is
+      # quiet. This makes it loud: if the sshd setup silently stops working,
+      # the job fails here instead of going green with the feature untested.
+      - name: The transfer tests must have run
+        shell: bash
+        run: |
+          set -uo pipefail
+          if grep -q "RemoteTransferIntegrationTests.*skipped" test.log; then
+            echo "FAIL: the transfer tests were skipped; the SSH server did not come up"
+            grep -E "RemoteTransferIntegrationTests" test.log | head -20
+            exit 1
+          fi
+          ran=$(grep -cE "Test Case .*RemoteTransferIntegrationTests.* passed" test.log || true)
+          echo "transfer tests passed: $ran"
+          test "$ran" -ge 7 || {
+            echo "FAIL: expected at least 7 transfer tests to run, saw $ran"
+            exit 1
+          }
       # openssl creates the self-signed certificate on first start.
       - name: Ensure openssl and curl are present
         shell: bash
