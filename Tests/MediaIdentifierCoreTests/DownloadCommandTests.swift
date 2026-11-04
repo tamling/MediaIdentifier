@@ -263,4 +263,107 @@ final class DownloadCommandTests: XCTestCase {
         // Anything unrecognised comes through unchanged.
         XCTAssertEqual(VideoDownloader.explain("  something else  "), "something else")
     }
+
+    // MARK: Clearing the staging folder
+
+    /// The other half of the rule: a partial young enough to be resumed is
+    /// not thrown away, because discarding one turns a cancelled download of
+    /// twenty gigabytes into twenty gigabytes to fetch again.
+    func testARecentPartialIsKeptForAResume() throws {
+        let staging = importFolder.appendingPathComponent("staging-rule-check")
+        try FileManager.default.createDirectory(at: staging,
+                                                withIntermediateDirectories: true)
+        let recent = staging.appendingPathComponent("in-flight.mkv.part")
+        try Data(repeating: 0, count: 16).write(to: recent)
+
+        VideoDownloader.sweepStaging(staging,
+                                     keeping: staging.appendingPathComponent("path.txt"))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: recent.path))
+    }
+
+    /// And the first half: nothing ever deleted these, and the folder is
+    /// hidden, so a few cancelled downloads of large files sat in the import
+    /// folder for good.
+    func testAPartialTooOldToBeWantedIsSweptAway() throws {
+        let staging = importFolder.appendingPathComponent("staging-age-check")
+        try FileManager.default.createDirectory(at: staging,
+                                                withIntermediateDirectories: true)
+        let abandoned = staging.appendingPathComponent("abandoned.mkv.part")
+        try Data(repeating: 0, count: 16).write(to: abandoned)
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date().addingTimeInterval(-8 * 24 * 3600)],
+            ofItemAtPath: abandoned.path)
+
+        VideoDownloader.sweepStaging(staging,
+                                     keeping: staging.appendingPathComponent("path.txt"))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: abandoned.path))
+    }
+
+    /// The path file is this run's result and is read right after the sweep.
+    func testTheSweepNeverTakesThePathFile() throws {
+        let staging = importFolder.appendingPathComponent("staging-keep-check")
+        try FileManager.default.createDirectory(at: staging,
+                                                withIntermediateDirectories: true)
+        let keep = staging.appendingPathComponent("last-download-path.txt")
+        try Data("x".utf8).write(to: keep)
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date().addingTimeInterval(-99 * 24 * 3600)],
+            ofItemAtPath: keep.path)
+
+        VideoDownloader.sweepStaging(staging, keeping: keep)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: keep.path))
+    }
+
+    /// The sweep must not take a partial that belongs to a different URL:
+    /// only the names this run produced, which all begin with the final
+    /// file's stem.
+    func testFinishingOneDownloadDoesNotDeleteAnotherPartial() throws {
+        let staging = importFolder.appendingPathComponent("leftover-rule-check")
+        try FileManager.default.createDirectory(at: staging,
+                                                withIntermediateDirectories: true)
+        let mine = staging.appendingPathComponent("ID_Title.f399.mp4.part")
+        let other = staging.appendingPathComponent("OTHER_Film.mkv.part")
+        try Data("a".utf8).write(to: mine)
+        try Data("b".utf8).write(to: other)
+
+        VideoDownloader.sweepLeftovers(
+            of: staging.appendingPathComponent("ID_Title.mkv"), in: staging)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: mine.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: other.path),
+                      "a partial from another download was destroyed")
+    }
+
+    // MARK: One answer about ffmpeg
+
+    /// The locators disagreed: this one looked in four directories and
+    /// `FFmpegLocator` in six, in a different order. On a snap or flatpak
+    /// install the traffic light said ffmpeg was found while the download
+    /// refused for want of it, and where both found one they could be
+    /// different binaries.
+    func testFFmpegComesFromTheOneLocatorEveryoneElseUses() {
+        let located = DownloadTools.locate()
+        XCTAssertEqual(located.ffmpeg, FFmpegLocator.locate(),
+                       "the download and the rest of the program disagree about ffmpeg")
+    }
+
+    /// A user who sets ffmpeg for conversion means that ffmpeg.
+    func testAConfiguredFFmpegPathIsUsedForTheDownloadToo() {
+        // /bin/sh is executable on both platforms, so this is asserted
+        // rather than skipped. `XCTSkipUnless` would be the natural way to
+        // guard it and is inverted under swift-corelibs-xctest — it skips
+        // when the condition holds — which is how five injection tests came
+        // to skip themselves while reporting success.
+        let shell = "/bin/sh"
+        XCTAssertTrue(FileManager.default.isExecutableFile(atPath: shell))
+        XCTAssertEqual(DownloadTools.locate(configuredFFmpeg: shell).ffmpeg, shell)
+    }
+
+    /// A configured path that is not there must read as missing, or
+    /// `missing()` would report ffmpeg present and yt-dlp would be handed a
+    /// path to nothing.
+    func testAConfiguredPathThatIsNotThereCountsAsMissing() {
+        let located = DownloadTools.locate(configuredFFmpeg: "/nowhere/ffmpeg")
+        XCTAssertNil(located.ffmpeg)
+        XCTAssertTrue(located.missing().contains("ffmpeg"))
+    }
 }

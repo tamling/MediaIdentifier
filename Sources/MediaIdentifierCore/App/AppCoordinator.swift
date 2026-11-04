@@ -1063,9 +1063,12 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
             $0.hasError = false
         }
 
-        let downloader = VideoDownloader()
+        // The ffmpeg the user configured for conversion, so a download and
+        // a conversion cannot end up using two different binaries.
+        let downloader = VideoDownloader(
+            tools: .locate(configuredFFmpeg: settings.conversion.ffmpegPath))
         do {
-            let file = try downloader.download(
+            let arrival = try downloader.download(
                 url, into: importFolder,
                 onStart: { [weak self] process in
                     guard let self else { return }
@@ -1082,14 +1085,26 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
             )
             lock.lock(); _runningDownload = nil; lock.unlock()
 
+            let file = arrival.file
+            // Said plainly rather than reported as a download. With
+            // `--no-overwrites` yt-dlp exits 0 and prints the path of the
+            // file that was already there, which looks identical to a real
+            // download — so "Geladen:" was being claimed for a file
+            // nothing had fetched, and a page whose contents had changed
+            // since would never be fetched again.
+            let message = arrival.wasAlreadyThere
+                ? "Lag schon im Importordner, nichts neu geladen: "
+                    + file.lastPathComponent
+                : "Geladen: " + file.lastPathComponent
             log.append(RenameLogEntry(oldName: url, newName: file.lastPathComponent,
-                                      status: .downloaded))
+                                      status: arrival.wasAlreadyThere
+                                          ? .skipped : .downloaded))
             update {
                 $0.busy = false
                 $0.downloading = false
                 $0.downloadProgress = 1
                 $0.downloadDetail = nil
-                $0.lastResult = "Geladen: \(file.lastPathComponent)"
+                $0.lastResult = message
             }
             // Straight into the ordinary pipeline.
             scanSourceFolder()
@@ -1724,14 +1739,17 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         // summary — so a warning put there first vanished unread.
         var notes: [String] = []
         var failedSomething = false
+        // `if`, not `guard … else { return }`: a return may not cross a
+        // defer, and the compiler is right to say so.
         defer {
-            guard !notes.isEmpty else { return }
-            let appended = notes.joined(separator: " ")
-            let bad = failedSomething
-            update { snapshot in
-                if bad { snapshot.hasError = true }
-                let existing = snapshot.lastResult
-                snapshot.lastResult = existing == nil ? appended : existing! + " " + appended
+            if !notes.isEmpty {
+                let appended = notes.joined(separator: " ")
+                let bad = failedSomething
+                update { snapshot in
+                    if bad { snapshot.hasError = true }
+                    let existing = snapshot.lastResult
+                    snapshot.lastResult = existing.map { $0 + " " + appended } ?? appended
+                }
             }
         }
 

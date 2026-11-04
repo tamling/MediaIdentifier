@@ -179,6 +179,53 @@ final class MusicTaggingTests: XCTestCase {
         XCTAssertEqual(path, "Massive Attack/Mezzanine/03 - Teardrop.flac")
     }
 
+    // MARK: Names that are too long for a filesystem
+
+    /// Every component has to fit in 255 bytes, or the rename fails with
+    /// ENAMETOOLONG and the file stays where it was. The old limit was
+    /// `prefix(120)`, which counts *characters* — so a Japanese album title
+    /// came to 360 bytes and was handed to the filesystem as it was. (The
+    /// `prefix(while: { _ in true })` in front of it did nothing at all: it
+    /// is the identity.)
+    func testAVeryLongNameIsCutToFitTheFilesystem() {
+        let long = String(repeating: "a", count: 400)
+        let path = MusicNamer.relativePath(
+            for: tags("T", long, "A", track: 1), extension: "flac")
+        let album = try? XCTUnwrap(path?.split(separator: "/").dropFirst().first)
+        XCTAssertNotNil(album)
+        XCTAssertLessThanOrEqual(String(album!).utf8.count, 255)
+    }
+
+    /// The case the character count got wrong: three bytes per character.
+    func testTheLimitIsCountedInBytesAndNotInCharacters() {
+        // 300 characters, 900 bytes.
+        let japanese = String(repeating: "\u{8A9E}", count: 300)
+        let cut = MusicNamer.truncating(japanese, toBytes: 200)
+        XCTAssertLessThanOrEqual(cut.utf8.count, 200)
+        XCTAssertGreaterThan(cut.utf8.count, 190, "far more was thrown away than needed")
+        // Cut between characters, so it still decodes.
+        XCTAssertEqual(cut.unicodeScalars.count * 3, cut.utf8.count)
+    }
+
+    /// A family emoji is one grapheme cluster of several scalars. Cutting
+    /// inside it leaves a different emoji, or a stray joiner.
+    func testAnEmojiIsNotCutInHalf() {
+        let family = "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}"
+        XCTAssertEqual(family.utf8.count, 18)
+        // Room for one and a bit: the second must be dropped whole.
+        XCTAssertEqual(MusicNamer.truncating(family + family, toBytes: 20), family)
+    }
+
+    /// Cutting can leave a trailing space, which a path component may not
+    /// end in — so the trim has to happen after the cut, not before.
+    func testACutThatLandsOnASpaceDoesNotLeaveOneAtTheEnd() {
+        let text = String(repeating: "ab ", count: 200)
+        let cleaned = try? XCTUnwrap(MusicNamer.clean(text))
+        XCTAssertNotNil(cleaned)
+        XCTAssertFalse(cleaned!.hasSuffix(" "), "\"\(cleaned!)\"")
+        XCTAssertFalse(cleaned!.hasSuffix("."))
+    }
+
     /// Nothing is guessed: a file whose tags do not name all three is left
     /// where it is rather than filed somewhere nobody will look.
     func testIncompleteTagsProposeNothing() {

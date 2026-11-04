@@ -50,6 +50,34 @@ public final class VideoDownloader {
         }
     }
 
+    /// What one run produced.
+    public struct Arrival: Equatable, Sendable {
+        public let file: URL
+        /// True when the file was already in the import folder and yt-dlp
+        /// only pointed at it.
+        ///
+        /// `--no-overwrites` makes that a silent success: yt-dlp exits 0 and
+        /// prints the existing path, so the path file looks exactly as it
+        /// does after a real download and the interface said "Geladen:" for
+        /// a file it had not fetched. Worth telling apart — if the page
+        /// behind the URL has changed, "Geladen" is simply false.
+        public let wasAlreadyThere: Bool
+
+        public init(file: URL, wasAlreadyThere: Bool) {
+            self.file = file
+            self.wasAlreadyThere = wasAlreadyThere
+        }
+    }
+
+    /// How long a partial file is kept for a possible resume.
+    ///
+    /// yt-dlp continues an interrupted download from the `.part` in the
+    /// staging folder, which is worth keeping for a while — but only for a
+    /// while: nothing else ever deleted them, so a few cancelled downloads
+    /// of large files sat in the import folder for good, invisible because
+    /// the folder is hidden.
+    public static let partialLifetime: TimeInterval = 7 * 24 * 3600
+
     private let tools: DownloadTools
 
     public init(tools: DownloadTools = .locate()) {
@@ -62,15 +90,21 @@ public final class VideoDownloader {
         into importDirectory: URL,
         onStart: ((Process) -> Void)? = nil,
         progress: (@Sendable (Progress) -> Void)? = nil
-    ) throws -> URL {
+    ) throws -> Arrival {
         let invocation = try DownloadCommand.download(url: url, into: importDirectory,
                                                       tools: tools)
+
+        // What is in the folder before the run, so "already there" can be
+        // told from "arrived" without reading yt-dlp's wording.
+        let before = Set((try? FileManager.default.contentsOfDirectory(
+            atPath: importDirectory.path)) ?? [])
 
         // Fresh each run, so a path left behind by the previous one can
         // never be mistaken for this one's result.
         try? FileManager.default.createDirectory(at: invocation.stagingDirectory,
                                                  withIntermediateDirectories: true)
         try? FileManager.default.removeItem(at: invocation.statusFile)
+        Self.sweepStaging(invocation.stagingDirectory, keeping: invocation.statusFile)
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: invocation.executable)
@@ -121,7 +155,65 @@ public final class VideoDownloader {
             throw Failure.failed(code: process.terminationStatus, message: reason)
         }
         progress?(Progress(fraction: 1, isFinished: true))
-        return arrived
+        // This run's own leftovers go at once; everything else waits for the
+        // age check, because it may be a partial somebody still wants.
+        Self.sweepLeftovers(of: arrived, in: invocation.stagingDirectory)
+        return Arrival(file: arrived,
+                       wasAlreadyThere: before.contains(arrived.lastPathComponent))
+    }
+
+    /// Deletes stale leftovers from the staging folder.
+    ///
+    /// - Parameters:
+    ///   - keeping: the path file, which this run is about to read.
+    ///   - olderThan: how old a file has to be to go. The default keeps a
+    ///     week, so an interrupted download can still be resumed; zero
+    ///     clears everything, which is what a finished run wants.
+    ///
+    /// Age-based rather than "delete the lot", because yt-dlp resumes from
+    /// a `.part` and throwing one away silently turns a cancelled download
+    /// of twenty gigabytes into twenty gigabytes to fetch again.
+    static func sweepStaging(_ staging: URL, keeping keep: URL,
+                             olderThan age: TimeInterval = VideoDownloader.partialLifetime,
+                             now: Date = Date(),
+                             fileManager: FileManager = .default) {
+        guard let names = try? fileManager.contentsOfDirectory(atPath: staging.path) else {
+            return
+        }
+        for name in names where name != keep.lastPathComponent {
+            let url = staging.appendingPathComponent(name)
+            // No modification date is not a reason to delete something that
+            // might still be wanted, so one of those is left to the next
+            // pass — where it will still have no date, and still be left.
+            // Rare enough to prefer over deleting a file we know nothing
+            // about.
+            guard let modified = (try? fileManager
+                .attributesOfItem(atPath: url.path))?[.modificationDate] as? Date else {
+                continue
+            }
+            if now.timeIntervalSince(modified) >= age {
+                try? fileManager.removeItem(at: url)
+            }
+        }
+    }
+
+    /// Removes what this run left in staging, by name.
+    ///
+    /// yt-dlp names every temporary file after the output template, so they
+    /// all begin with the final file's stem: "ID_Title.f399.mp4.part",
+    /// "ID_Title.f140.m4a". Matching on that rather than clearing the folder
+    /// means a partial from a download the user cancelled and may resume is
+    /// not destroyed by an unrelated download succeeding.
+    static func sweepLeftovers(of arrived: URL, in staging: URL,
+                               fileManager: FileManager = .default) {
+        let stem = arrived.deletingPathExtension().lastPathComponent
+        guard !stem.isEmpty,
+              let names = try? fileManager.contentsOfDirectory(atPath: staging.path) else {
+            return
+        }
+        for name in names where name.hasPrefix(stem) {
+            try? fileManager.removeItem(at: staging.appendingPathComponent(name))
+        }
     }
 
     /// The path yt-dlp reported, if it reported one and it is really there.

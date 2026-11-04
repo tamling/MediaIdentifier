@@ -88,17 +88,38 @@ public enum MusicNamer {
         // Control characters, including the newline that a broken tagger
         // can leave in a title.
         text = String(text.unicodeScalars.filter { $0.value >= 0x20 && $0.value != 0x7F })
-        // A component may not end in a dot or a space: harmless on Linux,
-        // but the library may well be served to a Windows client.
+        // 200 bytes leaves room for everything this gets wrapped in — the
+        // track number, " (1998)" on an album folder, the extension — and
+        // keeps every component under Linux's 255-byte limit.
+        text = truncating(text, toBytes: 200)
+        // After the cut, not before: a component may not end in a dot or a
+        // space, and cutting can leave either. Harmless on Linux, but the
+        // library may well be served to a Windows client.
         while text.hasSuffix(".") || text.hasSuffix(" ") { text.removeLast() }
         text = text.trimmingCharacters(in: .whitespaces)
-        guard !text.isEmpty else { return nil }
-        // 150 bytes keeps every component under Linux's 255-byte limit
-        // even after a long extension.
-        if text.utf8.count > 150 {
-            text = String(text.prefix(while: { _ in true }).prefix(120))
-                .trimmingCharacters(in: .whitespaces)
-        }
         return text.isEmpty ? nil : text
+    }
+
+    /// Cuts `text` to at most `limit` bytes, never through the middle of a
+    /// character.
+    ///
+    /// Counted in bytes rather than in `String.prefix`, which counts
+    /// characters: the limit a filesystem enforces is a byte count, and a
+    /// Japanese title is three bytes a character — so 120 characters is 360
+    /// bytes and the rename fails with ENAMETOOLONG. Stepping by `Character`
+    /// rather than by UTF-8 index also keeps a flag or a family emoji whole
+    /// instead of leaving half a grapheme cluster behind.
+    static func truncating(_ text: String, toBytes limit: Int) -> String {
+        guard limit > 0 else { return "" }
+        guard text.utf8.count > limit else { return text }
+        var kept = ""
+        var used = 0
+        for character in text {
+            let size = String(character).utf8.count
+            if used + size > limit { break }
+            kept.append(character)
+            used += size
+        }
+        return kept
     }
 }

@@ -64,8 +64,11 @@ final class VideoDownloadIntegrationTests: XCTestCase {
 
     func testTheFileArrivesInTheImportFolder() throws {
         let seen = Recorder()
-        let file = try VideoDownloader().download(url, into: importFolder,
-                                                  progress: { seen.record($0) })
+        let arrival = try VideoDownloader().download(url, into: importFolder,
+                                                     progress: { seen.record($0) })
+        let file = arrival.file
+        XCTAssertFalse(arrival.wasAlreadyThere,
+                       "a fresh folder reported the file as already present")
 
         XCTAssertTrue(FileManager.default.fileExists(atPath: file.path),
                       "yt-dlp reported \(file.path), which is not there")
@@ -151,5 +154,39 @@ final class VideoDownloadIntegrationTests: XCTestCase {
             error in
             XCTAssertFalse("\(error)".isEmpty)
         }
+    }
+
+    /// `--no-overwrites` makes a second attempt a silent success: yt-dlp
+    /// exits 0 and prints the path of the file that is already there, which
+    /// is indistinguishable from a real download by the exit code or by the
+    /// path file. Measured here rather than assumed, because the whole
+    /// point of the flag is that nothing visible happens.
+    func testASecondAttemptSaysTheFileWasAlreadyThere() throws {
+        let first = try VideoDownloader().download(url, into: importFolder)
+        XCTAssertFalse(first.wasAlreadyThere)
+
+        let second = try VideoDownloader().download(url, into: importFolder)
+        XCTAssertEqual(second.file.lastPathComponent, first.file.lastPathComponent)
+        XCTAssertTrue(second.wasAlreadyThere,
+                      "a download that fetched nothing was reported as a download")
+    }
+
+    /// Nothing ever deleted these, and the folder is hidden, so a few
+    /// cancelled downloads of large files sat in the import folder for good.
+    func testStaleLeftoversInStagingAreSweptAway() throws {
+        let staging = importFolder.appendingPathComponent(
+            DownloadCommand.stagingFolderName)
+        try FileManager.default.createDirectory(at: staging,
+                                                withIntermediateDirectories: true)
+        let old = staging.appendingPathComponent("abandoned.mkv.part")
+        try Data(repeating: 0, count: 2048).write(to: old)
+        // Older than the week a resumable part is kept for.
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date().addingTimeInterval(-8 * 24 * 3600)],
+            ofItemAtPath: old.path)
+
+        _ = try VideoDownloader().download(url, into: importFolder)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: old.path),
+                       "an abandoned partial file was kept for ever")
     }
 }
