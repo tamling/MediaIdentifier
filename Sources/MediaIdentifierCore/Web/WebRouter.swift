@@ -420,10 +420,10 @@ public struct WebRouter: Sendable {
           <button type="submit">Rename the ticked files</button>
           \(sendButton)
         </form>
-        <form method="post" action="/library/select-all" class="inline-form">
+        <form method="post" action="/library/select-all" class="inline-form bare">
           \(csrf.hiddenField)<button type="submit" class="link">Tick all</button>
         </form>
-        <form method="post" action="/library/select-none" class="inline-form">
+        <form method="post" action="/library/select-none" class="inline-form bare">
           \(csrf.hiddenField)<button type="submit" class="link">Tick none</button>
         </form>
         """
@@ -1126,6 +1126,10 @@ public struct WebRouter: Sendable {
       details.card > summary { cursor:pointer; list-style:revert; }
       details.card > summary strong { color:#e6e6ea; }
       progress { width:100%; height:10px; }
+      /* A form that is only a text button: no box, no border, no padding —
+         otherwise "Tick all" renders as a bordered card of its own. */
+      .page form.bare { background:none; border:0; padding:0; margin:4px 14px 0 0;
+                        display:inline-block; width:auto; }
     </style>
     """
 
