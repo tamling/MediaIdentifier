@@ -22,7 +22,7 @@ final class AppWindow {
     private let moviesChooser: UnsafeMutablePointer<GtkWidget>
     private let seriesChooser: UnsafeMutablePointer<GtkWidget>
     private let musicChooser: UnsafeMutablePointer<GtkWidget>
-    private let modeCombo2: UnsafeMutablePointer<GtkWidget>
+    private let libraryModeCombo: UnsafeMutablePointer<GtkWidget>
     private let scanButton: UnsafeMutablePointer<GtkWidget>
     private let applyButton: UnsafeMutablePointer<GtkWidget>
     private let undoButton: UnsafeMutablePointer<GtkWidget>
@@ -184,13 +184,13 @@ final class AppWindow {
         seriesChooser = Self.folderChooser("Serienbibliothek")
 
         musicChooser = Self.folderChooser("Musikbibliothek")
-        modeCombo2 = gtk_combo_box_text_new()!
+        libraryModeCombo = gtk_combo_box_text_new()!
         for mode in LibraryMode.allCases {
-            gtk_combo_box_text_append_text(Gtk.comboBoxText(modeCombo2), mode.label)
+            gtk_combo_box_text_append_text(Gtk.comboBoxText(libraryModeCombo), mode.label)
         }
 
         let folders = Self.card(titled: "Bibliothek")
-        Self.add(Self.row("Sortiert", modeCombo2), to: folders)
+        Self.add(Self.row("Sortiert", libraryModeCombo), to: folders)
         Self.add(Self.row("Quelle", sourceChooser), to: folders)
         Self.add(Self.row("Filme", moviesChooser), to: folders)
         Self.add(Self.row("Serien", seriesChooser), to: folders)
@@ -412,9 +412,9 @@ final class AppWindow {
         // user cleared it.
         let chosenMusic = Gtk.chosenFolder(musicChooser)
         if !chosenMusic.isEmpty { settings.musicFolder = chosenMusic }
-        let mode = Int(gtk_combo_box_get_active(Gtk.comboBox(modeCombo2)))
-        if mode >= 0, mode < LibraryMode.allCases.count {
-            settings.libraryMode = LibraryMode.allCases[mode]
+        let library = Int(gtk_combo_box_get_active(Gtk.comboBox(libraryModeCombo)))
+        if library >= 0, library < LibraryMode.allCases.count {
+            settings.libraryMode = LibraryMode.allCases[library]
         }
         settings.remote = readRemoteFields(from: settings.remote)
         coordinator.submit(.saveSettings(settings))
@@ -567,7 +567,7 @@ final class AppWindow {
         Gtk.setChosenFolder(seriesChooser, settings.seriesFolder)
         Gtk.setChosenFolder(musicChooser, settings.musicFolder)
         if let index = LibraryMode.allCases.firstIndex(of: settings.libraryMode) {
-            gtk_combo_box_set_active(Gtk.comboBox(modeCombo2), Int32(index))
+            gtk_combo_box_set_active(Gtk.comboBox(libraryModeCombo), Int32(index))
         }
 
         Gtk.setText(of: llmURLEntry, settings.localLLMBaseURL)
