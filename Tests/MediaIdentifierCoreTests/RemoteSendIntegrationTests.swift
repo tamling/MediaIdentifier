@@ -173,8 +173,11 @@ final class RemoteSendIntegrationTests: XCTestCase {
         // moot on this platform and the test says so rather than passing
         // silently.
         let url = source.appendingPathComponent(name)
-        try XCTSkipUnless((try? Data(repeating: 0x41, count: 1_000).write(to: url)) != nil,
-                          "this filesystem will not store a newline in a name")
+        do {
+            try Data(repeating: 0x41, count: 1_000).write(to: url)
+        } catch {
+            throw XCTSkip("this filesystem will not store a newline in a name")
+        }
 
         scanAndSend()
 

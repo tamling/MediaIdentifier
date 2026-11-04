@@ -944,7 +944,15 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
                         oldName: local.lastPathComponent, newName: relative,
                         status: isPrimary ? .failure : .skipped,
                         errorDescription: "Die Datei ist nicht mehr da."))
-                    if isPrimary { itemFailed = true; break }
+                    if isPrimary {
+                        // Counted, not just flagged: `hasError` is derived
+                        // from this, and without it the run ended reporting
+                        // no error at all — "0 Dateien gesendet." with a
+                        // green badge, for a file that was lost.
+                        failed += 1
+                        itemFailed = true
+                        break
+                    }
                     continue
                 }
                 update {
