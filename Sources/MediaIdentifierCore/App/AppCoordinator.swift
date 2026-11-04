@@ -22,6 +22,29 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         /// memory before the user sees anything.
         public static let maximumFiles = 5_000
 
+        /// Music files under a folder.
+        ///
+        /// `.3gp` is in both registries and the video scanner already
+        /// claims it, so it is skipped here: a .3gp is almost always a
+        /// phone recording with a picture in it, and deciding per file
+        /// would mean starting a process for a case nobody has.
+        public static func audioFiles(under root: URL,
+                                      fileManager: FileManager = .default) -> [URL] {
+            guard let enumerator = fileManager.enumerator(
+                at: root, includingPropertiesForKeys: nil,
+                options: [.skipsHiddenFiles, .skipsPackageDescendants]
+            ) else { return [] }
+            var found: [URL] = []
+            for case let url as URL in enumerator {
+                guard AudioFileTypes.isAudio(url),
+                      !AudioFileTypes.claimedByVideoInstead
+                          .contains(url.pathExtension.lowercased()) else { continue }
+                found.append(url)
+                if found.count >= maximumFiles { break }
+            }
+            return found
+        }
+
         public static func videoFiles(under root: URL,
                                       fileManager: FileManager = .default) -> [URL] {
             guard let enumerator = fileManager.enumerator(
@@ -448,6 +471,11 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
             return
         }
 
+        if settings.libraryMode == .music {
+            scanForMusic(under: root, settings: settings)
+            return
+        }
+
         update { $0.busy = true; $0.convertStatus = "Looking for media…" }
         let urls = FolderScan.videoFiles(under: root)
         guard !urls.isEmpty else {
@@ -501,6 +529,73 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         refreshSnapshotCounts()
     }
 
+    /// Proposes a place for every music file, from its own tags.
+    ///
+    /// Nothing is guessed. A file whose tags do not name an artist, an
+    /// album and a title gets no proposal at all: filing it somewhere
+    /// plausible puts it where the user will not think to look, which is
+    /// worse than leaving it where they put it.
+    private func scanForMusic(under root: URL, settings: WebSettings) {
+        guard !settings.musicFolder.isEmpty else {
+            update {
+                $0.busy = false
+                $0.hasError = true
+                $0.lastResult = "Für den Musikmodus fehlt der Musikordner in den "
+                    + "Einstellungen."
+            }
+            return
+        }
+        guard let reader = AudioTagReader() else {
+            update {
+                $0.busy = false
+                $0.hasError = true
+                $0.lastResult = "ffmpeg/ffprobe wurden nicht gefunden; ohne sie lassen "
+                    + "sich die Tags nicht lesen: sudo apt install ffmpeg"
+            }
+            return
+        }
+
+        update { $0.busy = true; $0.convertStatus = "Musik wird gelesen …" }
+        let urls = FolderScan.audioFiles(under: root)
+        let musicRoot = URL(fileURLWithPath: settings.musicFolder, isDirectory: true)
+
+        var plan: [RenameItem] = []
+        var unreadable = 0
+        for url in urls {
+            guard let tags = reader.read(url),
+                  let relative = MusicNamer.relativePath(
+                    for: tags, extension: url.pathExtension) else {
+                unreadable += 1
+                continue
+            }
+            let parsed = ParsedRelease(originalFileName: url.lastPathComponent,
+                                       title: tags.title ?? url.lastPathComponent,
+                                       year: tags.year,
+                                       kind: .unknown)
+            plan.append(RenameItem(mediaFile: MediaFile(url: url, parsed: parsed),
+                                   outputRoot: musicRoot,
+                                   proposedRelativePath: relative))
+        }
+
+        lock.lock(); _items = plan; lock.unlock()
+        update {
+            $0.busy = false
+            $0.convertStatus = nil
+            $0.hasError = false
+            if plan.isEmpty {
+                $0.lastResult = urls.isEmpty
+                    ? "Keine Musikdateien in \(root.path) gefunden."
+                    : "\(urls.count) Musikdatei\(urls.count == 1 ? "" : "en") gefunden, "
+                        + "aber keine mit genug Tags (Künstler, Album, Titel)."
+            } else {
+                $0.lastResult = "\(plan.count) Titel bereit"
+                    + (unreadable > 0
+                        ? " · \(unreadable) ohne ausreichende Tags übersprungen." : ".")
+            }
+        }
+        refreshSnapshotCounts()
+    }
+
     private func applyRenames(accepting: Set<UUID>?) {
         var plan = items
         guard !plan.isEmpty else {
@@ -534,8 +629,51 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
             $0.lastResult = "Renamed \(outcome.succeeded), skipped \(outcome.skipped)"
                 + (outcome.failed > 0 ? ", failed \(outcome.failed)" : "") + "."
         }
+        if settings.libraryMode == .music { writeAlbumCovers(for: plan) }
         refreshSnapshotCounts()
         refreshJellyfinLibrary()
+    }
+
+    /// Writes each album's cover next to its tracks, once.
+    ///
+    /// From the file's own embedded picture, which is why this needs no
+    /// network: most tagged music carries its art. An album that already
+    /// has an image under any of the four names Jellyfin accepts is left
+    /// alone — overwriting one the user chose would be presumptuous.
+    private func writeAlbumCovers(for plan: [RenameItem]) {
+        guard let reader = AudioTagReader() else { return }
+        var done: Set<String> = []
+        var written = 0
+
+        for item in plan {
+            let coverRelative = MusicNamer.coverPath(forTrackAt: item.proposedRelativePath)
+            let folder = (coverRelative as NSString).deletingLastPathComponent
+            guard done.insert(folder).inserted else { continue }
+
+            let destination = item.outputRoot.appendingPathComponent(coverRelative)
+            let albumFolder = destination.deletingLastPathComponent()
+            // Any of folder/poster/cover/default, any of the image
+            // extensions: Jellyfin accepts all of them, so any one of
+            // them means this album is already covered.
+            let existing = (try? FileManager.default.contentsOfDirectory(
+                atPath: albumFolder.path)) ?? []
+            if existing.contains(where: {
+                AudioFileTypes.isCoverImage(URL(fileURLWithPath: $0))
+            }) { continue }
+
+            // The track has moved by now, so read the picture from where
+            // it landed rather than from where it came from.
+            let moved = item.outputRoot.appendingPathComponent(item.proposedRelativePath)
+            let source = FileManager.default.fileExists(atPath: moved.path)
+                ? moved : item.mediaFile.url
+            if reader.extractCover(from: source, to: destination) { written += 1 }
+        }
+
+        guard written > 0 else { return }
+        update {
+            $0.lastResult = ($0.lastResult ?? "")
+                + " \(written) Albumcover geschrieben."
+        }
     }
 
     /// Tells Jellyfin to rescan, so renamed files show up without the user

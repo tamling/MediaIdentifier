@@ -915,6 +915,12 @@ public struct WebRouter: Sendable {
             """
         }
 
+        let modeOptions = LibraryMode.allCases.map { mode in
+            let selected = mode == current.libraryMode ? " selected" : ""
+            return "<option value=\"\(mode.rawValue)\"\(selected)>"
+                + "\(Self.escape(mode.label))</option>"
+        }.joined()
+
         let identificationOptions = IdentificationMode.allCases.map { mode in
             let selected = mode == current.identification ? " selected" : ""
             return "<option value=\"\(mode.rawValue)\"\(selected)>\(Self.escape(mode.label))</option>"
@@ -954,11 +960,20 @@ public struct WebRouter: Sendable {
             <h1>Settings</h1>
             \(problems.isEmpty ? banner : "<p class=\"note\">Nothing was saved — please correct the fields marked below.</p>")
 
+            <h2>What this library holds</h2>
+            <label for="libraryMode">Sorting</label>
+            <select id="libraryMode" name="libraryMode">\(modeOptions)</select>
+            <p class="hint">Video and music are sorted differently — different folders, \
+        different names, and music is identified from its own tags rather than from the \
+        file name.</p>
+
             <h2>Folders</h2>
             \(field("sourceFolder", label: "Import from", value: current.sourceFolder,
                     hint: "The folder new downloads land in. Absolute path."))
             \(field("moviesFolder", label: "Movies library", value: current.moviesFolder))
             \(field("seriesFolder", label: "Series library", value: current.seriesFolder))
+            \(field("musicFolder", label: "Music library", value: current.musicFolder,
+                    hint: "Used in music mode: /Artist/Album (Year)/01 - Title.flac"))
             <label for="conflictPolicy">If a file already exists</label>
             <select id="conflictPolicy" name="conflictPolicy">\(conflictOptions)</select>
             <input type="hidden" name="watchSourceFolderPresent" value="1">

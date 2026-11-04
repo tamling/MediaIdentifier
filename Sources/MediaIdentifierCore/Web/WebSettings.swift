@@ -20,6 +20,25 @@ public enum IdentificationMode: String, Codable, Sendable, CaseIterable {
     }
 }
 
+/// Whether the program is sorting video or music.
+///
+/// A switch rather than one pass that handles both, because the two
+/// genuinely differ all the way down: what is enumerated, what is read
+/// from a file, how items are grouped, which library root they go to, and
+/// which columns the proposals list needs. A mixed list would be a table
+/// with half its columns empty on every row, in both front-ends.
+public enum LibraryMode: String, Codable, Sendable, CaseIterable {
+    case video
+    case music
+
+    public var label: String {
+        switch self {
+        case .video: return "Filme und Serien"
+        case .music: return "Musik"
+        }
+    }
+}
+
 /// The settings the web interface can change.
 ///
 /// Secrets are deliberately absent: API keys and tokens live in `SecretStore`,
@@ -29,6 +48,10 @@ public struct WebSettings: Codable, Sendable, Equatable {
     public var sourceFolder: String
     public var moviesFolder: String
     public var seriesFolder: String
+    /// Where music is filed. Only used in music mode.
+    public var musicFolder: String
+    /// Whether this is sorting video or music.
+    public var libraryMode: LibraryMode
     public var identification: IdentificationMode
     /// Base URL of the user's own model server, e.g. `http://192.168.1.2:1234`.
     public var localLLMBaseURL: String
@@ -66,7 +89,9 @@ public struct WebSettings: Codable, Sendable, Equatable {
     }
 
     public init(sourceFolder: String = "", moviesFolder: String = "",
-                seriesFolder: String = "", identification: IdentificationMode = .offline,
+                seriesFolder: String = "", musicFolder: String = "",
+                libraryMode: LibraryMode = .video,
+                identification: IdentificationMode = .offline,
                 localLLMBaseURL: String = "", localLLMModel: String = "",
                 jellyfinBaseURL: String = "",
                 conflictPolicy: ConflictPolicyChoice = .skip,
@@ -76,6 +101,8 @@ public struct WebSettings: Codable, Sendable, Equatable {
         self.sourceFolder = sourceFolder
         self.moviesFolder = moviesFolder
         self.seriesFolder = seriesFolder
+        self.musicFolder = musicFolder
+        self.libraryMode = libraryMode
         self.identification = identification
         self.localLLMBaseURL = localLLMBaseURL
         self.localLLMModel = localLLMModel
@@ -92,7 +119,8 @@ public struct WebSettings: Codable, Sendable, Equatable {
     /// older version still loads once a field is added. Without this, one
     /// unknown-shaped file would throw and silently reset *all* settings.
     enum CodingKeys: String, CodingKey {
-        case sourceFolder, moviesFolder, seriesFolder, identification
+        case sourceFolder, moviesFolder, seriesFolder, musicFolder, libraryMode
+        case identification
         case localLLMBaseURL, localLLMModel, jellyfinBaseURL
         case conflictPolicy, watchSourceFolder, conversion, remote
     }
@@ -110,6 +138,8 @@ public struct WebSettings: Codable, Sendable, Equatable {
         sourceFolder = value(.sourceFolder, defaults.sourceFolder)
         moviesFolder = value(.moviesFolder, defaults.moviesFolder)
         seriesFolder = value(.seriesFolder, defaults.seriesFolder)
+        musicFolder = value(.musicFolder, defaults.musicFolder)
+        libraryMode = value(.libraryMode, defaults.libraryMode)
         identification = value(.identification, defaults.identification)
         localLLMBaseURL = value(.localLLMBaseURL, defaults.localLLMBaseURL)
         localLLMModel = value(.localLLMModel, defaults.localLLMModel)
@@ -142,6 +172,7 @@ public struct WebSettings: Codable, Sendable, Equatable {
             ("sourceFolder", sourceFolder, "The folder to import from"),
             ("moviesFolder", moviesFolder, "The movies folder"),
             ("seriesFolder", seriesFolder, "The series folder"),
+            ("musicFolder", musicFolder, "The music folder"),
         ] where !path.isEmpty {
             if !path.hasPrefix("/") {
                 found.append(Problem(field: field,
@@ -228,6 +259,10 @@ public struct WebSettings: Codable, Sendable, Equatable {
         if let value = fields["sourceFolder"] { settings.sourceFolder = value }
         if let value = fields["moviesFolder"] { settings.moviesFolder = value }
         if let value = fields["seriesFolder"] { settings.seriesFolder = value }
+        if let value = fields["musicFolder"] { settings.musicFolder = value }
+        if let value = fields["libraryMode"], let mode = LibraryMode(rawValue: value) {
+            settings.libraryMode = mode
+        }
         if let value = fields["localLLMBaseURL"] { settings.localLLMBaseURL = value }
         if let value = fields["localLLMModel"] { settings.localLLMModel = value }
         if let value = fields["jellyfinBaseURL"] { settings.jellyfinBaseURL = value }
