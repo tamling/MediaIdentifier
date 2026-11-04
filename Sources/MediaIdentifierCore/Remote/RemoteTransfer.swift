@@ -59,6 +59,7 @@ public final class RemoteTransfer {
         relativePath: String,
         to target: RemoteTarget,
         password: String?,
+        keepExisting: Bool = false,
         onStart: ((Process) -> Void)? = nil,
         progress: (@Sendable (Progress) -> Void)? = nil
     ) throws {
@@ -71,7 +72,7 @@ public final class RemoteTransfer {
             invocation = try RemoteCommand.rsync(
                 target, localFile: localFile, relativePath: relativePath,
                 rsyncPath: tools.rsync ?? "rsync", sshPath: tools.ssh ?? "ssh",
-                password: password)
+                password: password, keepExisting: keepExisting)
         case .sftp:
             invocation = try RemoteCommand.sftp(
                 target, localFile: localFile, relativePath: relativePath,

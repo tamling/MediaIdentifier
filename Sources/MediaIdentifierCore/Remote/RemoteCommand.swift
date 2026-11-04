@@ -189,7 +189,8 @@ public enum RemoteCommand {
                              relativePath: String,
                              rsyncPath: String,
                              sshPath: String,
-                             password: String?) throws -> Invocation {
+                             password: String?,
+                             keepExisting: Bool = false) throws -> Invocation {
         guard !target.host.isEmpty, !target.basePath.isEmpty else {
             throw Failure.notConfigured("Adresse oder Zielpfad fehlt")
         }
@@ -214,7 +215,7 @@ public enum RemoteCommand {
             sshCommand = "sshpass -e " + sshCommand
         }
 
-        let arguments = [
+        var arguments = [
             "--archive",             // keep times and permissions
             "--partial",             // keep a half-sent file so it can resume
             // Creates Serien/Name/Staffel on the way. rsync 3.2.3 and
@@ -232,6 +233,13 @@ public enum RemoteCommand {
             localFile.path,
             "\(target.destination):\(destination)",
         ]
+        if keepExisting {
+            // "Skip the file" has to mean the server's copy survives.
+            // Without this, a send silently replaced whatever was there —
+            // a 700 MB web rip over a 12 GB remux, say — whatever the
+            // conflict policy said.
+            arguments.insert("--ignore-existing", at: 0)
+        }
 
         if target.authentication == .password {
             guard let password, !password.isEmpty else {

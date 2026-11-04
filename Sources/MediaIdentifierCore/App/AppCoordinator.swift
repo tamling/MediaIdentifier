@@ -776,6 +776,12 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         lock.unlock()
     }
 
+    /// Only for tests: proposals, without needing a scan and a real folder.
+    func setItemsForTesting(_ items: [RenameItem]) {
+        lock.lock(); _items = items; lock.unlock()
+        refreshSnapshotCounts()
+    }
+
     /// Only for tests: the probe results a run would otherwise have to reach
     /// a server to produce.
     func recordProbeForTesting(_ subject: ProbeSubject, ok: Bool, detail: String) {
@@ -863,8 +869,14 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
     /// the proposals name.
     ///
     /// A copy, not a move: the local file stays unless the user has ticked
-    /// "remove the local copy". Sending is then undoable by deleting what
-    /// arrived, which is the same bargain the converter offers.
+    /// "remove the local copy".
+    ///
+    /// Undoable only in the sense that the local file is still here. What
+    /// arrived may have replaced something — neither rsync nor sftp is told
+    /// to refuse an existing file unless the conflict policy says to skip —
+    /// and nothing here can put that back. Two proposals that resolve to
+    /// the same remote path are refused outright rather than silently
+    /// collapsing into one file on the server.
     private func transferFiles(accepting: Set<UUID>) {
         lock.lock(); _queuedTransferRuns = max(0, _queuedTransferRuns - 1); lock.unlock()
 
@@ -901,11 +913,39 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
             }
         }
 
-        let pending = items.filter { accepting.contains($0.id) }
+        var pending = items.filter { accepting.contains($0.id) }
         guard !pending.isEmpty else {
             clearTransferCancelRequest()
             update { $0.lastResult = "Es war nichts angehakt, also wurde nichts gesendet." }
             return
+        }
+
+        // Two ticked proposals that resolve to the same remote path would
+        // arrive one on top of the other, leaving one file where the user
+        // had two — and, with "delete the local copy" on, destroying both
+        // originals. Refused, with both named, rather than resolved
+        // silently: which of a 1080p and a 720p rip to keep is not a
+        // decision this code should make on its own.
+        var byDestination: [String: [RenameItem]] = [:]
+        for item in pending {
+            byDestination[item.proposedRelativePath, default: []].append(item)
+        }
+        let collisions = byDestination.filter { $0.value.count > 1 }
+        if !collisions.isEmpty {
+            let names = collisions.values.flatMap { $0 }
+                .map(\.originalFileName).sorted().joined(separator: ", ")
+            let colliding = Set(collisions.values.flatMap { $0 }.map(\.id))
+            pending = pending.filter { !colliding.contains($0.id) }
+            update {
+                $0.hasError = true
+                $0.lastResult = "Mehrere Dateien sollen an dieselbe Stelle auf dem Server: "
+                    + names + ". Diese wurden nicht gesendet — bitte eine davon abwählen "
+                    + "oder umbenennen."
+            }
+            guard !pending.isEmpty else {
+                clearTransferCancelRequest()
+                return
+            }
         }
 
         lock.lock(); _transferRunning = true; lock.unlock()
@@ -971,6 +1011,9 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
                 do {
                     try transfer.send(
                         local, relativePath: relative, to: target, password: password,
+                        // "Skip the file" is a promise about the server's
+                        // copy too, not only about a local rename.
+                        keepExisting: settings.conflictPolicy == .skip,
                         onStart: { [weak self] process in
                             guard let self else { return }
                             self.lock.lock()

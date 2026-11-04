@@ -238,6 +238,55 @@ final class RemoteSendTests: XCTestCase {
                                              current: stored).port, 2200)
     }
 
+    // MARK: Two files, one destination
+
+    /// Two rips of the same episode resolve to the same remote path. Sent,
+    /// one lands on top of the other and the user has one file where they
+    /// had two — and with "delete the local copy" on, both originals are
+    /// gone. Which to keep is not a decision this code should make.
+    func testProposalsThatCollideOnTheServerAreRefusedRatherThanOverwritten() {
+        enableRemote()
+        let a = Self.item(source: "/downloads/Dark.S01E01.1080p.mkv",
+                          relative: "Dark/Staffel 01/Dark - S01E01.mkv")
+        let b = Self.item(source: "/downloads/Dark.S01E01.720p.mkv",
+                          relative: "Dark/Staffel 01/Dark - S01E01.mkv")
+        coordinator.setItemsForTesting([a, b])
+
+        coordinator.executeForTesting(.transferFiles(accepting: [a.id, b.id]))
+
+        let result = coordinator.snapshot.lastResult ?? ""
+        XCTAssertTrue(result.contains("dieselbe Stelle"), result)
+        XCTAssertTrue(result.contains("Dark.S01E01.1080p.mkv"), result)
+        XCTAssertTrue(result.contains("Dark.S01E01.720p.mkv"), result)
+        XCTAssertTrue(coordinator.snapshot.hasError)
+        // Neither was sent, so neither left the list.
+        XCTAssertEqual(coordinator.items.count, 2)
+    }
+
+    /// Only the colliding pair is held back; anything else still goes.
+    func testOnlyTheCollidingProposalsAreHeldBack() {
+        enableRemote()
+        let a = Self.item(source: "/downloads/Dark.S01E01.1080p.mkv",
+                          relative: "Dark/Staffel 01/Dark - S01E01.mkv")
+        let b = Self.item(source: "/downloads/Dark.S01E01.720p.mkv",
+                          relative: "Dark/Staffel 01/Dark - S01E01.mkv")
+        let c = Self.item(source: "/downloads/Dark.S01E02.1080p.mkv",
+                          relative: "Dark/Staffel 01/Dark - S01E02.mkv")
+        coordinator.setItemsForTesting([a, b, c])
+
+        coordinator.executeForTesting(.transferFiles(accepting: [a.id, b.id, c.id]))
+
+        // The third one was attempted — it fails for want of a real server,
+        // which is fine; what matters is that it was not held back with the
+        // other two.
+        XCTAssertTrue(coordinator.logEntries.contains {
+            $0.oldName == "Dark.S01E02.1080p.mkv"
+        }, "a proposal that collided with nothing was held back too")
+        XCTAssertFalse(coordinator.logEntries.contains {
+            $0.oldName.contains("720p")
+        }, "a colliding proposal was sent anyway")
+    }
+
     // MARK: A probe describes one particular server
 
     /// Change the address and the stored answer is about a different
