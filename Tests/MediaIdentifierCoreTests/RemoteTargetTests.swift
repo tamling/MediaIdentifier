@@ -46,10 +46,23 @@ final class RemoteTargetTests: XCTestCase {
         XCTAssertEqual(target.basePath, "/srv/media")
     }
 
-    func testAnImpossiblePortFallsBackToTwentyTwo() {
-        XCTAssertEqual(RemoteTarget(port: 0).port, 22)
-        XCTAssertEqual(RemoteTarget(port: 99999).port, 22)
+    /// An impossible port is KEPT and reported, not corrected.
+    ///
+    /// It used to be clamped to 22 on the way in, which made the
+    /// "Der Port muss 1–65535 sein." message unreachable and turned a
+    /// typo into a connection to a different machine's SSH port. This
+    /// test asserted the clamping — it pinned the defect in place.
+    func testAnImpossiblePortIsReportedRatherThanCorrected() {
+        XCTAssertEqual(RemoteTarget(port: 70000).port, 70000, "the value was rewritten")
         XCTAssertEqual(RemoteTarget(port: 2222).port, 2222)
+
+        let broken = RemoteTarget(isEnabled: true, host: "nas", port: 70000,
+                                  user: "tam", basePath: "/srv")
+        XCTAssertTrue(broken.problems().contains { $0.field == "remotePort" },
+                      "an impossible port produced no complaint")
+        let fine = RemoteTarget(isEnabled: true, host: "nas", port: 2222,
+                                user: "tam", basePath: "/srv")
+        XCTAssertTrue(fine.problems().isEmpty)
     }
 
     func testDestinationIsUserAtHost() {
@@ -61,11 +74,14 @@ final class RemoteTargetTests: XCTestCase {
 
     // MARK: Settings file
 
-    func testDecodingAppliesTheSameClampingAsTheForm() throws {
+    /// A hand-edited settings file gets the same treatment as the form:
+    /// trimmed, and an impossible port kept so it can be complained about.
+    func testDecodingAppliesTheSameRulesAsTheForm() throws {
         let json = #"{"isEnabled":true,"host":" nas ","port":70000,"user":"tam","basePath":"/srv"}"#
         let target = try JSONDecoder().decode(RemoteTarget.self, from: Data(json.utf8))
         XCTAssertEqual(target.host, "nas")
-        XCTAssertEqual(target.port, 22)
+        XCTAssertEqual(target.port, 70000)
+        XCTAssertTrue(target.problems().contains { $0.field == "remotePort" })
     }
 
     func testRoundTripIsLossless() throws {

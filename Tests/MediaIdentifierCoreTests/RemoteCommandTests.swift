@@ -130,9 +130,28 @@ final class RemoteCommandTests: XCTestCase {
             target(), localFile: file, relativePath: relative,
             rsyncPath: "/usr/bin/rsync", sshPath: "/usr/bin/ssh", password: nil
         )
-        XCTAssertTrue(invocation.arguments.contains("--partial"))
+        // --partial-dir, not --partial: a plain --partial leaves the
+        // fragment under the final name, and --ignore-existing then skips
+        // it on the retry, reports success, and lets the local original be
+        // deleted while the server keeps a truncated file.
+        XCTAssertTrue(invocation.arguments.contains("--partial-dir=.mediafin-partial"),
+                      "\(invocation.arguments)")
+        XCTAssertFalse(invocation.arguments.contains("--partial"),
+                       "a bare --partial puts the fragment under the final name")
         XCTAssertTrue(invocation.arguments.contains("--info=progress2"))
         XCTAssertTrue(invocation.arguments.contains("--mkpath"))
+    }
+
+    /// The pair that caused it, asserted together so neither can come back
+    /// on its own.
+    func testSkippingExistingFilesCannotMistakeAFragmentForOne() throws {
+        let invocation = try RemoteCommand.rsync(
+            target(), localFile: file, relativePath: relative,
+            rsyncPath: "/usr/bin/rsync", sshPath: "/usr/bin/ssh", password: nil,
+            keepExisting: true
+        )
+        XCTAssertTrue(invocation.arguments.contains("--ignore-existing"))
+        XCTAssertTrue(invocation.arguments.contains("--partial-dir=.mediafin-partial"))
     }
 
     func testRsyncUsesTheIdentityFileAndOnlyThatOne() throws {
