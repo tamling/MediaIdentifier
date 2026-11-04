@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(Glibc)
+import Glibc  // kill(2), for a probe that ignores SIGTERM
+#endif
 
 /// Runs the transfer and reports how far it has got.
 ///
@@ -185,8 +188,22 @@ public final class RemoteTransfer {
         } catch {
             return (false, "\(executable) ließ sich nicht starten: \(error)")
         }
+        // Bounded. ConnectTimeout only covers the TCP handshake: point this
+        // at a NAS whose target path sits on a hung NFS mount or a
+        // spun-down disk and ssh connects fine, then the remote `test -d`
+        // never returns. This runs on the coordinator's serial queue, so
+        // waiting for ever would take the whole application with it — the
+        // traffic light, the scan button, everything.
+        guard Self.wait(for: process, upTo: Self.probeTimeout) else {
+            process.terminate()
+            _ = Self.wait(for: process, upTo: 2)
+            if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+            return (false, "Keine Antwort innerhalb von \(Int(Self.probeTimeout)) Sekunden. "
+                        + "Der Server ist erreichbar, aber \(target.basePath) antwortet "
+                        + "nicht — ein hängender Netzlaufwerks-Mount oder eine Festplatte "
+                        + "im Standby sehen genau so aus.")
+        }
         let errorData = errPipe.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
 
         guard process.terminationStatus == 0 else {
             let text = String(data: errorData, encoding: .utf8) ?? ""
@@ -201,6 +218,25 @@ public final class RemoteTransfer {
             return (false, Self.explain(text))
         }
         return (true, "Angemeldet, \(target.basePath) ist beschreibbar.")
+    }
+
+    /// How long the traffic light waits for a server before calling it
+    /// unreachable. Long enough for a sleeping disk to spin up, short
+    /// enough that nobody thinks the program has frozen.
+    static let probeTimeout: TimeInterval = 30
+
+    /// Waits for a process, giving up after `seconds`.
+    ///
+    /// Polled rather than `waitUntilExit()`, which cannot be interrupted.
+    /// The interval is small enough to be imperceptible and large enough
+    /// not to spin a core.
+    static func wait(for process: Process, upTo seconds: TimeInterval) -> Bool {
+        let deadline = Date().addingTimeInterval(seconds)
+        while process.isRunning {
+            if Date() >= deadline { return false }
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        return true
     }
 
     /// `rsync  version 3.2.7  protocol version 31` → (3, 2, 7).

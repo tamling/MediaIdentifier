@@ -118,6 +118,34 @@ final class RemoteTransferTests: XCTestCase {
         XCTAssertTrue(message.contains("SFTP"), message)
     }
 
+    // MARK: Bounded waiting
+
+    /// The probe runs on the coordinator's serial queue, so a server that
+    /// accepts the connection and then never answers would take the whole
+    /// application with it — ConnectTimeout covers only the handshake.
+    func testWaitingForAProcessGivesUp() {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        process.arguments = ["-c", "sleep 30"]
+        try? process.run()
+
+        let started = Date()
+        let finished = RemoteTransfer.wait(for: process, upTo: 0.5)
+        let waited = Date().timeIntervalSince(started)
+
+        XCTAssertFalse(finished, "a process that is still running was reported as finished")
+        XCTAssertLessThan(waited, 5, "the wait did not give up")
+        process.terminate()
+    }
+
+    func testWaitingReturnsAsSoonAsTheProcessIsDone() {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        process.arguments = ["-c", "exit 0"]
+        try? process.run()
+        XCTAssertTrue(RemoteTransfer.wait(for: process, upTo: 10))
+    }
+
     // MARK: Tools
 
     func testMissingToolsAreNamedPerTransport() {

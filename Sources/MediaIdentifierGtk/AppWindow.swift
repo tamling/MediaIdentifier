@@ -60,6 +60,16 @@ final class AppWindow {
     /// So the panel opens itself once when something breaks, and then leaves
     /// the user's choice alone.
     private var hasOpenedChecksOnFailure = false
+
+    /// The settings the widgets were filled from.
+    ///
+    /// Saving writes back only the fields whose widget differs from this.
+    /// Both front-ends share one configuration file, so without it the
+    /// window — which reads the settings once, at startup — would write its
+    /// hours-old copy back over whatever the web interface had changed in
+    /// the meantime. That includes switching "delete the local file after
+    /// sending" back on.
+    private var loadedSettings = WebSettings()
     private var checkWidgets: [UnsafeMutablePointer<GtkWidget>] = []
 
     /// The rows currently on screen, kept so they can be destroyed without
@@ -387,25 +397,42 @@ final class AppWindow {
     /// rather than quietly becoming 22, which would send the library to
     /// whatever answers there.
     private func readRemoteFields(from current: RemoteTarget) -> RemoteTarget {
+        let loaded = loadedSettings.remote
         var target = current
-        target.isEnabled = Gtk.isChecked(remoteEnabledCheck)
-        target.removeLocalAfterSend = Gtk.isChecked(remoteRemoveLocalCheck)
-        target.host = Gtk.text(of: remoteHostEntry).trimmingCharacters(in: .whitespaces)
-        target.user = Gtk.text(of: remoteUserEntry).trimmingCharacters(in: .whitespaces)
-        target.basePath = Gtk.text(of: remoteBaseEntry).trimmingCharacters(in: .whitespaces)
-        target.identityFile =
-            Gtk.text(of: remoteIdentityEntry).trimmingCharacters(in: .whitespaces)
+
+        // Each field is written back only when the widget differs from what
+        // was loaded into it — that is, only when the user changed it here.
+        // Anything they did not touch keeps whatever is in the settings now,
+        // which may have been changed from the web interface since.
+        func merge<T: Equatable>(_ widget: T, _ wasLoaded: T, into field: inout T) {
+            if widget != wasLoaded { field = widget }
+        }
+
+        merge(Gtk.isChecked(remoteEnabledCheck), loaded.isEnabled, into: &target.isEnabled)
+        merge(Gtk.isChecked(remoteRemoveLocalCheck), loaded.removeLocalAfterSend,
+              into: &target.removeLocalAfterSend)
+        merge(Gtk.text(of: remoteHostEntry).trimmingCharacters(in: .whitespaces),
+              loaded.host, into: &target.host)
+        merge(Gtk.text(of: remoteUserEntry).trimmingCharacters(in: .whitespaces),
+              loaded.user, into: &target.user)
+        merge(Gtk.text(of: remoteBaseEntry).trimmingCharacters(in: .whitespaces),
+              loaded.basePath, into: &target.basePath)
+        merge(Gtk.text(of: remoteIdentityEntry).trimmingCharacters(in: .whitespaces),
+              loaded.identityFile, into: &target.identityFile)
+
         if let port = Int(Gtk.text(of: remotePortEntry).trimmingCharacters(in: .whitespaces)),
            (1...65535).contains(port) {
-            target.port = port
+            merge(port, loaded.port, into: &target.port)
         }
         let transport = Int(gtk_combo_box_get_active(Gtk.comboBox(remoteTransportCombo)))
         if transport >= 0, transport < RemoteTarget.Transport.allCases.count {
-            target.transport = RemoteTarget.Transport.allCases[transport]
+            merge(RemoteTarget.Transport.allCases[transport], loaded.transport,
+                  into: &target.transport)
         }
         let auth = Int(gtk_combo_box_get_active(Gtk.comboBox(remoteAuthCombo)))
         if auth >= 0, auth < RemoteTarget.Authentication.allCases.count {
-            target.authentication = RemoteTarget.Authentication.allCases[auth]
+            merge(RemoteTarget.Authentication.allCases[auth], loaded.authentication,
+                  into: &target.authentication)
         }
         return target
     }
@@ -472,6 +499,7 @@ final class AppWindow {
 
     private func loadFolders() {
         let settings = coordinator.settings
+        loadedSettings = settings
         Gtk.setChosenFolder(sourceChooser, settings.sourceFolder)
         Gtk.setChosenFolder(moviesChooser, settings.moviesFolder)
         Gtk.setChosenFolder(seriesChooser, settings.seriesFolder)
@@ -749,9 +777,13 @@ final class AppWindow {
         Styling.style(row, "mf-row")
         if banded { Styling.style(row, "mf-row-alt") }
 
-        // The planner already decided what it would accept — a file it is
-        // unsure about comes in unticked. Overriding that here would mean the
-        // window quietly disagreeing with the engine about what is safe.
+        // Whatever the engine says about this item. As things stand the
+        // planner never declines one — it flags a problem with `conflict`
+        // rather than by setting isAccepted to false — so in practice this
+        // is always ticked. Reading the field anyway keeps the window from
+        // disagreeing with the engine if that ever changes. (An earlier
+        // comment here claimed the planner leaves uncertain files unticked.
+        // It does not; nothing in Core ever assigns isAccepted = false.)
         let check = gtk_check_button_new()!
         Gtk.setChecked(check, item.isAccepted)
         gtk_widget_set_valign(check, GTK_ALIGN_CENTER)
