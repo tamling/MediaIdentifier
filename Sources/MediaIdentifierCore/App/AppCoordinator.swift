@@ -76,6 +76,14 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
     private var _queuedTransferRuns = 0
     private var _runningTransfer: Process?
     private var _probes: [ProbeSubject: ProbeResult] = [:]
+    /// Commands accepted but not finished.
+    ///
+    /// Counted in `submit`, before the queue is even touched, because the
+    /// interface redirects the moment a button is pressed: without this, the
+    /// page it redirects to is rendered before the work starts, sees nothing
+    /// happening, and stops refreshing. The user then stares at the state
+    /// from before they pressed the button.
+    private var _pendingWork = 0
 
     /// Set when the settings file could not be read, so the interface can say
     /// so instead of silently running on defaults.
@@ -161,7 +169,39 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         if case .transferFiles = command {
             lock.lock(); _queuedTransferRuns += 1; lock.unlock()
         }
-        queue.async { [weak self] in self?.execute(command) }
+        if Self.isWork(command) {
+            lock.lock(); _pendingWork += 1; lock.unlock()
+            update { $0.queuedWork = self.pendingWorkCount }
+        }
+        queue.async { [weak self] in
+            guard let self else { return }
+            self.execute(command)
+            if Self.isWork(command) {
+                self.lock.lock()
+                self._pendingWork = max(0, self._pendingWork - 1)
+                self.lock.unlock()
+                self.update { $0.queuedWork = self.pendingWorkCount }
+            }
+        }
+    }
+
+    var pendingWorkCount: Int { lock.lock(); defer { lock.unlock() }; return _pendingWork }
+
+    /// Whether a command does something the user should see progress for.
+    ///
+    /// Saving a setting or storing a key finishes before the redirect lands;
+    /// scanning, renaming, sending and the connection probes do not.
+    static func isWork(_ command: WebCommand) -> Bool {
+        switch command {
+        case .saveSettings, .setSecret, .setAllAccepted, .clearHistory,
+             .cancelConversions, .cancelTransfers:
+            return false
+        case .scanSourceFolder, .applyProposedRenames, .undoLastRename,
+             .findConvertible, .convertFiles, .transferFiles,
+             .testLocalLLMConnection, .testJellyfinConnection,
+             .testRemoteConnection, .checkEverything:
+            return true
+        }
     }
 
     /// Runs a command and waits for it. Only for tests: a request must never
@@ -1078,14 +1118,19 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
     }
 
     private func refreshSnapshotCounts() {
-        let count = items.count
+        let all = items
+        let count = all.count
+        let accepted = all.filter(\.isAccepted).count
         let settings = self.settings
         let hasJellyfin = !settings.jellyfinBaseURL.isEmpty
             && secretStore.value(for: .jellyfinToken) != nil
         let done = log.entries.filter { $0.status == .success }.count
         update {
             $0.totalItems = count
-            $0.ready = count
+            // The ones that would actually be acted on, which is not the
+            // same as the number proposed — it used to be set to `count`,
+            // so the window printed the same number twice.
+            $0.ready = accepted
             $0.done = done
             $0.watchActive = settings.watchSourceFolder
             $0.jellyfinConfigured = hasJellyfin

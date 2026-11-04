@@ -34,6 +34,12 @@ public struct StatusSnapshot: Codable, Sendable, Equatable {
     public var pendingTransfers: Int
     /// The remote library is switched on and complete enough to use.
     public var remoteConfigured: Bool
+    /// Commands accepted but not finished, including ones still queued.
+    ///
+    /// `busy` is only set once a job is running, and every button press
+    /// redirects before that happens — so a page that refreshed on `busy`
+    /// alone stopped refreshing exactly when the user was waiting.
+    public var queuedWork: Int
 
     public init(
         updated: Date = Date(),
@@ -57,7 +63,8 @@ public struct StatusSnapshot: Codable, Sendable, Equatable {
         transferProgress: Double = 0,
         transferDetail: String? = nil,
         pendingTransfers: Int = 0,
-        remoteConfigured: Bool = false
+        remoteConfigured: Bool = false,
+        queuedWork: Int = 0
     ) {
         self.updated = updated
         self.busy = busy
@@ -81,7 +88,12 @@ public struct StatusSnapshot: Codable, Sendable, Equatable {
         self.transferDetail = transferDetail
         self.pendingTransfers = pendingTransfers
         self.remoteConfigured = remoteConfigured
+        self.queuedWork = queuedWork
     }
+
+    /// Something is happening, or is about to. What the interface should
+    /// keep refreshing for.
+    public var isWorking: Bool { busy || queuedWork > 0 }
 
     /// Percent (0–100) of whichever job is currently active.
     public var activePercent: Int {

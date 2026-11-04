@@ -57,6 +57,9 @@ final class AppWindow {
 
     /// The lamps as last drawn, so an unchanged panel is left alone.
     private var renderedCheckSignature: [String]?
+    /// So the panel opens itself once when something breaks, and then leaves
+    /// the user's choice alone.
+    private var hasOpenedChecksOnFailure = false
     private var checkWidgets: [UnsafeMutablePointer<GtkWidget>] = []
 
     /// The rows currently on screen, kept so they can be destroyed without
@@ -232,6 +235,11 @@ final class AppWindow {
         Self.add(remoteProgress, to: remote)
 
         let sendRow = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8)!
+        // Testing the server on its own, rather than only as part of
+        // "Alles prüfen": this is the one the user presses while they are
+        // still getting the address and the key right.
+        let testServerButton = gtk_button_new_with_label("Server testen")!
+        gtk_box_pack_start(Gtk.box(sendRow), testServerButton, 0, 0, 0)
         sendButton = gtk_button_new_with_label("Zum Server senden")!
         cancelSendButton = gtk_button_new_with_label("Stopp")!
         gtk_box_pack_end(Gtk.box(sendRow), sendButton, 0, 0, 0)
@@ -318,6 +326,7 @@ final class AppWindow {
         Gtk.onClick(sendButton, self) { $0.sendSelected() }
         Gtk.onClick(cancelSendButton, self) { $0.cancelSending() }
         Gtk.onClick(checkButton, self) { $0.checkEverything() }
+        Gtk.onClick(testServerButton, self) { $0.testServer() }
 
         loadFolders()
         refresh()
@@ -411,6 +420,14 @@ final class AppWindow {
 
     func cancelSending() {
         coordinator.submit(.cancelTransfers)
+    }
+
+    /// Saves first, for the same reason the model-server test does: testing
+    /// the stored address while the user looks at a corrected one reports on
+    /// the wrong server.
+    func testServer() {
+        saveFolders()
+        coordinator.submit(.testRemoteConnection)
     }
 
     /// Saves first, so the lamps report on what is in the fields rather than
@@ -513,7 +530,7 @@ final class AppWindow {
         gtk_header_bar_set_subtitle(Gtk.headerBar(header), subtitle)
 
         Gtk.setText(countsLabel,
-                    "\(state.totalItems) Vorschläge · \(state.ready) bereit · "
+                    "\(state.totalItems) Vorschläge · \(state.ready) angehakt · "
                         + "\(state.done) umbenannt")
         Gtk.setText(resultLabel, state.lastResult ?? "")
 
@@ -557,6 +574,12 @@ final class AppWindow {
         Gtk.setText(checksSummary, summary)
         // So a collapsed panel still says whether anything is wrong.
         gtk_expander_set_label(Gtk.expander(checksExpander), "Status — " + summary)
+        // A red lamp must not stay folded away behind a summary line. Opened
+        // once, not on every refresh, so it cannot fight a user who closes it.
+        if SystemChecks.worst(checks) == .failed, !hasOpenedChecksOnFailure {
+            hasOpenedChecksOnFailure = true
+            gtk_expander_set_expanded(Gtk.expander(checksExpander), 1)
+        }
         for check in checks {
             let row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8)!
             // A dot and a word. Colour alone would leave the panel unreadable
@@ -569,6 +592,13 @@ final class AppWindow {
             let name = Self.label(check.name, classes: "mf-lamp-name")
             gtk_widget_set_size_request(name, 150, -1)
             gtk_box_pack_start(Gtk.box(row), name, 0, 0, 0)
+
+            // The word the comment above has always promised. Without it the
+            // row is colour and nothing else, which is the thing that
+            // comment says must not happen.
+            let word = Self.label(check.state.word, classes: Self.lampClass(check.state))
+            gtk_widget_set_size_request(word, 62, -1)
+            gtk_box_pack_start(Gtk.box(row), word, 0, 0, 0)
 
             let detail = Self.label(check.detail, classes: "mf-dim")
             gtk_label_set_line_wrap(Gtk.label(detail), 1)
@@ -732,7 +762,11 @@ final class AppWindow {
         gtk_label_set_ellipsize(Gtk.label(from), PANGO_ELLIPSIZE_MIDDLE)
         gtk_box_pack_start(Gtk.box(text), from, 0, 0, 0)
 
-        let to = label(item.newFileName, classes: "mf-to")
+        // The whole relative path, not just the new name. The folder is the
+        // half of the proposal that can be wrong in a way worth catching:
+        // "Dark - S01E01.mkv" looks right whether it is about to go into
+        // Dark/Staffel 01 or into the wrong series entirely.
+        let to = label("→ " + item.proposedRelativePath, classes: "mf-to")
         gtk_label_set_ellipsize(Gtk.label(to), PANGO_ELLIPSIZE_MIDDLE)
         gtk_box_pack_start(Gtk.box(text), to, 0, 0, 0)
 

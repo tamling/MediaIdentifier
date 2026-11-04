@@ -66,7 +66,7 @@ public struct WebRouter: Sendable {
     /// request cannot change anything by reaching an unintended route.
     static let writablePaths: Set<String> = [
         "/login", "/logout", "/settings",
-        "/settings/test-llm", "/settings/test-jellyfin",
+        "/settings/test-llm", "/settings/test-jellyfin", "/settings/test-remote",
         "/library/scan", "/library/apply", "/library/undo",
         "/library/send", "/library/send-cancel",
         "/library/select-all", "/library/select-none",
@@ -202,11 +202,23 @@ public struct WebRouter: Sendable {
         case "/settings":
             return saveSettings(fields, body: Self.bodyFields(of: request))
         case "/settings/test-llm":
+            if let refused = applySubmitted(fields, body: Self.bodyFields(of: request)) {
+                return refused
+            }
             submit(.testLocalLLMConnection)
             return redirect(to: "/settings?tested=llm")
         case "/settings/test-jellyfin":
+            if let refused = applySubmitted(fields, body: Self.bodyFields(of: request)) {
+                return refused
+            }
             submit(.testJellyfinConnection)
             return redirect(to: "/settings?tested=jellyfin")
+        case "/settings/test-remote":
+            if let refused = applySubmitted(fields, body: Self.bodyFields(of: request)) {
+                return refused
+            }
+            submit(.testRemoteConnection)
+            return redirect(to: "/settings?tested=remote")
         case "/library/scan":
             submit(.scanSourceFolder)
             return redirect(to: "/")
@@ -257,6 +269,20 @@ public struct WebRouter: Sendable {
     ///   would wipe a stored key on an ordinary save.
     private func saveSettings(_ fields: [String: String],
                               body: [String: String]) -> HTTPResponse {
+        if let refused = applySubmitted(fields, body: body) { return refused }
+        return redirect(to: Self.settingsReturnPath(fields) + "?saved=1")
+    }
+
+    /// Stores what the form carried, or returns the page to send back.
+    ///
+    /// Shared with the three test buttons, which submit the same form: a
+    /// test that ran against the stored address while the user is looking at
+    /// a corrected one reports on the wrong server, and records a red lamp
+    /// for a setting they never saved.
+    ///
+    /// - Returns: nil when everything was stored, or the response to send.
+    private func applySubmitted(_ fields: [String: String],
+                                body: [String: String]) -> HTTPResponse? {
         let submitted = WebSettings.fromForm(fields, current: settings())
         let problems = submitted.problems()
         guard problems.isEmpty else {
@@ -280,7 +306,7 @@ public struct WebRouter: Sendable {
                 submit(.setSecret(key, value))
             }
         }
-        return redirect(to: Self.settingsReturnPath(fields) + "?saved=1")
+        return nil
     }
 
     /// Where to go after saving, so the convert page's own form comes back to
@@ -367,8 +393,10 @@ public struct WebRouter: Sendable {
         if state.hasError {
             stateLabel = "Finished with errors"
             stateClass = "bad"
-        } else if state.busy {
-            stateLabel = "\(state.convertStatus ?? "Working") \(state.activePercent) %"
+        } else if state.isWorking {
+            stateLabel = state.busy
+                ? "\(state.convertStatus ?? "Working") \(state.activePercent) %"
+                : "Working…"
             stateClass = "busy"
         } else {
             stateLabel = "Ready"
@@ -406,8 +434,8 @@ public struct WebRouter: Sendable {
         // one form rather than duplicating the table into a second one,
         // which would let the two lists of ticks drift apart.
         let sendButton = state.remoteConfigured ? """
-        <button type="submit" formaction="/library/send">Send the ticked files to the \
-        server</button>
+        <button type="submit" formaction="/library/send"\(state.isWorking ? " disabled" : "")>\
+        Send the ticked files to the server</button>
         """ : ""
 
         let list = proposals.isEmpty ? """
@@ -417,7 +445,8 @@ public struct WebRouter: Sendable {
           \(csrf.hiddenField)
           <input type="hidden" name="\(Self.selectionPresentField)" value="1">
           <table>\(rows)</table>
-          <button type="submit">Rename the ticked files</button>
+          <button type="submit"\(state.isWorking ? " disabled" : "")>Rename the ticked \
+        files</button>
           \(sendButton)
         </form>
         <form method="post" action="/library/select-all" class="inline-form bare">
@@ -432,14 +461,14 @@ public struct WebRouter: Sendable {
         // works under a policy that forbids scripts outright. sftp reports
         // nothing, so the bar then tracks whole files rather than bytes —
         // which is what transferSummary says in words.
-        let transfer = state.transferring ? """
+        let transfer = state.remoteConfigured ? """
         <div class="card">
           <h2>Sending to the server</h2>
-          <progress max="100" value="\(state.activePercent)"></progress>
+          <progress max="100" value="\(state.transferring ? state.activePercent : 0)"></progress>
           <p class="sub">\(Self.escape(state.transferSummary))</p>
           <form method="post" action="/library/send-cancel">
             \(csrf.hiddenField)
-            <button type="submit">Stop sending</button>
+            <button type="submit"\(state.transferring ? "" : " disabled")>Stop sending</button>
           </form>
         </div>
         """ : ""
@@ -483,7 +512,7 @@ public struct WebRouter: Sendable {
         <html lang="en"><head>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
-        \(state.busy ? "<meta http-equiv=\"refresh\" content=\"2\">" : "")
+        \(state.isWorking ? "<meta http-equiv=\"refresh\" content=\"2\">" : "")
         <title>Mediafin</title>
         \(Self.styles)
         </head>
@@ -512,15 +541,18 @@ public struct WebRouter: Sendable {
               <div class="card actions">
                 <form method="post" action="/library/scan">
                   \(csrf.hiddenField)
-                  <button type="submit"\(needsSetup ? " disabled" : "")>Look for new files</button>
+                  <button type="submit"\(needsSetup || state.isWorking ? " disabled" : "")>\
+        Look for new files</button>
                 </form>
                 <form method="post" action="/library/undo">
                   \(csrf.hiddenField)
-                  <button type="submit"\(state.done == 0 ? " disabled" : "")>Undo the last run</button>
+                  <button type="submit"\(state.done == 0 || state.isWorking ? " disabled" : "")>\
+        Undo the last run</button>
                 </form>
                 <form method="post" action="/history/clear">
                   \(csrf.hiddenField)
-                  <button type="submit"\(state.done == 0 ? " disabled" : "")>Clear the history</button>
+                  <button type="submit"\(state.done == 0 || state.isWorking ? " disabled" : "")>\
+        Clear the history</button>
                 </form>
               </div>
 
@@ -942,15 +974,12 @@ public struct WebRouter: Sendable {
         what arrived; deleting the local file cannot.</p>
 
             <button type="submit">Save</button>
-          </form>
-
-          <form method="post" action="/settings/test-llm" class="card inline-form">
-            \(csrf.hiddenField)
-            <button type="submit">Test the model server</button>
-          </form>
-          <form method="post" action="/settings/test-jellyfin" class="card inline-form">
-            \(csrf.hiddenField)
-            <button type="submit">Test Jellyfin</button>
+            <button type="submit" formaction="/settings/test-llm">Save and test the \
+        model server</button>
+            <button type="submit" formaction="/settings/test-jellyfin">Save and test \
+        Jellyfin</button>
+            <button type="submit" formaction="/settings/test-remote">Save and test the \
+        server</button>
           </form>
         </div>
         </body></html>
@@ -974,6 +1003,14 @@ public struct WebRouter: Sendable {
     /// there, few enough that the page stays a page.
     static let visibleLogEntries = 200
 
+    /// Time of day on each log row, as the window shows it. The log is kept
+    /// across runs, so "failed" with no time could belong to last week.
+    static let logTime: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm:ss"
+        return formatter
+    }()
+
     /// The log, always beside the work rather than on a page of its own.
     ///
     /// A rename that failed is the thing you most need to see, and a panel
@@ -983,6 +1020,10 @@ public struct WebRouter: Sendable {
     /// puts that answer off the bottom of the screen.
     static func logAside(_ entries: [RenameLogEntry]) -> String {
         let recent = entries.reversed().prefix(visibleLogEntries)
+        // Counted over the WHOLE log, not the visible slice: a failure that
+        // has scrolled past 200 entries is still a failure, and a header
+        // reading "200 entries" with no count gives nobody a reason to look.
+        let failed = entries.filter { $0.status == .failure }.count
         let rows = recent.map { entry -> String in
             let word: String
             let cssClass: String
@@ -1000,6 +1041,7 @@ public struct WebRouter: Sendable {
             } ?? ""
             return """
             <li>
+              <span class="hint">\(Self.logTime.string(from: entry.date))</span>
               <span class="\(cssClass)">\(word)</span>
               <div class="log-name">\(Self.escape(entry.oldName))</div>
               <div class="log-to">→ \(Self.escape(entry.newName))</div>
@@ -1016,7 +1058,8 @@ public struct WebRouter: Sendable {
         return """
         <aside class="logside">
           <h2>History</h2>
-          <p class="sub">\(entries.count) \(entries.count == 1 ? "entry" : "entries")</p>
+          <p class="sub">\(entries.count) \(entries.count == 1 ? "entry" : "entries")\(failed > 0
+            ? " · <span class=\"bad-text\">\(failed) failed</span>" : "")</p>
           \(entries.isEmpty
             ? "<p class=\"hint\">Nothing has happened yet.</p>"
             : "<ul class=\"log\">\(rows)</ul>\(more)")

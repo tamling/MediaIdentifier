@@ -225,6 +225,101 @@ final class WebParityTests: XCTestCase {
         XCTAssertTrue(page(makeRouter()).contains(MediafinVersion.display))
     }
 
+    // MARK: Knowing that something is happening
+
+    /// The bug this fixes: every button redirects before the work starts, so
+    /// a page that only refreshed while `busy` stopped refreshing exactly
+    /// when the user was waiting for an answer. Pressing "Check everything"
+    /// showed the lamps from before the probe, for ever.
+    func testThePageKeepsRefreshingWhileWorkIsOnlyQueued() {
+        var queued = StatusSnapshot()
+        queued.busy = false
+        queued.queuedWork = 1
+        let html = page(makeRouter(snapshot: queued))
+        XCTAssertTrue(html.contains("http-equiv=\"refresh\""),
+                      "the page stops refreshing while the user waits")
+        XCTAssertTrue(html.contains("Working"), "and claims to be Ready while working")
+
+        XCTAssertFalse(page(makeRouter()).contains("http-equiv=\"refresh\""),
+                       "an idle page must not reload itself for ever")
+    }
+
+    /// Clearing the history during a rename throws away the undo journal for
+    /// the very files being moved.
+    func testTheDangerousButtonsAreUnavailableWhileWorkIsRunning() {
+        var working = StatusSnapshot()
+        working.queuedWork = 1
+        working.done = 3
+        let html = page(makeRouter(items: [item("a.mkv", to: "A.mkv")], snapshot: working))
+        // Three in the actions card plus the rename submit.
+        XCTAssertGreaterThanOrEqual(html.components(separatedBy: " disabled>").count - 1, 4,
+                                    "actions stay live while work is running")
+    }
+
+    /// Stop has to be reachable before the first byte moves: `transferring`
+    /// only becomes true inside the sending loop, long after the redirect.
+    func testStopSendingExistsBeforeTheTransferStarts() {
+        var state = StatusSnapshot()
+        state.remoteConfigured = true
+        state.transferring = false
+        let html = page(makeRouter(snapshot: state))
+        XCTAssertTrue(html.contains("Stop sending"),
+                      "there is no way to stop a send that has not reported itself yet")
+        XCTAssertTrue(html.contains("<progress"))
+    }
+
+    func testThereIsNoTransferCardWithoutAServer() {
+        XCTAssertFalse(page(makeRouter()).contains("Stop sending"))
+    }
+
+    // MARK: Reading the log at a glance
+
+    func testEachLogRowCarriesTheTimeOfDay() {
+        let entry = RenameLogEntry(oldName: "a.mkv", newName: "A.mkv", status: .success)
+        let html = page(makeRouter(log: [entry]))
+        XCTAssertTrue(html.contains(WebRouter.logTime.string(from: entry.date)),
+                      "a persistent log with no times cannot say whether this was today")
+    }
+
+    /// One failure among eighteen successes sits below the fold. Without a
+    /// count in the header a half-failed run reads as a clean one.
+    func testTheHeaderCountsFailuresSoOneCannotHideBelowTheFold() {
+        var log = (0..<18).map {
+            RenameLogEntry(oldName: "ok\($0).mkv", newName: "Ok \($0).mkv", status: .success)
+        }
+        log.insert(RenameLogEntry(oldName: "bad.mkv", newName: "Bad.mkv",
+                                  status: .failure, errorDescription: "nope"), at: 0)
+        let html = page(makeRouter(log: log))
+        XCTAssertTrue(html.contains("1 failed"), "a failed run reads as a clean one")
+    }
+
+    // MARK: Testing what is on screen
+
+    /// The test used to run against the stored address while the user looked
+    /// at a corrected one — and recorded a red lamp for a setting they had
+    /// never saved.
+    func testTheTestButtonsSaveWhatIsOnScreenFirst() {
+        for (path, expected) in [("/settings/test-llm", WebCommand.testLocalLLMConnection),
+                                 ("/settings/test-jellyfin", .testJellyfinConnection),
+                                 ("/settings/test-remote", .testRemoteConnection)] {
+            sink = RecordingSink()
+            let router = makeRouter()
+            let body = "sourceFolder=/mnt/neu&\(CSRFToken.fieldName)=\(router.csrf.value)"
+            let response = router.respond(to: HTTPRequest(
+                method: "POST", path: path,
+                headers: ["authorization": "Bearer \(token)"],
+                body: Data(body.utf8)))
+            XCTAssertEqual(response.status, 303, path)
+
+            guard case .saveSettings(let saved)? = sink.commands.first else {
+                return XCTFail("\(path) tested without saving first")
+            }
+            XCTAssertEqual(saved.sourceFolder, "/mnt/neu",
+                           "\(path) saved something other than what was submitted")
+            XCTAssertTrue(sink.commands.contains(expected), "\(path) never ran the test")
+        }
+    }
+
     /// Nothing in the log is HTML. A file named after a tag must not become
     /// one — this column renders names the user never chose.
     func testAFilenameCannotBecomeMarkup() {
