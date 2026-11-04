@@ -428,16 +428,14 @@ final class WatchFolderTests: XCTestCase {
     /// while the status row and every lamp said "active". The sibling test
     /// asserts `isWatching` only, so it passed throughout.
     func testTheWatchLampSaysWhatIsActuallyBeingWatched() {
-        var settings = configuredSettings()
-        settings.watchSourceFolder = true
-        settings.sourceFolder = ""
-        run(.saveSettings(settings))
+        var incomplete = settings(watching: true)
+        incomplete.sourceFolder = ""
+        coordinator.executeForTesting(.saveSettings(incomplete))
         XCTAssertFalse(coordinator.isWatching)
         XCTAssertFalse(coordinator.snapshot.watchActive,
                        "the interface claimed the import folder was being watched")
 
-        settings.sourceFolder = source.path
-        run(.saveSettings(settings))
+        coordinator.executeForTesting(.saveSettings(settings(watching: true)))
         XCTAssertTrue(coordinator.isWatching)
         XCTAssertTrue(coordinator.snapshot.watchActive)
     }
