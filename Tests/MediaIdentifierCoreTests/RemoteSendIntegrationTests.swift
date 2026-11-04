@@ -173,33 +173,25 @@ final class RemoteSendIntegrationTests: XCTestCase {
 
     /// A name a download client can legally produce, and which used to run a
     /// shell on this machine through sftp's batch parser.
+    ///
+    /// The injected command carries no slash: a slash in a filename is a
+    /// path separator, so `!touch /tmp/x` cannot be part of a name at all —
+    /// an earlier version of this test tried it and could not even create
+    /// the fixture (ENOENT). `touch` with a bare name writes into the
+    /// working directory, which is where this looks for it.
     func testAFilenameWithANewlineIsRefusedRatherThanSent() throws {
         setRemote { $0.transport = .sftp; $0.removeLocalAfterSend = true }
-        let name = "Dark.S01E05\n!touch /tmp/mediafin-pwned\n.1080p.mkv"
-        // The path is built as a string and handed to FileManager directly.
-        // URL.appendingPathComponent percent-encodes the newline, and then
-        // the write fails — which is how the first version of this test
-        // skipped itself every run while reporting nothing.
+
+        let markerName = "mediafin-pwned-\(UUID().uuidString)"
+        let marker = FileManager.default.currentDirectoryPath + "/" + markerName
+        let name = "Dark.S01E05\n!touch \(markerName)\n.1080p.mkv"
         let path = source.path + "/" + name
-        let marker = "/tmp/mediafin-pwned-\(UUID().uuidString)"
-        // Created through POSIX, not Foundation. FileManager.createFile
-        // returns false for a path containing a newline on this platform —
-        // it is URL-based underneath — which is why the fixture could not
-        // be built and the test skipped itself for a fourth run. A
-        // download client writes such a file with open(2) and does not
-        // care what Foundation thinks of the name.
-        //
-        // (Not XCTSkipUnless either: under swift-corelibs-xctest that skips
-        // when the expression is TRUE, the opposite of Apple's XCTest.)
+
         guard Self.createRaw(path) else {
             throw XCTSkip("could not create a file with a newline in its name: "
                 + "errno \(errno)")
         }
-
-        // The injected command writes the marker if the batch script runs it.
-        let injected = "Dark.S01E05\n!touch \(marker)\n.1080p.mkv"
-        let injectedPath = source.path + "/" + injected
-        _ = Self.createRaw(injectedPath)
+        defer { try? FileManager.default.removeItem(atPath: marker) }
 
         scanAndSend()
 
@@ -207,6 +199,8 @@ final class RemoteSendIntegrationTests: XCTestCase {
                        "a filename ran a command on this machine")
         XCTAssertTrue(FileManager.default.fileExists(atPath: path),
                       "a file that was refused was deleted anyway")
+        XCTAssertTrue(coordinator.snapshot.hasError,
+                      "the refusal was not reported")
     }
 
     /// Writes a small file at a path Foundation will not touch.
