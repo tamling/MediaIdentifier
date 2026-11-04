@@ -75,6 +75,7 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
     private var _cancelTransfers = false
     private var _queuedTransferRuns = 0
     private var _runningTransfer: Process?
+    private var _probes: [ProbeSubject: ProbeResult] = [:]
 
     /// Set when the settings file could not be read, so the interface can say
     /// so instead of silently running on defaults.
@@ -224,6 +225,10 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         case .cancelTransfers:
             // Handled in `submit`, off the queue.
             break
+        case .testRemoteConnection:
+            testRemote()
+        case .checkEverything:
+            checkEverything()
         case .clearHistory:
             clearHistory()
         }
@@ -270,12 +275,16 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         runAndWait { [weak self] in
             do {
                 let status = try await provider.verify()
-                self?.update { $0.lastResult = Self.describe(status: status, service: "model server") }
+                let message = Self.describe(status: status, service: "model server")
+                // 2xx only. A 401 is an answer, not a working connection, and
+                // a lamp that went green on it would be the panel lying.
+                self?.record(.localLLM, ok: (200..<300).contains(status), detail: message)
+                self?.update { $0.lastResult = message }
             } catch {
-                self?.update {
-                    $0.lastResult = "The model server could not be reached: "
-                        + Self.reason(for: error)
-                }
+                let message = "The model server could not be reached: "
+                    + Self.reason(for: error)
+                self?.record(.localLLM, ok: false, detail: message)
+                self?.update { $0.lastResult = message }
             }
         }
     }
@@ -293,11 +302,13 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
                 let connector = try JellyfinConnector(serverURL: settings.jellyfinBaseURL,
                                                       apiKey: apiKey)
                 let status = try await connector.verify()
-                self?.update { $0.lastResult = Self.describe(status: status, service: "Jellyfin") }
+                let message = Self.describe(status: status, service: "Jellyfin")
+                self?.record(.jellyfin, ok: (200..<300).contains(status), detail: message)
+                self?.update { $0.lastResult = message }
             } catch {
-                self?.update {
-                    $0.lastResult = "Jellyfin could not be reached: " + Self.reason(for: error)
-                }
+                let message = "Jellyfin could not be reached: " + Self.reason(for: error)
+                self?.record(.jellyfin, ok: false, detail: message)
+                self?.update { $0.lastResult = message }
             }
         }
     }
@@ -654,6 +665,84 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         lock.lock(); _cancelConversions = false; lock.unlock()
     }
 
+    // MARK: The traffic light
+
+    /// The lamps, worked out from what is on this machine right now plus the
+    /// last answer each service gave.
+    public var systemChecks: [SystemCheck] {
+        lock.lock()
+        let probes = _probes
+        let settings = _settings
+        lock.unlock()
+        return SystemChecks.all(settings: settings,
+                                tools: RemoteTools.locate(),
+                                ffmpegAvailable: ffmpegAvailable,
+                                secrets: secretStore.configuredKeys(),
+                                probes: probes)
+    }
+
+    private func record(_ subject: ProbeSubject, ok: Bool, detail: String) {
+        lock.lock()
+        _probes[subject] = ProbeResult(ok: ok, detail: detail)
+        lock.unlock()
+    }
+
+    /// Only for tests: the probe results a run would otherwise have to reach
+    /// a server to produce.
+    func recordProbeForTesting(_ subject: ProbeSubject, ok: Bool, detail: String) {
+        record(subject, ok: ok, detail: detail)
+    }
+
+    private func testRemote() {
+        let target = settings.remote
+        guard target.isEnabled else {
+            update { $0.lastResult = "Der Server ist nicht eingeschaltet." }
+            return
+        }
+        let problems = target.problems()
+        guard problems.isEmpty else {
+            let message = problems.map(\.message).joined(separator: " ")
+            record(.remote, ok: false, detail: message)
+            update { $0.hasError = true; $0.lastResult = message }
+            return
+        }
+        var password: String?
+        if target.authentication == .password {
+            password = secretStore.value(for: .remotePassword)
+            guard let stored = password, !stored.isEmpty else {
+                let message = "Für die Anmeldung per Passwort ist keines gespeichert."
+                record(.remote, ok: false, detail: message)
+                update { $0.hasError = true; $0.lastResult = message }
+                return
+            }
+        }
+        update { $0.lastResult = "Server wird geprüft …" }
+        let outcome = RemoteTransfer().check(target, password: password)
+        record(.remote, ok: outcome.ok, detail: outcome.detail)
+        update {
+            $0.hasError = !outcome.ok
+            $0.lastResult = outcome.ok
+                ? "Der Server antwortet. " + outcome.detail
+                : "Der Server antwortet nicht: " + outcome.detail
+        }
+    }
+
+    /// Every test, one after another. Each is skipped when the thing it tests
+    /// is not in use, so pressing this with a plain offline setup does not
+    /// produce three complaints about services nobody asked for.
+    private func checkEverything() {
+        let settings = self.settings
+        if settings.identification == .localLLM { testLocalLLM() }
+        if !settings.jellyfinBaseURL.isEmpty { testJellyfin() }
+        if settings.remote.isEnabled { testRemote() }
+
+        let checks = systemChecks
+        update {
+            $0.hasError = SystemChecks.worst(checks) == .failed
+            $0.lastResult = "Prüfung fertig: " + SystemChecks.summary(checks)
+        }
+    }
+
     // MARK: Sending to the remote library
 
     /// Every file of one proposal and where it goes on the server.
@@ -755,7 +844,12 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
                     $0.transferProgress = Double(index) / Double(pending.count)
                     $0.currentFile = local.lastPathComponent
                     $0.pendingTransfers = pending.count - index - 1
-                    $0.transferDetail = nil
+                    // sftp prints no progress at all — it draws its meter
+                    // only to a terminal, and never in batch mode. Saying so
+                    // beats a bar that sits at the same number for ten
+                    // minutes and looks like a stall.
+                    $0.transferDetail = target.transport.reportsProgress
+                        ? nil : "läuft – SFTP meldet keinen Fortschritt"
                 }
                 do {
                     try transfer.send(

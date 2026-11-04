@@ -74,7 +74,14 @@ public enum RemoteCommand {
                 options += ["-i", target.identityFile, "-o", "IdentitiesOnly=yes"]
             }
         } else {
-            options += ["-o", "PubkeyAuthentication=no",
+            // BatchMode=no is not redundant. `sftp -b` adds `-obatchmode yes`
+            // of its own, and ssh keeps the *first* setting of an option it
+            // sees — so without this, and without putting it ahead of `-b`,
+            // ssh refuses to ask for a password at all and the login fails
+            // in a tenth of a second with "Permission denied", never having
+            // prompted. That is exactly what it did.
+            options += ["-o", "BatchMode=no",
+                        "-o", "PubkeyAuthentication=no",
                         "-o", "PreferredAuthentications=password,keyboard-interactive"]
         }
         return options
@@ -90,6 +97,44 @@ public enum RemoteCommand {
         let trimmedPath = relativePath.hasPrefix("/")
             ? String(relativePath.dropFirst()) : relativePath
         return "\(trimmedBase)/\(trimmedPath)"
+    }
+
+    // MARK: Checking the server
+
+    /// `ssh … test -d <base>` — does the login work, and is the target there?
+    ///
+    /// Not a port check. A port that answers proves nothing useful: the
+    /// three ways this actually fails in someone's house are a key the
+    /// server does not know, a host key that was never confirmed, and a
+    /// target path that does not exist or cannot be written. This tries all
+    /// three at once and costs one connection.
+    ///
+    /// Writability is checked with `test -w` rather than by writing a file,
+    /// because a check that leaves litter in a media library is a check
+    /// people turn off.
+    public static func probe(_ target: RemoteTarget,
+                             sshPath: String,
+                             password: String?) throws -> Invocation {
+        guard !target.host.isEmpty, !target.basePath.isEmpty else {
+            throw Failure.notConfigured("Adresse oder Zielpfad fehlt")
+        }
+        // Single-quoted for the remote shell, with embedded quotes escaped
+        // the only way POSIX sh allows. The base path comes from a settings
+        // field, so it is not trusted to be shell-safe.
+        let quoted = "'" + target.basePath.replacingOccurrences(of: "'", with: "'\\''") + "'"
+        var arguments = ["-p", String(target.port)] + sshOptions(target)
+        arguments.append(target.destination)
+        arguments.append("test -d \(quoted) && test -w \(quoted)")
+
+        if target.authentication == .password {
+            guard let password, !password.isEmpty else {
+                throw Failure.notConfigured("Passwort fehlt")
+            }
+            return Invocation(executable: "sshpass",
+                              arguments: ["-e", sshPath] + arguments,
+                              environment: ["SSHPASS": password])
+        }
+        return Invocation(executable: sshPath, arguments: arguments)
     }
 
     // MARK: rsync
@@ -166,8 +211,11 @@ public enum RemoteCommand {
         script += "put \(quote(localFile.path)) \(quote(destination))\n"
         script += "bye\n"
 
-        var arguments = ["-b", "-", "-P", String(target.port)]
-        arguments += sshOptions(target)
+        // Our options go FIRST, ahead of `-b`. sftp appends `-obatchmode yes`
+        // at the moment it parses `-b`, and ssh honours the first setting of
+        // an option, so anything of ours that comes after `-b` is ignored.
+        var arguments = sshOptions(target)
+        arguments += ["-b", "-", "-P", String(target.port)]
         arguments.append(target.destination)
 
         if target.authentication == .password {

@@ -119,6 +119,7 @@ let router = WebRouter(
     logEntries: { coordinator.logEntries },
     convertible: { coordinator.convertible },
     ffmpegAvailable: { coordinator.ffmpegAvailable },
+    systemChecks: { coordinator.systemChecks },
     commands: coordinator,
     snapshot: { coordinator.snapshot }
 )

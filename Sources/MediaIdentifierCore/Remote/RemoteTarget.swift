@@ -19,8 +19,23 @@ public struct RemoteTarget: Codable, Sendable, Equatable {
 
         public var label: String {
             switch self {
-            case .rsync: return "rsync über SSH (fortsetzbar, empfohlen)"
-            case .sftp: return "SFTP (läuft überall)"
+            case .rsync: return "rsync über SSH (fortsetzbar, mit Fortschritt, empfohlen)"
+            case .sftp: return "SFTP (läuft überall, ohne Fortschrittsanzeige)"
+            }
+        }
+
+        /// Whether the tool says anything about how far it has got.
+        ///
+        /// rsync does, with `--info=progress2`. sftp does not, and cannot be
+        /// made to: it draws its meter only when standard output is a
+        /// terminal and never in batch mode, and batch mode is how a script
+        /// drives it at all. Measured against a real server rather than
+        /// assumed — the first version of this code assumed otherwise and
+        /// the integration test caught it.
+        public var reportsProgress: Bool {
+            switch self {
+            case .rsync: return true
+            case .sftp: return false
             }
         }
     }

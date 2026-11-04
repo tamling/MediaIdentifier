@@ -44,6 +44,8 @@ final class AppWindow {
     private let remoteProgress: UnsafeMutablePointer<GtkWidget>
     private let sendButton: UnsafeMutablePointer<GtkWidget>
     private let cancelSendButton: UnsafeMutablePointer<GtkWidget>
+    private let checksColumn: UnsafeMutablePointer<GtkWidget>
+    private let checksSummary: UnsafeMutablePointer<GtkWidget>
 
     /// The log rows on screen, so they can be replaced without walking the
     /// container.
@@ -51,6 +53,10 @@ final class AppWindow {
     /// What the log column was last built from. Optional so the first build
     /// happens even when there is nothing to show yet.
     private var renderedLogIDs: [UUID]?
+
+    /// The lamps as last drawn, so an unchanged panel is left alone.
+    private var renderedCheckSignature: [String]?
+    private var checkWidgets: [UnsafeMutablePointer<GtkWidget>] = []
 
     /// The rows currently on screen, kept so they can be destroyed without
     /// walking the container — which would mean another C callback.
@@ -104,6 +110,22 @@ final class AppWindow {
         let page = gtk_box_new(GTK_ORIENTATION_VERTICAL, 16)!
         gtk_container_set_border_width(Gtk.container(page), 18)
         gtk_box_pack_start(Gtk.box(split), page, 1, 1, 0)
+
+        // MARK: The traffic light
+        //
+        // At the top, before the folders: the first question anyone has when
+        // a run does nothing is "is everything plugged in", and a panel that
+        // answers it below the fold is a panel nobody reads.
+        let checks = Self.card(titled: "Status")
+        checksSummary = Self.label("", classes: "mf-dim")
+        Self.add(checksSummary, to: checks)
+        checksColumn = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2)!
+        Self.add(checksColumn, to: checks)
+        let checkRow = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8)!
+        let checkButton = gtk_button_new_with_label("Alles prüfen")!
+        gtk_box_pack_end(Gtk.box(checkRow), checkButton, 0, 0, 0)
+        Self.add(checkRow, to: checks)
+        gtk_box_pack_start(Gtk.box(page), checks, 0, 0, 0)
 
         // MARK: Folders
 
@@ -282,6 +304,7 @@ final class AppWindow {
         Gtk.onClick(testButton, self) { $0.testModelServer() }
         Gtk.onClick(sendButton, self) { $0.sendSelected() }
         Gtk.onClick(cancelSendButton, self) { $0.cancelSending() }
+        Gtk.onClick(checkButton, self) { $0.checkEverything() }
 
         loadFolders()
         refresh()
@@ -375,6 +398,13 @@ final class AppWindow {
 
     func cancelSending() {
         coordinator.submit(.cancelTransfers)
+    }
+
+    /// Saves first, so the lamps report on what is in the fields rather than
+    /// on what was in them last time the user pressed Übernehmen.
+    func checkEverything() {
+        saveFolders()
+        coordinator.submit(.checkEverything)
     }
 
     /// Saves first: testing an address the user typed but has not saved would
@@ -494,6 +524,53 @@ final class AppWindow {
 
         refreshList()
         refreshLog()
+        refreshChecks()
+    }
+
+    /// Rebuilds the traffic light, and only when a lamp actually changed.
+    ///
+    /// This runs twice a second; rebuilding every time would make the panel
+    /// flicker and would fight anyone trying to read a long detail line.
+    private func refreshChecks() {
+        let checks = coordinator.systemChecks
+        let signature = checks.map { "\($0.id)|\($0.state.rawValue)|\($0.detail)" }
+        guard signature != renderedCheckSignature else { return }
+        renderedCheckSignature = signature
+
+        for row in checkWidgets { gtk_widget_destroy(row) }
+        checkWidgets = []
+
+        Gtk.setText(checksSummary, SystemChecks.summary(checks))
+        for check in checks {
+            let row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8)!
+            // A dot and a word. Colour alone would leave the panel unreadable
+            // for anyone who cannot tell the red lamp from the green one.
+            let lamp = Self.label("\u{25CF}", classes: "mf-lamp",
+                                  Self.lampClass(check.state))
+            gtk_widget_set_size_request(lamp, 16, -1)
+            gtk_box_pack_start(Gtk.box(row), lamp, 0, 0, 0)
+
+            let name = Self.label(check.name, classes: "mf-lamp-name")
+            gtk_widget_set_size_request(name, 150, -1)
+            gtk_box_pack_start(Gtk.box(row), name, 0, 0, 0)
+
+            let detail = Self.label(check.detail, classes: "mf-dim")
+            gtk_label_set_line_wrap(Gtk.label(detail), 1)
+            gtk_box_pack_start(Gtk.box(row), detail, 1, 1, 0)
+
+            gtk_box_pack_start(Gtk.box(checksColumn), row, 0, 0, 0)
+            gtk_widget_show_all(row)
+            checkWidgets.append(row)
+        }
+    }
+
+    private static func lampClass(_ state: SystemCheck.State) -> String {
+        switch state {
+        case .ok: return "mf-ok"
+        case .warning: return "mf-warn"
+        case .failed: return "mf-fail"
+        case .off: return "mf-skip"
+        }
     }
 
     /// Rebuilds the log column, newest first, and only when it changed.

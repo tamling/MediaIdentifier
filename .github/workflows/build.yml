@@ -147,6 +147,31 @@ jobs:
             echo "      pass without proving anything"
             exit 1
           fi
+          # Why the sftp arguments are ordered the way they are, demonstrated
+          # rather than asserted in a comment. `sftp -b` appends its own
+          # "-obatchmode yes" as it parses -b, and ssh keeps the FIRST
+          # setting of an option — so BatchMode=no only takes effect ahead of
+          # -b. If a future OpenSSH changes that, this step says so plainly
+          # instead of the password test failing with "Permission denied".
+          export SSHPASS=transfer-test-password
+          echo "put /etc/hostname /tmp/mediafin-remote/order-check.txt" > /tmp/mediafin-sshd/b
+          after=0
+          sshpass -e sftp -b /tmp/mediafin-sshd/b -P 2222 \
+            -o BatchMode=no -o PubkeyAuthentication=no \
+            -o StrictHostKeyChecking=yes mediafintest@127.0.0.1 >/dev/null 2>&1 || after=$?
+          before=0
+          sshpass -e sftp -o BatchMode=no -o PubkeyAuthentication=no \
+            -o StrictHostKeyChecking=yes -b /tmp/mediafin-sshd/b -P 2222 \
+            mediafintest@127.0.0.1 >/dev/null 2>&1 || before=$?
+          echo "sftp password login — options after -b: exit $after, before -b: exit $before"
+          test "$before" -eq 0 || {
+            echo "FAIL: password login over sftp does not work even with the options"
+            echo "      ahead of -b; the ordering fix in RemoteCommand.sftp rests on this"
+            exit 1
+          }
+          rm -f /tmp/mediafin-remote/order-check.txt
+          unset SSHPASS
+
           echo "sshd is up on 127.0.0.1:2222"
       - name: Build
         run: swift build

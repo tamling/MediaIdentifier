@@ -131,6 +131,66 @@ public final class RemoteTransfer {
         progress?(Progress(fraction: 1))
     }
 
+    /// Asks the server whether a transfer would work, and says why not.
+    ///
+    /// Returns rather than throws: this is the traffic light, and a red lamp
+    /// with a reason on it is the normal outcome, not an exception.
+    public func check(_ target: RemoteTarget, password: String?) -> (ok: Bool, detail: String) {
+        let absent = tools.missing(for: target)
+        guard absent.isEmpty else {
+            return (false, Failure.toolsMissing(absent).description)
+        }
+        let invocation: RemoteCommand.Invocation
+        do {
+            invocation = try RemoteCommand.probe(target, sshPath: tools.ssh ?? "ssh",
+                                                 password: password)
+        } catch {
+            return (false, "\(error)")
+        }
+
+        var executable = invocation.executable
+        if executable == "sshpass" { executable = tools.sshpass ?? "sshpass" }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: executable)
+        process.arguments = invocation.arguments
+        if !invocation.environment.isEmpty {
+            var environment = ProcessInfo.processInfo.environment
+            for (key, value) in invocation.environment { environment[key] = value }
+            process.environment = environment
+        }
+        let errPipe = Pipe()
+        process.standardOutput = Pipe()
+        process.standardError = errPipe
+        // Closed at once: ssh must not sit waiting on a terminal that is not
+        // there, which would hang the traffic light rather than light it.
+        let inPipe = Pipe()
+        process.standardInput = inPipe
+        try? inPipe.fileHandleForWriting.close()
+
+        do {
+            try process.run()
+        } catch {
+            return (false, "\(executable) ließ sich nicht starten: \(error)")
+        }
+        let errorData = errPipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+
+        guard process.terminationStatus == 0 else {
+            let text = String(data: errorData, encoding: .utf8) ?? ""
+            // ssh exits 1 when the remote command failed but the login
+            // worked, which here means the path is the problem and not the
+            // connection — worth saying, because the remedies differ.
+            if process.terminationStatus == 1, text.trimmingCharacters(
+                in: .whitespacesAndNewlines).isEmpty {
+                return (false, "Angemeldet, aber \(target.basePath) fehlt oder ist "
+                            + "nicht beschreibbar.")
+            }
+            return (false, Self.explain(text))
+        }
+        return (true, "Angemeldet, \(target.basePath) ist beschreibbar.")
+    }
+
     // MARK: Output
 
     /// The last percentage, and a transfer rate if one was printed.

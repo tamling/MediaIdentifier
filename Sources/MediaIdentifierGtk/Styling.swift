@@ -158,6 +158,13 @@ enum Styling {
         .mf-ok    { color: @mf_ok; }
         .mf-fail  { color: @mf_error; }
         .mf-skip  { color: @mf_muted; }
+        .mf-warn  { color: @mf_busy; }
+
+        /* The traffic light. A lamp is a coloured dot and a word, never a
+           colour alone: about one man in twelve cannot tell the red one
+           from the green one. */
+        .mf-lamp { font-size: 13pt; }
+        .mf-lamp-name { font-weight: bold; }
 
         /* Timestamps and the "to" name: present, but never competing with
            the error text, which is the reason anyone reads this column. */

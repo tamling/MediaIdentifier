@@ -27,6 +27,11 @@ public enum WebCommand: Sendable, Equatable {
     /// proposed folders. Never started on its own.
     case transferFiles(accepting: Set<UUID>)
     case cancelTransfers
+    /// Logs in to the server and checks the target path, for the status panel.
+    case testRemoteConnection
+    /// Runs every connection test there is, so one press answers "is
+    /// everything there?" instead of three.
+    case checkEverything
     case clearHistory
 }
 

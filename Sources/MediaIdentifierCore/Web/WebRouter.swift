@@ -31,6 +31,7 @@ public struct WebRouter: Sendable {
     private let logEntries: @Sendable () -> [RenameLogEntry]
     private let convertible: @Sendable () -> [ConversionCandidate]
     private let ffmpegAvailable: @Sendable () -> Bool
+    private let systemChecks: @Sendable () -> [SystemCheck]
     private let commands: WebCommandSink?
 
     public init(policy: WebSecurityPolicy,
@@ -43,6 +44,7 @@ public struct WebRouter: Sendable {
                 logEntries: @escaping @Sendable () -> [RenameLogEntry] = { [] },
                 convertible: @escaping @Sendable () -> [ConversionCandidate] = { [] },
                 ffmpegAvailable: @escaping @Sendable () -> Bool = { false },
+                systemChecks: @escaping @Sendable () -> [SystemCheck] = { [] },
                 commands: WebCommandSink? = nil,
                 snapshot: @escaping @Sendable () -> StatusSnapshot) {
         self.policy = policy
@@ -55,6 +57,7 @@ public struct WebRouter: Sendable {
         self.logEntries = logEntries
         self.convertible = convertible
         self.ffmpegAvailable = ffmpegAvailable
+        self.systemChecks = systemChecks
         self.commands = commands
         self.snapshot = snapshot
     }
@@ -65,7 +68,9 @@ public struct WebRouter: Sendable {
         "/login", "/logout", "/settings",
         "/settings/test-llm", "/settings/test-jellyfin",
         "/library/scan", "/library/apply", "/library/undo",
+        "/library/send", "/library/send-cancel",
         "/convert/scan", "/convert/start", "/convert/cancel",
+        "/system/check",
         "/history/clear",
     ]
 
@@ -213,6 +218,9 @@ public struct WebRouter: Sendable {
             return redirect(to: "/")
         case "/library/send-cancel":
             submit(.cancelTransfers)
+            return redirect(to: "/")
+        case "/system/check":
+            submit(.checkEverything)
             return redirect(to: "/")
         case "/library/undo":
             submit(.undoLastRename)
@@ -417,6 +425,32 @@ public struct WebRouter: Sendable {
 
         let counts = "\(state.totalItems) proposed · \(state.done) renamed so far"
 
+        // The traffic light. A dot carries the colour and a word carries the
+        // same thing again, because colour alone is unreadable to about one
+        // man in twelve.
+        let checks = systemChecks()
+        let lamps = checks.map { check in
+            """
+            <tr>
+              <td><span class="lamp lamp-\(check.state.rawValue)">\u{25CF}</span></td>
+              <td><strong>\(Self.escape(check.name))</strong><br>
+                  <span class="hint">\(Self.escape(check.detail))</span></td>
+              <td class="hint">\(Self.escape(check.state.word))</td>
+            </tr>
+            """
+        }.joined()
+        let panel = checks.isEmpty ? "" : """
+        <div class="card">
+          <h2>Status</h2>
+          <p class="sub">\(Self.escape(SystemChecks.summary(checks)))</p>
+          <table>\(lamps)</table>
+          <form method="post" action="/system/check">
+            \(csrf.hiddenField)
+            <button type="submit">Check everything</button>
+          </form>
+        </div>
+        """
+
         return .html("""
         <!DOCTYPE html>
         <html lang="en"><head>
@@ -436,6 +470,8 @@ public struct WebRouter: Sendable {
             \(result)
             \(setupHint)
           </div>
+
+          \(panel)
 
           <div class="card">
             <h2>Proposed renames</h2>
@@ -968,6 +1004,13 @@ public struct WebRouter: Sendable {
       .right-cell { text-align:right; white-space:nowrap; width:1%; }
       .ok-text { color:#36c98d; font-size:13px; }
       .bad-text { color:#e05a4f; font-size:13px; }
+      /* The traffic light. The word beside each lamp is not decoration:
+         colour alone is unreadable to about one man in twelve. */
+      .lamp { font-size:16px; line-height:1; }
+      .lamp-ok { color:#36c98d; }
+      .lamp-warning { color:#f0a020; }
+      .lamp-failed { color:#e05a4f; }
+      .lamp-off { color:#55555f; }
     </style>
     """
 

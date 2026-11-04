@@ -113,11 +113,23 @@ final class RemoteTransferIntegrationTests: XCTestCase {
                                   progress: { seen.record($0) })
 
         try assertArrived(relative)
+
         // The parser was written from the documented format without either
-        // tool to hand. This is the assertion that says it reads reality.
-        XCTAssertTrue(seen.sawRealProgress,
-                      "no progress was parsed from \(transport); "
-                          + "the output format is not what the parser expects")
+        // tool to hand. This is the assertion that says it reads reality —
+        // and the first run of it found that sftp reports nothing at all,
+        // which is now what `reportsProgress` says and what the interface
+        // tells the user.
+        if transport.reportsProgress {
+            XCTAssertTrue(seen.sawRealProgress,
+                          "no progress was parsed from \(transport); "
+                              + "the output format is not what the parser expects")
+        } else {
+            XCTAssertFalse(
+                seen.sawRealProgress,
+                "\(transport) reported progress after all. That is good news, but "
+                    + "`reportsProgress` and the transport's label both say it does not — "
+                    + "fix them rather than this assertion.")
+        }
     }
 
     /// The directories below the base are created on the way, so a second
