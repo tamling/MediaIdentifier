@@ -158,8 +158,11 @@ final class RemoteTransferIntegrationTests: XCTestCase {
     /// a transfer, StrictHostKeyChecking has been turned off somewhere.
     func testAnUnknownHostIsRefused() throws {
         var unknown = try target(.rsync, .key)
-        // Same server, addressed by a name that was never scanned.
-        unknown.host = "localhost.localdomain"
+        // The same server, reached by a name that was never scanned.
+        // known_hosts holds "127.0.0.1" and nothing else, so "localhost"
+        // resolves to the very same sshd and is still an unknown host —
+        // which is the point: the refusal is about the key, not the route.
+        unknown.host = "localhost"
         XCTAssertThrowsError(
             try RemoteTransfer().send(sourceFile, relativePath: relativePath("refused"),
                                       to: unknown, password: nil)

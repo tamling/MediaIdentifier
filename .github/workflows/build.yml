@@ -103,9 +103,50 @@ jobs:
           # it there: by looking at it once. StrictHostKeyChecking stays on,
           # and one test deliberately uses a name that is NOT in here to
           # prove the check still bites.
+          #
+          # Written to the system-wide file as well as this user's, because
+          # the Swift test process need not have the same HOME as this step
+          # — and a first attempt failed exactly there, with ssh reporting
+          # the key as unknown while the file sat in another home directory.
+          # stderr is NOT discarded: a keyscan that prints nothing would
+          # otherwise leave an empty file and a green step.
           install -d -m 700 ~/.ssh
-          ssh-keyscan -p 2222 -H 127.0.0.1 >> ~/.ssh/known_hosts 2>/dev/null
+          ssh-keyscan -p 2222 127.0.0.1 > /tmp/mediafin-sshd/known_hosts
+          grep -q ed25519 /tmp/mediafin-sshd/known_hosts || {
+            echo "FAIL: ssh-keyscan returned no ed25519 key for 127.0.0.1:2222"
+            cat /tmp/mediafin-sshd/known_hosts
+            exit 1
+          }
+          cat /tmp/mediafin-sshd/known_hosts >> ~/.ssh/known_hosts
           chmod 600 ~/.ssh/known_hosts
+          install -d -m 755 /etc/ssh
+          cat /tmp/mediafin-sshd/known_hosts >> /etc/ssh/ssh_known_hosts
+          chmod 644 /etc/ssh/ssh_known_hosts
+
+          # Prove it before the tests rely on it. A login that works here
+          # with strict checking on is the one thing that distinguishes
+          # "the server is ready" from "the server exists".
+          ssh -i /tmp/mediafin-sshd/client_key -p 2222 \
+            -o StrictHostKeyChecking=yes -o BatchMode=yes -o IdentitiesOnly=yes \
+            mediafintest@127.0.0.1 'echo ssh login ok' || {
+            echo "FAIL: cannot log in to the test server with the host key known"
+            echo "HOME=$HOME"
+            ls -l ~/.ssh/known_hosts /etc/ssh/ssh_known_hosts || true
+            exit 1
+          }
+          # testAnUnknownHostIsRefused reaches the same sshd as "localhost"
+          # and expects to be turned away. That only means anything while
+          # "localhost" resolves and is absent from known_hosts.
+          getent hosts localhost > /dev/null || {
+            echo "FAIL: localhost does not resolve; the unknown-host test would"
+            echo "      fail for the wrong reason"
+            exit 1
+          }
+          if grep -qw localhost ~/.ssh/known_hosts /etc/ssh/ssh_known_hosts; then
+            echo "FAIL: localhost is in known_hosts; the unknown-host test would"
+            echo "      pass without proving anything"
+            exit 1
+          fi
           echo "sshd is up on 127.0.0.1:2222"
       - name: Build
         run: swift build
