@@ -40,6 +40,8 @@ public struct WebSettings: Codable, Sendable, Equatable {
     public var watchSourceFolder: Bool
     /// Transcoding settings (FR16, FR17).
     public var conversion: WebConversionSettings
+    /// Where the library lives when it is on another machine.
+    public var remote: RemoteTarget
 
     public enum ConflictPolicyChoice: String, Codable, Sendable, CaseIterable {
         case skip, rename, replace
@@ -69,7 +71,8 @@ public struct WebSettings: Codable, Sendable, Equatable {
                 jellyfinBaseURL: String = "",
                 conflictPolicy: ConflictPolicyChoice = .skip,
                 watchSourceFolder: Bool = false,
-                conversion: WebConversionSettings = WebConversionSettings()) {
+                conversion: WebConversionSettings = WebConversionSettings(),
+                remote: RemoteTarget = RemoteTarget()) {
         self.sourceFolder = sourceFolder
         self.moviesFolder = moviesFolder
         self.seriesFolder = seriesFolder
@@ -80,6 +83,7 @@ public struct WebSettings: Codable, Sendable, Equatable {
         self.conflictPolicy = conflictPolicy
         self.watchSourceFolder = watchSourceFolder
         self.conversion = conversion
+        self.remote = remote
     }
 
     // MARK: Decoding
@@ -90,7 +94,7 @@ public struct WebSettings: Codable, Sendable, Equatable {
     enum CodingKeys: String, CodingKey {
         case sourceFolder, moviesFolder, seriesFolder, identification
         case localLLMBaseURL, localLLMModel, jellyfinBaseURL
-        case conflictPolicy, watchSourceFolder, conversion
+        case conflictPolicy, watchSourceFolder, conversion, remote
     }
 
     public init(from decoder: Decoder) throws {
@@ -113,6 +117,7 @@ public struct WebSettings: Codable, Sendable, Equatable {
         conflictPolicy = value(.conflictPolicy, defaults.conflictPolicy)
         watchSourceFolder = value(.watchSourceFolder, defaults.watchSourceFolder)
         conversion = value(.conversion, defaults.conversion)
+        remote = value(.remote, defaults.remote)
     }
 
     // MARK: Validation
@@ -168,6 +173,7 @@ public struct WebSettings: Codable, Sendable, Equatable {
             found.append(problem)
         }
         found.append(contentsOf: conversion.problems())
+        found.append(contentsOf: remote.problems())
         return found
     }
 
