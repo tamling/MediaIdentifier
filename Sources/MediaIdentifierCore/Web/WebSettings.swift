@@ -246,6 +246,7 @@ public struct WebSettings: Codable, Sendable, Equatable {
             settings.watchSourceFolder = fields["watchSourceFolder"] != nil
         }
         settings.conversion = WebConversionSettings.fromForm(fields, current: current.conversion)
+        settings.remote = RemoteTarget.fromForm(fields, current: current.remote)
         return settings.normalised()
     }
 }
@@ -255,12 +256,14 @@ public enum SecretKey: String, Codable, Sendable, CaseIterable {
     case localLLMAPIKey = "local-llm-api-key"
     case jellyfinToken = "jellyfin-token"
     case tmdbAPIKey = "tmdb-api-key"
+    case remotePassword = "remote-password"
 
     public var label: String {
         switch self {
         case .localLLMAPIKey: return "Model server API key"
         case .jellyfinToken: return "Jellyfin API key"
         case .tmdbAPIKey: return "TMDb API key"
+        case .remotePassword: return "Server password"
         }
     }
 
@@ -270,6 +273,7 @@ public enum SecretKey: String, Codable, Sendable, CaseIterable {
         case .localLLMAPIKey: return "localLLMAPIKey"
         case .jellyfinToken: return "jellyfinToken"
         case .tmdbAPIKey: return "tmdbAPIKey"
+        case .remotePassword: return "remotePassword"
         }
     }
 }

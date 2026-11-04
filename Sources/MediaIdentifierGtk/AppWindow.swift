@@ -420,12 +420,13 @@ final class AppWindow {
         case .failure: return "fehlgeschlagen"
         case .skipped: return "übersprungen"
         case .converted: return "konvertiert"
+        case .sent: return "gesendet"
         }
     }
 
     private static func statusClass(_ status: RenameLogEntry.Status) -> String {
         switch status {
-        case .success, .converted: return "mf-ok"
+        case .success, .converted, .sent: return "mf-ok"
         case .failure: return "mf-fail"
         case .skipped: return "mf-skip"
         }

@@ -52,6 +52,13 @@ public struct RemoteTarget: Codable, Sendable, Equatable {
     /// Private key file. Empty means ssh picks from its own configuration,
     /// which is usually what someone with a working ssh setup wants.
     public var identityFile: String
+    /// Delete the local file once the server has an identical copy.
+    ///
+    /// Off by default, and deliberately: sending is a copy, which can be
+    /// undone by deleting the new file, while moving destroys the only
+    /// other copy of someone's recording. Nobody's media is deleted
+    /// because a default said so.
+    public var removeLocalAfterSend: Bool
 
     public init(isEnabled: Bool = false,
                 host: String = "",
@@ -60,7 +67,8 @@ public struct RemoteTarget: Codable, Sendable, Equatable {
                 basePath: String = "",
                 transport: Transport = .rsync,
                 authentication: Authentication = .key,
-                identityFile: String = "") {
+                identityFile: String = "",
+                removeLocalAfterSend: Bool = false) {
         self.isEnabled = isEnabled
         self.host = host.trimmingCharacters(in: .whitespacesAndNewlines)
         self.port = (1...65535).contains(port) ? port : 22
@@ -69,6 +77,7 @@ public struct RemoteTarget: Codable, Sendable, Equatable {
         self.transport = transport
         self.authentication = authentication
         self.identityFile = identityFile.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.removeLocalAfterSend = removeLocalAfterSend
     }
 
     /// Decoded through the memberwise initialiser so a hand-edited settings
@@ -87,12 +96,61 @@ public struct RemoteTarget: Codable, Sendable, Equatable {
             basePath: value(.basePath, defaults.basePath),
             transport: value(.transport, defaults.transport),
             authentication: value(.authentication, defaults.authentication),
-            identityFile: value(.identityFile, defaults.identityFile)
+            identityFile: value(.identityFile, defaults.identityFile),
+            removeLocalAfterSend: value(.removeLocalAfterSend, defaults.removeLocalAfterSend)
         )
     }
 
     /// `user@host`, the form both tools take.
     public var destination: String { user.isEmpty ? host : "\(user)@\(host)" }
+
+    /// Reads the form, starting from what is stored.
+    ///
+    /// Absent fields keep their current value, so a form that does not carry
+    /// the server section — the conversion page's own form, for one — cannot
+    /// wipe it. Checkboxes send nothing when unticked, so each has a hidden
+    /// companion field that says the section was present at all.
+    public static func fromForm(_ fields: [String: String],
+                                current: RemoteTarget) -> RemoteTarget {
+        var host = current.host
+        var port = current.port
+        var user = current.user
+        var basePath = current.basePath
+        var transport = current.transport
+        var authentication = current.authentication
+        var identityFile = current.identityFile
+        var isEnabled = current.isEnabled
+        var removeLocal = current.removeLocalAfterSend
+
+        if let value = fields["remoteHost"] { host = value }
+        if let value = fields["remoteUser"] { user = value }
+        if let value = fields["remoteBasePath"] { basePath = value }
+        if let value = fields["remoteIdentityFile"] { identityFile = value }
+        // A port that is not a number keeps the stored one rather than
+        // silently becoming 22: the form shows what was kept.
+        if let value = fields["remotePort"], let number = Int(value.trimmingCharacters(
+            in: .whitespaces)) {
+            port = number
+        }
+        if let value = fields["remoteTransport"], let choice = Transport(rawValue: value) {
+            transport = choice
+        }
+        if let value = fields["remoteAuthentication"],
+           let choice = Authentication(rawValue: value) {
+            authentication = choice
+        }
+        if fields["remoteEnabledPresent"] != nil {
+            isEnabled = fields["remoteEnabled"] != nil
+        }
+        if fields["remoteRemoveLocalPresent"] != nil {
+            removeLocal = fields["remoteRemoveLocal"] != nil
+        }
+
+        return RemoteTarget(isEnabled: isEnabled, host: host, port: port, user: user,
+                            basePath: basePath, transport: transport,
+                            authentication: authentication, identityFile: identityFile,
+                            removeLocalAfterSend: removeLocal)
+    }
 
     /// What is missing or wrong, in the same shape the settings form uses.
     public func problems() -> [WebSettings.Problem] {

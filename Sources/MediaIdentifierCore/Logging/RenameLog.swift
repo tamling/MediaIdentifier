@@ -9,6 +9,10 @@ public struct RenameLogEntry: Identifiable, Codable, Equatable, Sendable {
         /// A re-encode rather than a rename, so the history can say which it
         /// was instead of labelling a conversion "renamed".
         case converted
+        /// Sent to the remote library. Distinct from `success` because the
+        /// file did not move on this machine, and an entry that said
+        /// "renamed" would send the user looking for it in the wrong place.
+        case sent
     }
 
     public var id: UUID

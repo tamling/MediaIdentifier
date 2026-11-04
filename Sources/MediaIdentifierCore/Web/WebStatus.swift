@@ -26,6 +26,14 @@ public struct StatusSnapshot: Codable, Sendable, Equatable {
     /// True when the most recent run finished with one or more failures, so the
     /// health endpoint can report an error via its HTTP status code.
     public var hasError: Bool
+    /// A transfer to the remote library is running.
+    public var transferring: Bool
+    public var transferProgress: Double
+    /// "45 % · 12.3MB/s" as the tool reported it.
+    public var transferDetail: String?
+    public var pendingTransfers: Int
+    /// The remote library is switched on and complete enough to use.
+    public var remoteConfigured: Bool
 
     public init(
         updated: Date = Date(),
@@ -44,7 +52,12 @@ public struct StatusSnapshot: Codable, Sendable, Equatable {
         lastResult: String? = nil,
         watchActive: Bool = false,
         jellyfinConfigured: Bool = false,
-        hasError: Bool = false
+        hasError: Bool = false,
+        transferring: Bool = false,
+        transferProgress: Double = 0,
+        transferDetail: String? = nil,
+        pendingTransfers: Int = 0,
+        remoteConfigured: Bool = false
     ) {
         self.updated = updated
         self.busy = busy
@@ -63,11 +76,23 @@ public struct StatusSnapshot: Codable, Sendable, Equatable {
         self.watchActive = watchActive
         self.jellyfinConfigured = jellyfinConfigured
         self.hasError = hasError
+        self.transferring = transferring
+        self.transferProgress = transferProgress
+        self.transferDetail = transferDetail
+        self.pendingTransfers = pendingTransfers
+        self.remoteConfigured = remoteConfigured
     }
 
     /// Percent (0–100) of whichever job is currently active.
     public var activePercent: Int {
-        let fraction = converting ? convertProgress : renameProgress
+        let fraction: Double
+        if transferring {
+            fraction = transferProgress
+        } else if converting {
+            fraction = convertProgress
+        } else {
+            fraction = renameProgress
+        }
         return max(0, min(100, Int((fraction * 100).rounded())))
     }
 

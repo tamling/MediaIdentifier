@@ -621,6 +621,7 @@ public struct WebRouter: Sendable {
             case .skipped: status = "<span class=\"flag\">skipped</span>"
             case .failure: status = "<span class=\"bad-text\">failed</span>"
             case .converted: status = "<span class=\"ok-text\">converted</span>"
+            case .sent: status = "<span class=\"ok-text\">sent</span>"
             }
             let detail = entry.errorDescription.map {
                 "<div class=\"hint\">\(Self.escape($0))</div>"

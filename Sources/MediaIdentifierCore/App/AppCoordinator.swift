@@ -72,6 +72,9 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
     private var _queuedConversionRuns = 0
     /// The running FFmpeg, so a cancel can end it.
     private var _runningConversion: Process?
+    private var _cancelTransfers = false
+    private var _queuedTransferRuns = 0
+    private var _runningTransfer: Process?
 
     /// Set when the settings file could not be read, so the interface can say
     /// so instead of silently running on defaults.
@@ -144,8 +147,18 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         // Counted here rather than when the run starts, so a cancel issued
         // while the command is still waiting its turn is not mistaken for a
         // cancel with nothing to cancel.
+        if case .cancelTransfers = command {
+            cancelTransfers()
+            return
+        }
+        // Counted here rather than when the run starts, so a cancel issued
+        // while the command is still waiting its turn is not mistaken for a
+        // cancel with nothing to cancel.
         if case .convertFiles = command {
             lock.lock(); _queuedConversionRuns += 1; lock.unlock()
+        }
+        if case .transferFiles = command {
+            lock.lock(); _queuedTransferRuns += 1; lock.unlock()
         }
         queue.async { [weak self] in self?.execute(command) }
     }
@@ -175,6 +188,12 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }; return _cancelConversions
     }
 
+    /// The same, for transfers. Only for tests: the end-to-end path needs an
+    /// SSH server, so the flag's own rules are checked directly.
+    var transferCancelIsArmedForTesting: Bool {
+        lock.lock(); defer { lock.unlock() }; return _cancelTransfers
+    }
+
     // MARK: Execution
 
     private func execute(_ command: WebCommand) {
@@ -200,6 +219,11 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         case .cancelConversions:
             // Handled in `submit`, off the queue.
             break
+        case .transferFiles(let accepting):
+            transferFiles(accepting: accepting)
+        case .cancelTransfers:
+            // Handled in `submit`, off the queue.
+            break
         case .clearHistory:
             clearHistory()
         }
@@ -211,6 +235,10 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
             lock.lock(); _settings = settings.normalised(); lock.unlock()
             update { $0.lastResult = "Settings saved." }
             updateWatchState()
+            // So the interface stops offering a "send to the server" button
+            // the moment the server is switched off, rather than at the next
+            // scan.
+            refreshSnapshotCounts()
         } catch {
             update { $0.lastResult = "Settings could not be saved: \(error)" }
         }
@@ -626,6 +654,222 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         lock.lock(); _cancelConversions = false; lock.unlock()
     }
 
+    // MARK: Sending to the remote library
+
+    /// Every file of one proposal and where it goes on the server.
+    ///
+    /// Companions keep the primary's folder and their own name, which is what
+    /// the planner does locally — computed from `proposedRelativePath` rather
+    /// than from the companion's absolute destination, so an item whose
+    /// output root was never set still gets a sensible remote path.
+    static func remoteTransfers(for item: RenameItem) -> [(local: URL, relative: String)] {
+        var sends: [(local: URL, relative: String)] = [
+            (item.mediaFile.url, item.proposedRelativePath)
+        ]
+        let folder = (item.proposedRelativePath as NSString).deletingLastPathComponent
+        for move in item.companionMoves {
+            let name = move.destination.lastPathComponent
+            sends.append((move.source, folder.isEmpty ? name : folder + "/" + name))
+        }
+        return sends
+    }
+
+    /// Copies the ticked files to the remote library, sorted into the folders
+    /// the proposals name.
+    ///
+    /// A copy, not a move: the local file stays unless the user has ticked
+    /// "remove the local copy". Sending is then undoable by deleting what
+    /// arrived, which is the same bargain the converter offers.
+    private func transferFiles(accepting: Set<UUID>) {
+        lock.lock(); _queuedTransferRuns = max(0, _queuedTransferRuns - 1); lock.unlock()
+
+        let settings = self.settings
+        let target = settings.remote
+        guard target.isEnabled else {
+            clearTransferCancelRequest()
+            update { $0.lastResult = "Der Server ist in den Einstellungen nicht aktiviert." }
+            return
+        }
+        let problems = target.problems()
+        guard problems.isEmpty else {
+            clearTransferCancelRequest()
+            update {
+                $0.hasError = true
+                $0.lastResult = "Die Servereinstellungen sind unvollständig: "
+                    + problems.map(\.message).joined(separator: " ")
+            }
+            return
+        }
+
+        // Asked for before anything is sent: finding out halfway through that
+        // there is no password means half a library in two places.
+        var password: String?
+        if target.authentication == .password {
+            password = secretStore.value(for: .remotePassword)
+            guard let stored = password, !stored.isEmpty else {
+                clearTransferCancelRequest()
+                update {
+                    $0.hasError = true
+                    $0.lastResult = "Für die Anmeldung per Passwort ist keines gespeichert."
+                }
+                return
+            }
+        }
+
+        let pending = items.filter { accepting.contains($0.id) }
+        guard !pending.isEmpty else {
+            clearTransferCancelRequest()
+            update { $0.lastResult = "Es war nichts angehakt, also wurde nichts gesendet." }
+            return
+        }
+
+        let transfer = RemoteTransfer()
+        var sent = 0
+        var failed = 0
+        var removed = 0
+        var finished: [UUID] = []
+
+        for (index, item) in pending.enumerated() {
+            lock.lock()
+            let cancelled = _cancelTransfers
+            lock.unlock()
+            if cancelled { break }
+
+            let sends = Self.remoteTransfers(for: item)
+            var itemFailed = false
+
+            for (local, relative) in sends {
+                // A companion that has since been deleted is not a failure of
+                // the transfer; skipping it quietly is wrong too, so it goes
+                // in the log and the run continues.
+                guard FileManager.default.fileExists(atPath: local.path) else {
+                    log.append(RenameLogEntry(oldName: local.lastPathComponent,
+                                              newName: relative,
+                                              status: .skipped,
+                                              errorDescription: "Die Datei ist nicht mehr da."))
+                    continue
+                }
+                update {
+                    $0.busy = true
+                    $0.transferring = true
+                    $0.transferProgress = Double(index) / Double(pending.count)
+                    $0.currentFile = local.lastPathComponent
+                    $0.pendingTransfers = pending.count - index - 1
+                    $0.transferDetail = nil
+                }
+                do {
+                    try transfer.send(
+                        local, relativePath: relative, to: target, password: password,
+                        onStart: { [weak self] process in
+                            guard let self else { return }
+                            self.lock.lock()
+                            self._runningTransfer = process
+                            self.lock.unlock()
+                        },
+                        progress: { [weak self] progress in
+                            // Within this file, scaled into the whole run, so
+                            // the bar moves once from start to finish rather
+                            // than resetting on every file.
+                            let whole = (Double(index) + progress.fraction)
+                                / Double(pending.count)
+                            self?.update {
+                                $0.transferProgress = whole
+                                $0.transferDetail = [
+                                    "\(Int((progress.fraction * 100).rounded())) %",
+                                    progress.speed,
+                                ].compactMap { $0 }.joined(separator: " · ")
+                            }
+                        }
+                    )
+                    sent += 1
+                    log.append(RenameLogEntry(oldName: local.lastPathComponent,
+                                              newName: relative,
+                                              status: .sent))
+                } catch {
+                    failed += 1
+                    itemFailed = true
+                    log.append(RenameLogEntry(oldName: local.lastPathComponent,
+                                              newName: relative,
+                                              status: .failure,
+                                              errorDescription: Self.describe(error)))
+                }
+                lock.lock(); _runningTransfer = nil; lock.unlock()
+            }
+
+            // Only a proposal whose every file arrived is taken off the list
+            // and, if asked, removed here: a half-sent item must stay visible
+            // so it can be sent again.
+            if !itemFailed {
+                finished.append(item.id)
+                if target.removeLocalAfterSend {
+                    for (local, _) in sends
+                    where FileManager.default.fileExists(atPath: local.path) {
+                        do {
+                            try FileManager.default.removeItem(at: local)
+                            removed += 1
+                        } catch {
+                            log.append(RenameLogEntry(
+                                oldName: local.lastPathComponent,
+                                newName: "—",
+                                status: .failure,
+                                errorDescription: "Gesendet, aber die lokale Datei ließ sich "
+                                    + "nicht löschen: " + Self.describe(error)))
+                        }
+                    }
+                }
+            }
+        }
+
+        let done = Set(finished)
+        lock.lock()
+        _items.removeAll { done.contains($0.id) }
+        let stopped = _cancelTransfers
+        _cancelTransfers = false
+        lock.unlock()
+
+        update {
+            $0.busy = false
+            $0.transferring = false
+            $0.transferProgress = 1
+            $0.transferDetail = nil
+            $0.currentFile = nil
+            $0.pendingTransfers = 0
+            $0.hasError = failed > 0
+            $0.lastResult = "\(sent) Datei\(sent == 1 ? "" : "en") gesendet"
+                + (failed > 0 ? ", \(failed) fehlgeschlagen" : "")
+                + (stopped ? " — vorzeitig gestoppt" : "")
+                + (target.removeLocalAfterSend
+                    ? ", \(removed) lokal gelöscht."
+                    : ". Die lokalen Dateien sind noch da.")
+        }
+        refreshSnapshotCounts()
+    }
+
+    private func cancelTransfers() {
+        lock.lock()
+        let hasTarget = _runningTransfer != nil || _queuedTransferRuns > 0
+        if hasTarget { _cancelTransfers = true }
+        let process = _runningTransfer
+        lock.unlock()
+
+        guard hasTarget else {
+            update { $0.lastResult = "Es läuft keine Übertragung." }
+            return
+        }
+        // rsync leaves a partial file behind on purpose, so the next run
+        // picks up where this one stopped instead of starting over.
+        process?.terminate()
+        update {
+            $0.lastResult = process == nil
+                ? "Stoppt vor der nächsten Datei."
+                : "Stoppt nach der aktuellen Datei."
+        }
+    }
+
+    private func clearTransferCancelRequest() {
+        lock.lock(); _cancelTransfers = false; lock.unlock()
+    }
+
     static func describe(_ error: Error) -> String {
         (error as? LocalizedError)?.errorDescription ?? String(describing: error)
     }
@@ -736,6 +980,8 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
             $0.done = done
             $0.watchActive = settings.watchSourceFolder
             $0.jellyfinConfigured = hasJellyfin
+            $0.remoteConfigured = settings.remote.isEnabled
+                && settings.remote.problems().isEmpty
         }
     }
 

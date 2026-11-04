@@ -23,6 +23,10 @@ public enum WebCommand: Sendable, Equatable {
     /// Converts the files the user ticked. Never started on its own.
     case convertFiles(accepting: Set<UUID>)
     case cancelConversions
+    /// Sends the files the user ticked to the remote library, sorted into the
+    /// proposed folders. Never started on its own.
+    case transferFiles(accepting: Set<UUID>)
+    case cancelTransfers
     case clearHistory
 }
 
