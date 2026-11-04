@@ -77,8 +77,10 @@ final class RemoteSendIntegrationTests: XCTestCase {
         coordinator.executeForTesting(.saveSettings(settings))
     }
 
+    /// Named makeVideo, not write: a method called `write` on the test case
+    /// shadows POSIX write(2) inside it, which the raw-fixture helper needs.
     @discardableResult
-    private func write(_ name: String, bytes: Int = 64_000) throws -> URL {
+    private func makeVideo(_ name: String, bytes: Int = 64_000) throws -> URL {
         let url = source.appendingPathComponent(name)
         try Data(repeating: 0x41, count: bytes).write(to: url)
         return url
@@ -105,7 +107,7 @@ final class RemoteSendIntegrationTests: XCTestCase {
     // MARK: The happy path, so the rest means something
 
     func testAFileReachesTheServerAndTheLocalCopyStays() throws {
-        try write("Dark.S01E01.1080p.mkv")
+        try makeVideo("Dark.S01E01.1080p.mkv")
         scanAndSend()
 
         let item = try XCTUnwrap(coordinator.logEntries.first { $0.status == .sent })
@@ -117,7 +119,7 @@ final class RemoteSendIntegrationTests: XCTestCase {
     /// Only with the setting on, and only then.
     func testTheLocalCopyIsRemovedWhenAskedFor() throws {
         setRemote { $0.removeLocalAfterSend = true }
-        try write("Dark.S01E02.1080p.mkv")
+        try makeVideo("Dark.S01E02.1080p.mkv")
         scanAndSend()
 
         let item = try XCTUnwrap(coordinator.logEntries.first { $0.status == .sent })
@@ -133,8 +135,8 @@ final class RemoteSendIntegrationTests: XCTestCase {
     /// had arrived.
     func testAVanishedPrimaryDeletesNothingAndKeepsTheItem() throws {
         setRemote { $0.removeLocalAfterSend = true }
-        try write("Dark.S01E03.1080p.mkv")
-        try write("Dark.S01E03.1080p.srt", bytes: 2_000)
+        try makeVideo("Dark.S01E03.1080p.mkv")
+        try makeVideo("Dark.S01E03.1080p.srt", bytes: 2_000)
 
         coordinator.executeForTesting(.scanSourceFolder)
         let ids = Set(coordinator.items.map(\.id))
@@ -161,7 +163,7 @@ final class RemoteSendIntegrationTests: XCTestCase {
             // is a file, so mkdir below it fails.
             $0.basePath = "/proc/cpuinfo/nope"
         }
-        try write("Dark.S01E04.1080p.mkv")
+        try makeVideo("Dark.S01E04.1080p.mkv")
         scanAndSend()
 
         XCTAssertTrue(exists("Dark.S01E04.1080p.mkv"),
@@ -225,7 +227,7 @@ final class RemoteSendIntegrationTests: XCTestCase {
     /// run carried on sending, and deleting.
     func testACancelDuringARunIsNotDropped() throws {
         setRemote { $0.removeLocalAfterSend = true }
-        for index in 10...14 { try write("Dark.S02E\(index).1080p.mkv", bytes: 2_000_000) }
+        for index in 10...14 { try makeVideo("Dark.S02E\(index).1080p.mkv", bytes: 2_000_000) }
 
         coordinator.executeForTesting(.scanSourceFolder)
         let ids = Set(coordinator.items.map(\.id))
