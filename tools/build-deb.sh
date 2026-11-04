@@ -336,7 +336,8 @@ Installed-Size: $INSTALLED_SIZE
 Section: video
 Priority: optional
 Depends: $SHLIB_DEPENDS, adduser, openssl
-Recommends: ffmpeg
+Recommends: ffmpeg, rsync, openssh-client
+Suggests: sshpass, yt-dlp
 Description: Rename media into a Jellyfin layout from a local web interface
  Mediafin parses release names, proposes Jellyfin-conformant names and shows
  them for review before anything is moved. It can also re-encode files to
@@ -345,6 +346,14 @@ Description: Rename media into a Jellyfin layout from a local web interface
  The interface is served over HTTPS and requires an access token. It binds to
  loopback by default; binding to the network without TLS is refused rather
  than sending the token in clear text.
+ .
+ Sending the sorted files to a server over rsync or SFTP, fetching a video
+ from a link with yt-dlp, and sorting a music library from its own tags are
+ all optional; each names the program it needs when that program is absent,
+ rather than failing obscurely. sshpass is only needed to log in with a
+ password instead of a key, and yt-dlp is usually installed with pip rather
+ than from the distribution, which is why it is a suggestion and not a
+ recommendation.
  .
  The Swift runtime is linked statically, so no Swift installation is needed.
  openssl is required to create the first self-signed certificate; ffmpeg only
