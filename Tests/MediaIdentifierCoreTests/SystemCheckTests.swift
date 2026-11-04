@@ -69,17 +69,12 @@ final class SystemCheckTests: XCTestCase {
         XCTAssertEqual(lamp(list, "series")?.state, .warning)
     }
 
-    /// With a server configured, the local library folders are not where the
-    /// library lives. Demanding them would put a red lamp on a setup that is
-    /// working exactly as the user arranged it.
-    func testWithAServerTheLocalLibraryFoldersAreNotDemanded() {
-        var settings = WebSettings(sourceFolder: root.path)
-        settings.remote = RemoteTarget(isEnabled: true, host: "nas.local", user: "media",
-                                       basePath: "/srv/media")
-        let list = checks(settings)
-        XCTAssertNil(lamp(list, "movies"))
-        XCTAssertEqual(lamp(list, "library")?.state, .ok)
-    }
+    // (A test used to live here requiring the local library lamps to vanish
+    // when a server was configured, and a "Bibliothek" lamp to be green
+    // whatever the server had said. Both were wrong — renaming still writes
+    // to those folders, and that lamp reported on nothing. It had pinned
+    // the bug in place. See testTheLocalFolderLampsSurviveAServerBeing-
+    // Configured and testTheLibraryLampDoesNotClaimAServerThatIsDownIsFine.)
 
     // MARK: Services that have to be asked
 
@@ -112,7 +107,9 @@ final class SystemCheckTests: XCTestCase {
                           probes: [.localLLM: ProbeResult(ok: false,
                                                           detail: "Zeitüberschreitung.")])
         XCTAssertEqual(lamp(list, "identification")?.state, .failed)
-        XCTAssertEqual(lamp(list, "identification")?.detail, "Zeitüberschreitung.")
+        // The reason is kept; the age is appended to it.
+        XCTAssertTrue(lamp(list, "identification")?.detail.contains("Zeitüberschreitung.")
+                        ?? false, lamp(list, "identification")?.detail ?? "")
     }
 
     /// Offline identification needs nothing and must not nag.
