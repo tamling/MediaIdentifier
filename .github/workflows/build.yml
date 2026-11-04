@@ -182,7 +182,7 @@ jobs:
         run: |
           set -euo pipefail
           apt-get install -y -qq ffmpeg python3-pip
-          pip3 install --quiet --break-system-packages yt-dlp || pip3 install --quiet yt-dlp
+          pip3 install --quiet yt-dlp
           yt-dlp --version
 
           mkdir -p /tmp/mediafin-www
@@ -197,15 +197,24 @@ jobs:
           cd /tmp/mediafin-www
           nohup python3 -m http.server 18080 --bind 127.0.0.1 \
             > /tmp/mediafin-www/httpd.log 2>&1 &
-          for _ in $(seq 1 30); do
-            curl -sf --noproxy 127.0.0.1 -o /dev/null \
-              http://127.0.0.1:18080/Sample.Video.2024.1080p.mp4 && break
-            sleep 0.5
-          done
-          curl -sf --noproxy 127.0.0.1 -o /dev/null \
-            http://127.0.0.1:18080/Sample.Video.2024.1080p.mp4 || {
+          # Asked with python3, not curl: curl is NOT in this container, and
+          # a check that cannot run reports the same thing as a server that
+          # did not start. That mistake has already cost this project a
+          # debugging round once.
+          python3 - <<'PROBE' || {
             echo "FAIL: the local HTTP server did not come up"
             cat /tmp/mediafin-www/httpd.log; exit 1; }
+          import sys, time, urllib.request
+          url = "http://127.0.0.1:18080/Sample.Video.2024.1080p.mp4"
+          for _ in range(40):
+              try:
+                  with urllib.request.urlopen(url, timeout=2) as answer:
+                      if answer.read(16):
+                          sys.exit(0)
+              except Exception:
+                  time.sleep(0.5)
+          sys.exit(1)
+          PROBE
 
           # Demonstrated rather than asserted in a comment, like the sftp
           # option-ordering check above. --print implies --quiet implies
