@@ -57,7 +57,7 @@ public enum DownloadCommand {
                     ? "Das ist keine Web-Adresse. Erwartet wird http:// oder https://."
                     : "Nur http:// und https:// werden geladen, nicht \(scheme)://."
             case .noImportFolder:
-                return "Es ist kein Importordner eingestellt, in den geladen werden könnte."
+                return "Der Importordner fehlt oder ist nicht erreichbar."
             case .unsafeInput(let what):
                 return "Nicht ladbar: \(what)"
             }
@@ -108,13 +108,23 @@ public enum DownloadCommand {
 
     public static func download(url rawURL: String,
                                 into importDirectory: URL,
-                                tools: DownloadTools) throws -> Invocation {
+                                tools: DownloadTools,
+                                fileManager: FileManager = .default) throws -> Invocation {
         let absent = tools.missing()
         guard absent.isEmpty else { throw Failure.toolsMissing(absent) }
         guard let ytDlp = tools.ytDlp, let ffmpeg = tools.ffmpeg else {
             throw Failure.toolsMissing(absent)
         }
-        guard !importDirectory.path.isEmpty, importDirectory.path.hasPrefix("/") else {
+        // Not "is it absolute": URL(fileURLWithPath:) absolutises anything
+        // it is given, so that check could never fail and a test caught it
+        // as vacuous. Whether the folder is actually there can fail, and is
+        // the case that matters — a library path on a drive that is no
+        // longer mounted.
+        var isDirectory: ObjCBool = false
+        guard !importDirectory.path.isEmpty,
+              fileManager.fileExists(atPath: importDirectory.path,
+                                     isDirectory: &isDirectory),
+              isDirectory.boolValue else {
             throw Failure.noImportFolder
         }
         let url = try validatedURL(rawURL)

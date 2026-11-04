@@ -11,7 +11,24 @@ final class DownloadCommandTests: XCTestCase {
 
     private let tools = DownloadTools(ytDlp: "/usr/local/bin/yt-dlp",
                                       ffmpeg: "/usr/bin/ffmpeg")
-    private let importFolder = URL(fileURLWithPath: "/mnt/downloads", isDirectory: true)
+    /// A real folder: the builder checks that the import folder exists,
+    /// because a path on an unmounted drive is the case that actually
+    /// happens. (It used to check that the path was absolute, which
+    /// URL(fileURLWithPath:) guarantees — a guard that could not fail.)
+    private var importFolder: URL!
+
+    override func setUpWithError() throws {
+        try super.setUpWithError()
+        importFolder = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("mediafin-dl-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: importFolder,
+                                                withIntermediateDirectories: true)
+    }
+
+    override func tearDownWithError() throws {
+        if let importFolder { try? FileManager.default.removeItem(at: importFolder) }
+        try super.tearDownWithError()
+    }
 
     private func build(_ url: String = "https://example.com/watch?v=abc")
         throws -> DownloadCommand.Invocation {
@@ -133,10 +150,20 @@ final class DownloadCommandTests: XCTestCase {
         }
     }
 
-    func testWithoutAnImportFolderNothingIsBuilt() {
+    /// A library path on a drive that is no longer mounted: the folder is
+    /// configured, looks fine in the form, and is not there.
+    func testAnImportFolderThatIsNotThereStopsTheDownload() {
         XCTAssertThrowsError(try DownloadCommand.download(
             url: "https://example.com/x",
-            into: URL(fileURLWithPath: "relative/path"), tools: tools))
+            into: URL(fileURLWithPath: "/mnt/nas-not-mounted/downloads"), tools: tools))
+    }
+
+    /// And a file where a folder should be.
+    func testAFileWhereTheImportFolderShouldBeIsRefused() throws {
+        let file = importFolder.appendingPathComponent("not-a-folder")
+        try Data("x".utf8).write(to: file)
+        XCTAssertThrowsError(try DownloadCommand.download(
+            url: "https://example.com/x", into: file, tools: tools))
     }
 
     func testToolsAreLookedUpByAbsolutePath() {
