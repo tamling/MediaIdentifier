@@ -169,21 +169,28 @@ final class RemoteSendIntegrationTests: XCTestCase {
     func testAFilenameWithANewlineIsRefusedRatherThanSent() throws {
         setRemote { $0.transport = .sftp; $0.removeLocalAfterSend = true }
         let name = "Dark.S01E05\n!touch /tmp/mediafin-pwned\n.1080p.mkv"
-        // Only create it if the filesystem accepts it; if not, the point is
-        // moot on this platform and the test says so rather than passing
-        // silently.
-        let url = source.appendingPathComponent(name)
-        do {
-            try Data(repeating: 0x41, count: 1_000).write(to: url)
-        } catch {
-            throw XCTSkip("this filesystem will not store a newline in a name")
-        }
+        // The path is built as a string and handed to FileManager directly.
+        // URL.appendingPathComponent percent-encodes the newline, and then
+        // the write fails — which is how the first version of this test
+        // skipped itself every run while reporting nothing.
+        let path = source.path + "/" + name
+        let marker = "/tmp/mediafin-pwned-\(UUID().uuidString)"
+        try XCTSkipUnless(
+            FileManager.default.createFile(
+                atPath: path, contents: Data(repeating: 0x41, count: 1_000)),
+            "this filesystem will not store a newline in a name")
+
+        // The injected command writes the marker if the batch script runs it.
+        let injected = "Dark.S01E05\n!touch \(marker)\n.1080p.mkv"
+        let injectedPath = source.path + "/" + injected
+        _ = FileManager.default.createFile(
+            atPath: injectedPath, contents: Data(repeating: 0x41, count: 1_000))
 
         scanAndSend()
 
-        XCTAssertFalse(FileManager.default.fileExists(atPath: "/tmp/mediafin-pwned"),
+        XCTAssertFalse(FileManager.default.fileExists(atPath: marker),
                        "a filename ran a command on this machine")
-        XCTAssertTrue(FileManager.default.fileExists(atPath: url.path),
+        XCTAssertTrue(FileManager.default.fileExists(atPath: path),
                       "a file that was refused was deleted anyway")
     }
 
