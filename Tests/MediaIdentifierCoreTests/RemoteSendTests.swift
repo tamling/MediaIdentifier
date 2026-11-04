@@ -338,6 +338,50 @@ final class RemoteSendTests: XCTestCase {
                        "an unrelated save discarded a good probe")
     }
 
+    // MARK: The schedule's timer
+
+    /// Armed only when the schedule is switched on and valid — an
+    /// impossible time must not leave a tick running that can never fire.
+    func testTheTimerFollowsTheSetting() {
+        XCTAssertFalse(coordinator.scheduleIsArmedForTesting)
+
+        var settings = coordinator.settings
+        settings.schedule = Schedule(isEnabled: true, cadence: .daily, hour: 3)
+        coordinator.executeForTesting(.saveSettings(settings))
+        XCTAssertTrue(coordinator.scheduleIsArmedForTesting)
+
+        settings.schedule.hour = 99
+        coordinator.executeForTesting(.saveSettings(settings))
+        XCTAssertFalse(coordinator.scheduleIsArmedForTesting,
+                       "a schedule that can never fire left a tick running")
+
+        settings.schedule = Schedule(isEnabled: false)
+        coordinator.executeForTesting(.saveSettings(settings))
+        XCTAssertFalse(coordinator.scheduleIsArmedForTesting)
+    }
+
+    /// Switching it on must not fire a run the user did not ask for.
+    func testTurningTheScheduleOnDoesNotRunImmediately() {
+        var settings = coordinator.settings
+        settings.schedule = Schedule(isEnabled: true, cadence: .everyFewHours,
+                                     everyHours: 1)
+        coordinator.executeForTesting(.saveSettings(settings))
+        coordinator.drainForTesting()
+        XCTAssertTrue(coordinator.logEntries.isEmpty, "a run happened on being enabled")
+    }
+
+    /// The interface can say when the next one is.
+    func testTheNextRunIsKnown() {
+        var settings = coordinator.settings
+        settings.schedule = Schedule(isEnabled: true, cadence: .everyFewHours,
+                                     everyHours: 6)
+        coordinator.executeForTesting(.saveSettings(settings))
+        let next = coordinator.nextScheduledRun
+        XCTAssertNotNil(next)
+        XCTAssertGreaterThan(next!, Date(), "the next run is in the past")
+        XCTAssertLessThan(next!.timeIntervalSinceNow, 6 * 3600 + 60)
+    }
+
     // MARK: Helpers
 
     private static func item(source: String, relative: String) -> RenameItem {

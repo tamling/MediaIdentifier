@@ -183,6 +183,46 @@ final class ScheduleTests: XCTestCase {
         XCTAssertFalse(schedule.alsoSend)
     }
 
+    // MARK: Reading the form
+
+    /// Unticking a checkbox sends nothing, so the hidden companion is
+    /// what tells "unticked" from "not in this form".
+    func testTheCheckboxesNeedTheirCompanionField() {
+        let on = Schedule(isEnabled: true, alsoRename: true, alsoSend: true)
+        XCTAssertTrue(Schedule.fromForm([:], current: on).isEnabled,
+                      "a form without the section wiped the schedule")
+
+        let off = Schedule.fromForm(["schedulePresent": "1"], current: on)
+        XCTAssertFalse(off.isEnabled)
+        XCTAssertFalse(off.alsoRename)
+        XCTAssertFalse(off.alsoSend)
+    }
+
+    func testATimeIsReadFromTheForm() {
+        let schedule = Schedule.fromForm(["scheduleTime": "04:30"], current: Schedule())
+        XCTAssertEqual(schedule.hour, 4)
+        XCTAssertEqual(schedule.minute, 30)
+    }
+
+    /// A time that is not a time must not quietly become another hour:
+    /// the program would then run at 00:00 and the user would never know
+    /// why. It is kept impossible so the validation can say so.
+    func testSomethingThatIsNotATimeIsReportedRatherThanGuessed() {
+        for typed in ["morgens", "25:00", "4"] {
+            var schedule = Schedule.fromForm(["scheduleTime": typed], current: Schedule())
+            schedule.isEnabled = true
+            XCTAssertFalse(schedule.problems().isEmpty,
+                           "\(typed) was accepted as a time")
+        }
+    }
+
+    func testAnEmptyTimeFieldLeavesTheStoredOne() {
+        let stored = Schedule(hour: 3, minute: 15)
+        let schedule = Schedule.fromForm(["scheduleTime": ""], current: stored)
+        XCTAssertEqual(schedule.hour, 3)
+        XCTAssertEqual(schedule.minute, 15)
+    }
+
     // MARK: Settings file
 
     func testAnOlderSettingsFileStillLoads() throws {
