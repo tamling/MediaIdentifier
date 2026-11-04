@@ -75,6 +75,9 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
     private var _cancelTransfers = false
     private var _queuedTransferRuns = 0
     private var _runningTransfer: Process?
+    /// True from the moment a send starts until it ends, including the gaps
+    /// between files when no process exists.
+    private var _transferRunning = false
     private var _probes: [ProbeSubject: ProbeResult] = [:]
     /// Commands accepted but not finished.
     ///
@@ -170,8 +173,15 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
             lock.lock(); _queuedTransferRuns += 1; lock.unlock()
         }
         if Self.isWork(command) {
-            lock.lock(); _pendingWork += 1; lock.unlock()
-            update { $0.queuedWork = self.pendingWorkCount }
+            // The count is read out while the lock is held and then used
+            // outside it. Reading it inside `update`'s closure would take
+            // the same non-recursive lock a second time and hang the app —
+            // which is exactly what the first version of this did.
+            lock.lock()
+            _pendingWork += 1
+            let pending = _pendingWork
+            lock.unlock()
+            update { $0.queuedWork = pending }
         }
         queue.async { [weak self] in
             guard let self else { return }
@@ -179,8 +189,9 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
             if Self.isWork(command) {
                 self.lock.lock()
                 self._pendingWork = max(0, self._pendingWork - 1)
+                let pending = self._pendingWork
                 self.lock.unlock()
-                self.update { $0.queuedWork = self.pendingWorkCount }
+                self.update { $0.queuedWork = pending }
             }
         }
     }
@@ -806,6 +817,13 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
     /// the planner does locally — computed from `proposedRelativePath` rather
     /// than from the companion's absolute destination, so an item whose
     /// output root was never set still gets a sensible remote path.
+    /// Size in bytes, or nil when the file is not there.
+    static func fileSize(_ url: URL) -> Int64? {
+        guard let values = try? url.resourceValues(forKeys: [.fileSizeKey]),
+              let size = values.fileSize else { return nil }
+        return Int64(size)
+    }
+
     static func remoteTransfers(for item: RenameItem) -> [(local: URL, relative: String)] {
         var sends: [(local: URL, relative: String)] = [
             (item.mediaFile.url, item.proposedRelativePath)
@@ -867,6 +885,9 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
             return
         }
 
+        lock.lock(); _transferRunning = true; lock.unlock()
+        defer { lock.lock(); _transferRunning = false; lock.unlock() }
+
         let transfer = RemoteTransfer()
         var sent = 0
         var failed = 0
@@ -881,16 +902,26 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
 
             let sends = Self.remoteTransfers(for: item)
             var itemFailed = false
+            // What actually arrived, so the deletion below can be driven by
+            // what happened rather than by what was planned.
+            var arrived: [URL] = []
 
-            for (local, relative) in sends {
+            for (offset, (local, relative)) in sends.enumerated() {
+                lock.lock()
+                let stopNow = _cancelTransfers
+                lock.unlock()
+                if stopNow { itemFailed = true; break }
+                let isPrimary = offset == 0
                 // A companion that has since been deleted is not a failure of
-                // the transfer; skipping it quietly is wrong too, so it goes
-                // in the log and the run continues.
-                guard FileManager.default.fileExists(atPath: local.path) else {
-                    log.append(RenameLogEntry(oldName: local.lastPathComponent,
-                                              newName: relative,
-                                              status: .skipped,
-                                              errorDescription: "Die Datei ist nicht mehr da."))
+                // the transfer. The primary vanishing is: without this the
+                // item counted as finished, left the list, and its subtitle
+                // was deleted while the video had gone nowhere.
+                guard let before = Self.fileSize(local) else {
+                    log.append(RenameLogEntry(
+                        oldName: local.lastPathComponent, newName: relative,
+                        status: isPrimary ? .failure : .skipped,
+                        errorDescription: "Die Datei ist nicht mehr da."))
+                    if isPrimary { itemFailed = true; break }
                     continue
                 }
                 update {
@@ -930,10 +961,27 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
                             }
                         }
                     )
-                    sent += 1
-                    log.append(RenameLogEntry(oldName: local.lastPathComponent,
-                                              newName: relative,
-                                              status: .sent))
+                    // A file that grew or shrank while it was being sent
+                    // was still being written — a downloader had not
+                    // finished with it — so what arrived is a truncated
+                    // copy. rsync exits 0 for that quite happily.
+                    let after = Self.fileSize(local)
+                    if after != before {
+                        failed += 1
+                        itemFailed = true
+                        log.append(RenameLogEntry(
+                            oldName: local.lastPathComponent, newName: relative,
+                            status: .failure,
+                            errorDescription: "Die Datei wurde während der Übertragung noch "
+                                + "geschrieben; was angekommen ist, ist unvollständig. "
+                                + "Erneut senden, wenn der Download fertig ist."))
+                    } else {
+                        sent += 1
+                        arrived.append(local)
+                        log.append(RenameLogEntry(oldName: local.lastPathComponent,
+                                                  newName: relative,
+                                                  status: .sent))
+                    }
                 } catch {
                     failed += 1
                     itemFailed = true
@@ -951,8 +999,11 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
             if !itemFailed {
                 finished.append(item.id)
                 if target.removeLocalAfterSend {
-                    for (local, _) in sends
-                    where FileManager.default.fileExists(atPath: local.path) {
+                    // `arrived`, never `sends`: the planned list includes
+                    // files that were skipped, that failed, and that were
+                    // never there. Deleting from it destroyed local copies
+                    // of files the server had never received.
+                    for local in arrived {
                         do {
                             try FileManager.default.removeItem(at: local)
                             removed += 1
@@ -996,7 +1047,13 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
 
     private func cancelTransfers() {
         lock.lock()
-        let hasTarget = _runningTransfer != nil || _queuedTransferRuns > 0
+        // `_transferRunning` as well as the process: between two files there
+        // is no process, and the queued count was already spent on the first
+        // line of the run — so a cancel pressed in that gap used to be
+        // dropped, with the interface reporting that nothing was running
+        // while the next file went out (and, with the setting on, while the
+        // last one was deleted).
+        let hasTarget = _runningTransfer != nil || _queuedTransferRuns > 0 || _transferRunning
         if hasTarget { _cancelTransfers = true }
         let process = _runningTransfer
         lock.unlock()

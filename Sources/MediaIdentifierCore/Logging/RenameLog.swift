@@ -44,7 +44,17 @@ public struct RenameLogEntry: Identifiable, Codable, Equatable, Sendable {
 public final class RenameLog: @unchecked Sendable {
     private let url: URL
     private let queue = DispatchQueue(label: "MediaIdentifier.RenameLog")
-    private(set) public var entries: [RenameLogEntry] = []
+    /// Only ever touched inside `queue`. Reads go through `entries`.
+    private var _entries: [RenameLogEntry] = []
+
+    /// A snapshot, taken on the queue.
+    ///
+    /// Reads used to go straight at the array while appends ran on the
+    /// queue, from another thread: the web page and the window both read it
+    /// twice a second while a transfer appended once per file. That is a
+    /// data race on an array's storage, which is a crash rather than a
+    /// stale number.
+    public var entries: [RenameLogEntry] { queue.sync { _entries } }
 
     /// - Parameter url: file to persist to. Defaults to Application Support.
     public init(url: URL? = nil) {
@@ -54,21 +64,23 @@ public final class RenameLog: @unchecked Sendable {
 
     public func append(_ entry: RenameLogEntry) {
         queue.sync {
-            entries.append(entry)
+            // _entries, not entries: we are already on the queue, and the
+            // accessor would sync onto it again and deadlock.
+            _entries.append(entry)
             persist()
         }
     }
 
     public func append(contentsOf newEntries: [RenameLogEntry]) {
         queue.sync {
-            entries.append(contentsOf: newEntries)
+            _entries.append(contentsOf: newEntries)
             persist()
         }
     }
 
     public func clear() {
         queue.sync {
-            entries.removeAll()
+            _entries.removeAll()
             persist()
         }
     }
@@ -80,7 +92,8 @@ public final class RenameLog: @unchecked Sendable {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         if let decoded = try? decoder.decode([RenameLogEntry].self, from: data) {
-            entries = decoded
+            // Called from init, before anything else can see the log.
+            _entries = decoded
         }
     }
 
@@ -88,7 +101,7 @@ public final class RenameLog: @unchecked Sendable {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.prettyPrinted]
-        guard let data = try? encoder.encode(entries) else { return }
+        guard let data = try? encoder.encode(_entries) else { return }
         try? FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(),
             withIntermediateDirectories: true

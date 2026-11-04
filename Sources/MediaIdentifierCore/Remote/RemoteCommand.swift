@@ -33,6 +33,7 @@ public enum RemoteCommand {
     public enum Failure: Error, CustomStringConvertible, Equatable {
         case toolMissing(String)
         case notConfigured(String)
+        case unsafePath(String)
 
         public var description: String {
             switch self {
@@ -40,8 +41,50 @@ public enum RemoteCommand {
                 return "\(name) wurde nicht gefunden. Bitte installieren: sudo apt install \(name)"
             case .notConfigured(let what):
                 return "Der Server ist nicht vollständig eingerichtet: \(what)"
+            case .unsafePath(let what):
+                return "Nicht übertragbar: \(what)"
             }
         }
+    }
+
+    // MARK: Refusing what cannot be quoted
+
+    /// Rejects anything that would break out of the line it is written on.
+    ///
+    /// sftp reads its batch script a line at a time and has no escape for a
+    /// newline, so a name containing one does not become a quoted name — it
+    /// becomes a second command. sftp's `!` runs a shell on THIS machine, so
+    /// a file called `Dark\n!curl …|sh #\nS01E01.mkv`, which any program
+    /// writing into the download folder may create, would run that shell.
+    /// A newline is a legal character in a Linux filename, so this is not a
+    /// theoretical case; it is simply a rare one.
+    ///
+    /// Refused rather than escaped, because there is nothing to escape it
+    /// to. The user is told which file, and can rename it.
+    static func rejectingControlCharacters(_ value: String, what: String) throws -> String {
+        guard !value.unicodeScalars.contains(where: {
+            $0.value < 0x20 || $0.value == 0x7F
+        }) else {
+            throw Failure.unsafePath("\(what) enthält ein Steuerzeichen (z. B. einen "
+                + "Zeilenumbruch). Bitte umbenennen.")
+        }
+        return value
+    }
+
+    /// The same, for a value that is spliced into rsync's `-e` string.
+    ///
+    /// rsync splits that string on spaces with no quoting of any kind, so a
+    /// value containing one does not become an argument with a space in it —
+    /// it becomes further ssh options. `-o ProxyCommand=…` is among the
+    /// options that would then be honoured, and ProxyCommand runs a local
+    /// shell. This is why the identity file may not contain a space.
+    static func rejectingSplittableCharacters(_ value: String, what: String) throws -> String {
+        _ = try rejectingControlCharacters(value, what: what)
+        guard !value.contains(" "), !value.contains("\t") else {
+            throw Failure.unsafePath("\(what) darf kein Leerzeichen enthalten: rsync teilt "
+                + "den SSH-Befehl daran auf. Bitte an einen Pfad ohne Leerzeichen legen.")
+        }
+        return value
     }
 
     // MARK: SSH options shared by both transports
@@ -121,6 +164,7 @@ public enum RemoteCommand {
         // Single-quoted for the remote shell, with embedded quotes escaped
         // the only way POSIX sh allows. The base path comes from a settings
         // field, so it is not trusted to be shell-safe.
+        _ = try rejectingControlCharacters(target.basePath, what: "Der Zielpfad")
         let quoted = "'" + target.basePath.replacingOccurrences(of: "'", with: "'\\''") + "'"
         var arguments = ["-p", String(target.port)] + sshOptions(target)
         arguments.append(target.destination)
@@ -154,6 +198,16 @@ public enum RemoteCommand {
         // The ssh command rsync should use. rsync splits this on spaces, so
         // it must not contain a path with one — an identity file in a folder
         // with a space would break here and nowhere else.
+        // Everything that goes into the -e string is split on spaces by
+        // rsync, so each piece has to survive that intact.
+        _ = try rejectingSplittableCharacters(sshPath, what: "Der Pfad zu ssh")
+        if target.authentication == .key, !target.identityFile.isEmpty {
+            _ = try rejectingSplittableCharacters(target.identityFile,
+                                                  what: "Die Schlüsseldatei")
+        }
+        _ = try rejectingControlCharacters(localFile.path, what: "Der Dateiname")
+        _ = try rejectingControlCharacters(destination, what: "Der Zielpfad")
+
         var sshCommand = ([sshPath, "-p", String(target.port)] + sshOptions(target))
             .joined(separator: " ")
         if target.authentication == .password {
@@ -202,9 +256,11 @@ public enum RemoteCommand {
             throw Failure.notConfigured("Adresse oder Zielpfad fehlt")
         }
         let destination = remotePath(relativePath, under: target.basePath)
+        _ = try rejectingControlCharacters(localFile.path, what: "Der Dateiname")
+        _ = try rejectingControlCharacters(destination, what: "Der Zielpfad")
         let directory = (destination as NSString).deletingLastPathComponent
 
-        var script = ""
+        var script = """
         for level in parentDirectories(of: directory) {
             script += "-mkdir \(quote(level))\n"
         }

@@ -110,8 +110,10 @@ public final class RemoteTransfer {
             state.appendError(text)
         }
 
-        onStart?(process)
+        // run() first, then publish: a cancel arriving between the two
+        // would call terminate() on a Process that was never launched.
         try process.run()
+        onStart?(process)
 
         // sftp reads its batch script from standard input; rsync wants the
         // pipe closed so it does not wait on a terminal that is not there.
