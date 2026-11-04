@@ -140,6 +140,28 @@ enum Styling {
           color: @mf_muted;
           padding: 36px;
         }
+
+        /* The log column. Separated by a hairline rather than a card, so it
+           reads as a margin to the work and not as another panel of it. */
+        .mf-log {
+          background-color: @mf_surface;
+          border-left: 1px solid @mf_border;
+          padding: 14px;
+        }
+
+        .mf-log-entry {
+          font-size: 9pt;
+          padding: 4px 2px;
+        }
+
+        /* Status colours, from the same palette the web interface uses. */
+        .mf-ok    { color: @mf_ok; }
+        .mf-fail  { color: @mf_error; }
+        .mf-skip  { color: @mf_muted; }
+
+        /* Timestamps and the "to" name: present, but never competing with
+           the error text, which is the reason anyone reads this column. */
+        .mf-log-time { color: alpha(@mf_muted, 0.8); font-size: 8pt; }
         """
     }
 

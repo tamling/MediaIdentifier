@@ -29,6 +29,15 @@ final class AppWindow {
     private let llmURLEntry: UnsafeMutablePointer<GtkWidget>
     private let llmModelEntry: UnsafeMutablePointer<GtkWidget>
     private let llmKeyEntry: UnsafeMutablePointer<GtkWidget>
+    private let logColumn: UnsafeMutablePointer<GtkWidget>
+    private let logCountLabel: UnsafeMutablePointer<GtkWidget>
+
+    /// The log rows on screen, so they can be replaced without walking the
+    /// container.
+    private var logWidgets: [UnsafeMutablePointer<GtkWidget>] = []
+    /// What the log column was last built from. Optional so the first build
+    /// happens even when there is nothing to show yet.
+    private var renderedLogIDs: [UUID]?
 
     /// The rows currently on screen, kept so they can be destroyed without
     /// walking the container — which would mean another C callback.
@@ -52,7 +61,7 @@ final class AppWindow {
         self.coordinator = coordinator
 
         let window = gtk_window_new(GTK_WINDOW_TOPLEVEL)!
-        gtk_window_set_default_size(Gtk.window(window), 900, 640)
+        gtk_window_set_default_size(Gtk.window(window), 1180, 680)
         // Set as well as the header bar's title: this is what a taskbar, an
         // alt-tab switcher and a window list show.
         gtk_window_set_title(Gtk.window(window), "Mediafin")
@@ -72,9 +81,16 @@ final class AppWindow {
         gtk_header_bar_pack_end(Gtk.headerBar(header), scanButton)
         gtk_window_set_titlebar(Gtk.window(window), header)
 
+        // Work on the left, log on the right. The log is always there rather
+        // than on a tab: a rename that failed is the thing you most need to
+        // see, and a panel you have to go and find is a panel you look at
+        // after wondering why nothing happened.
+        let split = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0)!
+        gtk_container_add(Gtk.container(window), split)
+
         let page = gtk_box_new(GTK_ORIENTATION_VERTICAL, 16)!
         gtk_container_set_border_width(Gtk.container(page), 18)
-        gtk_container_add(Gtk.container(window), page)
+        gtk_box_pack_start(Gtk.box(split), page, 1, 1, 0)
 
         // MARK: Folders
 
@@ -169,6 +185,24 @@ final class AppWindow {
         gtk_label_set_xalign(Gtk.label(version), 1)
         gtk_box_pack_end(Gtk.box(footer), version, 0, 0, 0)
         gtk_box_pack_start(Gtk.box(page), footer, 0, 0, 0)
+
+        // MARK: Log
+
+        let logSide = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8)!
+        Styling.style(logSide, "mf-log")
+        gtk_widget_set_size_request(logSide, 320, -1)
+        let logTitle = Self.label("VERLAUF", classes: "mf-card-title")
+        gtk_box_pack_start(Gtk.box(logSide), logTitle, 0, 0, 0)
+        logCountLabel = Self.label("", classes: "mf-dim")
+        gtk_box_pack_start(Gtk.box(logSide), logCountLabel, 0, 0, 0)
+
+        logColumn = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2)!
+        let logScroller = gtk_scrolled_window_new(nil, nil)!
+        gtk_scrolled_window_set_policy(Gtk.scrolledWindow(logScroller),
+                                       GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC)
+        gtk_container_add(Gtk.container(logScroller), logColumn)
+        gtk_box_pack_start(Gtk.box(logSide), logScroller, 1, 1, 0)
+        gtk_box_pack_start(Gtk.box(split), logSide, 0, 0, 0)
 
         Gtk.onClick(saveButton, self) { $0.saveFolders() }
         Gtk.onClick(scanButton, self) { $0.scan() }
@@ -305,6 +339,96 @@ final class AppWindow {
         gtk_widget_set_sensitive(undoButton, state.busy ? 0 : 1)
 
         refreshList()
+        refreshLog()
+    }
+
+    /// Rebuilds the log column, newest first, and only when it changed.
+    ///
+    /// Newest first because the reason to look here is almost always "what
+    /// just happened", and a column that grows downwards would put that
+    /// answer off the bottom of the screen after a long run.
+    private func refreshLog() {
+        // Reversed once here rather than everywhere below.
+        let entries = Array(coordinator.logEntries.reversed().prefix(Self.visibleLogEntries))
+        let ids = entries.map(\.id)
+        guard ids != renderedLogIDs else { return }
+        renderedLogIDs = ids
+
+        for row in logWidgets { gtk_widget_destroy(row) }
+        logWidgets = []
+
+        let total = coordinator.logEntries.count
+        let failures = coordinator.logEntries.filter { $0.status == .failure }.count
+        Gtk.setText(logCountLabel, failures > 0
+            ? "\(total) Einträge · \(failures) mit Fehler"
+            : "\(total) Einträge")
+
+        if entries.isEmpty {
+            let empty = Self.label("Noch nichts passiert.", classes: "mf-dim")
+            gtk_box_pack_start(Gtk.box(logColumn), empty, 0, 0, 0)
+            logWidgets = [empty]
+        } else {
+            for entry in entries {
+                let row = Self.logRow(entry)
+                gtk_box_pack_start(Gtk.box(logColumn), row, 0, 0, 0)
+                logWidgets.append(row)
+            }
+        }
+        gtk_widget_show_all(logColumn)
+    }
+
+    /// How much of the log the column holds.
+    ///
+    /// Capped because each entry is three widgets and a long history would
+    /// cost more to rebuild than it is worth looking at. The full record
+    /// stays on disk and in the web interface's history page.
+    static let visibleLogEntries = 200
+
+    private static func logRow(_ entry: RenameLogEntry)
+        -> UnsafeMutablePointer<GtkWidget> {
+        let row = gtk_box_new(GTK_ORIENTATION_VERTICAL, 1)!
+        Styling.style(row, "mf-log-entry")
+
+        let time = label(Self.logTime.string(from: entry.date) + " · " + statusWord(entry.status),
+                         classes: "mf-log-time", statusClass(entry.status))
+        gtk_box_pack_start(Gtk.box(row), time, 0, 0, 0)
+
+        // The new name, or the old one when there is no new one to show.
+        let name = label(entry.newName.isEmpty ? entry.oldName : entry.newName)
+        gtk_label_set_ellipsize(Gtk.label(name), PANGO_ELLIPSIZE_MIDDLE)
+        Styling.style(name, "mf-log-entry")
+        gtk_box_pack_start(Gtk.box(row), name, 0, 0, 0)
+
+        // The whole reason this column is always visible.
+        if let error = entry.errorDescription, !error.isEmpty {
+            let message = label(error, classes: "mf-log-entry", "mf-fail")
+            gtk_label_set_line_wrap(Gtk.label(message), 1)
+            gtk_box_pack_start(Gtk.box(row), message, 0, 0, 0)
+        }
+        return row
+    }
+
+    private static let logTime: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm:ss"
+        return formatter
+    }()
+
+    private static func statusWord(_ status: RenameLogEntry.Status) -> String {
+        switch status {
+        case .success: return "umbenannt"
+        case .failure: return "fehlgeschlagen"
+        case .skipped: return "übersprungen"
+        case .converted: return "konvertiert"
+        }
+    }
+
+    private static func statusClass(_ status: RenameLogEntry.Status) -> String {
+        switch status {
+        case .success, .converted: return "mf-ok"
+        case .failure: return "mf-fail"
+        case .skipped: return "mf-skip"
+        }
     }
 
     /// Rebuilds the proposal list, but only when the proposals have actually
