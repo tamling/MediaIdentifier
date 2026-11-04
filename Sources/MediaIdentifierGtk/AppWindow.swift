@@ -46,6 +46,7 @@ final class AppWindow {
     private let cancelSendButton: UnsafeMutablePointer<GtkWidget>
     private let checksColumn: UnsafeMutablePointer<GtkWidget>
     private let checksSummary: UnsafeMutablePointer<GtkWidget>
+    private let checksExpander: UnsafeMutablePointer<GtkWidget>
 
     /// The log rows on screen, so they can be replaced without walking the
     /// container.
@@ -125,7 +126,16 @@ final class AppWindow {
         let checkButton = gtk_button_new_with_label("Alles prüfen")!
         gtk_box_pack_end(Gtk.box(checkRow), checkButton, 0, 0, 0)
         Self.add(checkRow, to: checks)
-        gtk_box_pack_start(Gtk.box(page), checks, 0, 0, 0)
+        // Behind an expander, with the summary on the expander's own label.
+        // Seven rows of detail cost about 300 pixels, and the list of
+        // proposals — which is what the window is for — was being squeezed
+        // to a row and a half to pay for them. Collapsed, the panel still
+        // answers "is everything plugged in" in one line; opened, it says
+        // which lamp and why.
+        checksExpander = gtk_expander_new("Status")!
+        gtk_expander_set_expanded(Gtk.expander(checksExpander), expandSettings ? 1 : 0)
+        gtk_container_add(Gtk.container(checksExpander), checks)
+        gtk_box_pack_start(Gtk.box(page), checksExpander, 0, 0, 0)
 
         // MARK: Folders
 
@@ -248,6 +258,9 @@ final class AppWindow {
         gtk_scrolled_window_set_policy(Gtk.scrolledWindow(scroller),
                                        GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC)
         gtk_container_add(Gtk.container(scroller), listColumn)
+        // A floor, so the cards above can never squeeze the list down to a
+        // single row: it is the one part of this window that is read.
+        gtk_widget_set_size_request(scroller, -1, 260)
         Self.add(scroller, to: proposals, expand: true)
 
         // Selecting on the left, acting on the right: the destructive end of
@@ -540,7 +553,10 @@ final class AppWindow {
         for row in checkWidgets { gtk_widget_destroy(row) }
         checkWidgets = []
 
-        Gtk.setText(checksSummary, SystemChecks.summary(checks))
+        let summary = SystemChecks.summary(checks)
+        Gtk.setText(checksSummary, summary)
+        // So a collapsed panel still says whether anything is wrong.
+        gtk_expander_set_label(Gtk.expander(checksExpander), "Status — " + summary)
         for check in checks {
             let row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8)!
             // A dot and a word. Colour alone would leave the panel unreadable
