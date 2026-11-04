@@ -217,9 +217,14 @@ public enum RemoteCommand {
         let arguments = [
             "--archive",             // keep times and permissions
             "--partial",             // keep a half-sent file so it can resume
-            // Creates Serien/Name/Staffel on the way. rsync 3.2.3 and newer;
-            // the caller checks the version, because on an older rsync this
-            // fails with "unknown option" rather than anything about paths.
+            // Creates Serien/Name/Staffel on the way. rsync 3.2.3 and
+            // newer only: an older one fails with "unknown option" and says
+            // nothing about paths. Nothing here can check that — this file
+            // runs no processes — so two things do instead: RemoteTransfer
+            // .check() reads `rsync --version` when the user tests the
+            // server, and explain() turns the getopt message into a
+            // sentence naming the version. The comment that used to sit
+            // here claimed "the caller checks the version"; no caller did.
             "--mkpath",
             "--protect-args",        // remote paths are not re-split by a shell
             "--info=progress2",      // one machine-readable progress line

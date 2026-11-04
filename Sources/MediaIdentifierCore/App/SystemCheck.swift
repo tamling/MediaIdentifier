@@ -82,7 +82,8 @@ public enum SystemChecks {
         ffmpegAvailable: Bool,
         secrets: Set<SecretKey>,
         probes: [ProbeSubject: ProbeResult],
-        fileManager: FileManager = .default
+        fileManager: FileManager = .default,
+        now: Date = Date()
     ) -> [SystemCheck] {
         var checks: [SystemCheck] = []
 
@@ -95,21 +96,18 @@ public enum SystemChecks {
         // With a server configured, the local library folders are not where
         // the library lives, so demanding them would be a red lamp for a
         // setup that is working exactly as the user set it up.
-        if settings.remote.isEnabled {
-            let where_ = settings.remote.host.isEmpty
-                ? "(Adresse fehlt)" : settings.remote.host
-            checks.append(SystemCheck(id: "library", name: "Bibliothek", state: .ok,
-                                      detail: "Liegt auf dem Server \(where_)."))
-        } else {
-            checks.append(folder(id: "movies", name: "Filme", path: settings.moviesFolder,
-                                 missingDetail: "Kein Ordner gewählt — Filme werden dort "
-                                     + "umbenannt, wo sie liegen.",
-                                 missingState: .warning, fileManager: fileManager))
-            checks.append(folder(id: "series", name: "Serien", path: settings.seriesFolder,
-                                 missingDetail: "Kein Ordner gewählt — Serien werden dort "
-                                     + "umbenannt, wo sie liegen.",
-                                 missingState: .warning, fileManager: fileManager))
-        }
+        // The local library folders are checked whether or not a server is
+        // configured: "Umbenennen" still writes to them, so hiding the lamp
+        // when the server is on took away the unmounted-drive warning from
+        // the exact setup most likely to have a network mount.
+        checks.append(folder(id: "movies", name: "Filme", path: settings.moviesFolder,
+                             missingDetail: "Kein Ordner gewählt — Filme werden dort "
+                                 + "umbenannt, wo sie liegen.",
+                             missingState: .warning, fileManager: fileManager))
+        checks.append(folder(id: "series", name: "Serien", path: settings.seriesFolder,
+                             missingDetail: "Kein Ordner gewählt — Serien werden dort "
+                                 + "umbenannt, wo sie liegen.",
+                             missingState: .warning, fileManager: fileManager))
 
         checks.append(SystemCheck(
             id: "ffmpeg", name: "FFmpeg",
@@ -118,10 +116,12 @@ public enum SystemChecks {
                 ? "Gefunden — Konvertieren ist möglich."
                 : "Nicht gefunden. Nur zum Konvertieren nötig: sudo apt install ffmpeg"))
 
-        checks.append(identification(settings: settings, secrets: secrets, probes: probes))
-        checks.append(jellyfin(settings: settings, secrets: secrets, probes: probes))
+        checks.append(identification(settings: settings, secrets: secrets,
+                                     probes: probes, now: now))
+        checks.append(jellyfin(settings: settings, secrets: secrets,
+                               probes: probes, now: now))
         checks.append(contentsOf: remote(settings: settings, tools: tools,
-                                         secrets: secrets, probes: probes))
+                                         secrets: secrets, probes: probes, now: now))
         return checks
     }
 
@@ -171,7 +171,8 @@ public enum SystemChecks {
     }
 
     private static func identification(settings: WebSettings, secrets: Set<SecretKey>,
-                                       probes: [ProbeSubject: ProbeResult]) -> SystemCheck {
+                                       probes: [ProbeSubject: ProbeResult],
+                                       now: Date) -> SystemCheck {
         switch settings.identification {
         case .offline:
             return SystemCheck(id: "identification", name: "Erkennung", state: .ok,
@@ -191,12 +192,13 @@ public enum SystemChecks {
             }
             return probed(id: "identification", name: "Modellserver",
                           probe: probes[.localLLM],
-                          untested: "Eingerichtet, aber noch nicht geprüft.")
+                          untested: "Eingerichtet, aber noch nicht geprüft.", now: now)
         }
     }
 
     private static func jellyfin(settings: WebSettings, secrets: Set<SecretKey>,
-                                 probes: [ProbeSubject: ProbeResult]) -> SystemCheck {
+                                 probes: [ProbeSubject: ProbeResult],
+                                 now: Date) -> SystemCheck {
         guard !settings.jellyfinBaseURL.isEmpty else {
             return SystemCheck(id: "jellyfin", name: "Jellyfin", state: .off,
                                detail: "Nicht eingerichtet.")
@@ -206,12 +208,13 @@ public enum SystemChecks {
                                detail: "Adresse steht, aber kein API-Key hinterlegt.")
         }
         return probed(id: "jellyfin", name: "Jellyfin", probe: probes[.jellyfin],
-                      untested: "Eingerichtet, aber noch nicht geprüft.")
+                      untested: "Eingerichtet, aber noch nicht geprüft.", now: now)
     }
 
     private static func remote(settings: WebSettings, tools: RemoteTools,
                                secrets: Set<SecretKey>,
-                               probes: [ProbeSubject: ProbeResult]) -> [SystemCheck] {
+                               probes: [ProbeSubject: ProbeResult],
+                               now: Date) -> [SystemCheck] {
         let target = settings.remote
         guard target.isEnabled else {
             return [SystemCheck(id: "remote", name: "Server", state: .off,
@@ -242,7 +245,7 @@ public enum SystemChecks {
             return checks
         }
         checks.append(probed(id: "remote", name: "Server", probe: probes[.remote],
-                             untested: "Eingerichtet, aber noch nicht geprüft."))
+                             untested: "Eingerichtet, aber noch nicht geprüft.", now: now))
         return checks
     }
 
@@ -252,11 +255,26 @@ public enum SystemChecks {
     /// merely looks complete is exactly the state this panel exists to tell
     /// apart from one that works.
     private static func probed(id: String, name: String, probe: ProbeResult?,
-                               untested: String) -> SystemCheck {
+                               untested: String, now: Date) -> SystemCheck {
         guard let probe else {
             return SystemCheck(id: id, name: name, state: .warning, detail: untested)
         }
-        return SystemCheck(id: id, name: name, state: probe.ok ? .ok : .failed,
-                           detail: probe.detail)
+        // The age, which is the whole reason the date is recorded. A green
+        // lamp from this morning is not the same claim as one from a second
+        // ago, and a panel that does not say which is a panel that can be
+        // green about a server that was unplugged at lunchtime.
+        let age = now.timeIntervalSince(probe.date)
+        let when: String
+        switch age {
+        case ..<90: when = "gerade geprüft"
+        case ..<3600: when = "vor \(Int(age / 60)) Min geprüft"
+        case ..<86400: when = "vor \(Int(age / 3600)) Std geprüft"
+        default: when = "vor über einem Tag geprüft"
+        }
+        // Stale and green is amber: it was true once, and nobody has
+        // checked since.
+        let state: SystemCheck.State = probe.ok ? (age > 3600 ? .warning : .ok) : .failed
+        return SystemCheck(id: id, name: name, state: state,
+                           detail: "\(probe.detail) (\(when))")
     }
 }

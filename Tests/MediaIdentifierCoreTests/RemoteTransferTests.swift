@@ -83,6 +83,41 @@ final class RemoteTransferTests: XCTestCase {
                        "something else entirely")
     }
 
+    // MARK: The rsync version
+
+    /// `--mkpath` needs 3.2.3. A comment used to claim the caller checked
+    /// this; no caller did, and on Ubuntu 20.04 every send failed with a
+    /// bare "unknown option" while both lamps stayed green.
+    func testTheVersionIsReadFromWhatRsyncPrints() {
+        let banner = """
+        rsync  version 3.2.7  protocol version 31
+        Copyright (C) 1996-2022 by Andrew Tridgell, Wayne Davison, and others.
+        """
+        let version = RemoteTransfer.parseRsyncVersion(banner)
+        XCTAssertEqual(version?.0, 3)
+        XCTAssertEqual(version?.1, 2)
+        XCTAssertEqual(version?.2, 7)
+    }
+
+    func testAnOlderRsyncIsRecognised() {
+        let version = RemoteTransfer.parseRsyncVersion("rsync  version 3.1.3  protocol 31")
+        XCTAssertNotNil(version)
+        XCTAssertTrue((version!) < (3, 2, 3), "3.1.3 must read as older than 3.2.3")
+    }
+
+    func testAVersionThatCannotBeReadIsNotGuessedAt() {
+        XCTAssertNil(RemoteTransfer.parseRsyncVersion("some other program"))
+        XCTAssertNil(RemoteTransfer.parseRsyncVersion(""))
+    }
+
+    /// The failure has to name the version and the remedy, because getopt's
+    /// own message mentions neither.
+    func testTheOldRsyncFailureIsExplained() {
+        let message = RemoteTransfer.explain("rsync: --mkpath: unknown option")
+        XCTAssertTrue(message.contains("3.2.3"), message)
+        XCTAssertTrue(message.contains("SFTP"), message)
+    }
+
     // MARK: Tools
 
     func testMissingToolsAreNamedPerTransport() {

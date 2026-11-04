@@ -168,6 +168,58 @@ final class SystemCheckTests: XCTestCase {
         XCTAssertTrue(remote?.detail.contains("Benutzername") ?? false, remote?.detail ?? "")
     }
 
+    // MARK: A panel that does not lie
+
+    /// It used to be hard-coded green whenever the server was switched on,
+    /// so it sat next to a red Server lamp announcing all was well.
+    func testTheLibraryLampDoesNotClaimAServerThatIsDownIsFine() {
+        var settings = WebSettings(sourceFolder: root.path)
+        settings.remote = RemoteTarget(isEnabled: true, host: "nas.local", user: "media",
+                                       basePath: "/srv/media")
+        let list = checks(settings,
+                          probes: [.remote: ProbeResult(ok: false, detail: "Keine Antwort.")])
+        XCTAssertNil(lamp(list, "library"),
+                     "a lamp that is green whatever the server said must not exist")
+        XCTAssertEqual(lamp(list, "remote")?.state, .failed)
+    }
+
+    /// Renaming still writes to the local library folders when a server is
+    /// configured, so hiding their lamps took the unmounted-drive warning
+    /// away from the setup most likely to have a network mount.
+    func testTheLocalFolderLampsSurviveAServerBeingConfigured() {
+        var settings = WebSettings(sourceFolder: root.path)
+        settings.moviesFolder = "/mnt/nas-not-mounted"
+        settings.remote = RemoteTarget(isEnabled: true, host: "nas.local", user: "media",
+                                       basePath: "/srv/media")
+        let list = checks(settings)
+        XCTAssertEqual(lamp(list, "movies")?.state, .failed,
+                       "an unmounted library folder lost its lamp")
+    }
+
+    /// A green lamp from this morning is not the same claim as one from a
+    /// second ago. The date was recorded and never read, while the comment
+    /// beside it said the panel reported it.
+    func testAnOldGreenProbeIsAmberAndSaysHowOld() {
+        var settings = WebSettings(sourceFolder: root.path)
+        settings.jellyfinBaseURL = "http://nas.local:8096"
+        let old = ProbeResult(ok: true, detail: "Antwortet.",
+                              date: Date(timeIntervalSinceNow: -7200))
+        let list = checks(settings, secrets: [.jellyfinToken], probes: [.jellyfin: old])
+        XCTAssertEqual(lamp(list, "jellyfin")?.state, .warning,
+                       "a two-hour-old success still reads as a live connection")
+        XCTAssertTrue(lamp(list, "jellyfin")?.detail.contains("Std geprüft") ?? false,
+                      lamp(list, "jellyfin")?.detail ?? "")
+    }
+
+    func testAFreshProbeIsGreenAndSaysSo() {
+        var settings = WebSettings(sourceFolder: root.path)
+        settings.jellyfinBaseURL = "http://nas.local:8096"
+        let list = checks(settings, secrets: [.jellyfinToken],
+                          probes: [.jellyfin: ProbeResult(ok: true, detail: "Antwortet.")])
+        XCTAssertEqual(lamp(list, "jellyfin")?.state, .ok)
+        XCTAssertTrue(lamp(list, "jellyfin")?.detail.contains("gerade geprüft") ?? false)
+    }
+
     // MARK: Rolling it up
 
     func testTheWorstLampWins() {

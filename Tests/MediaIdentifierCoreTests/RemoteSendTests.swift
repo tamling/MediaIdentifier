@@ -238,6 +238,48 @@ final class RemoteSendTests: XCTestCase {
                                              current: stored).port, 2200)
     }
 
+    // MARK: A probe describes one particular server
+
+    /// Change the address and the stored answer is about a different
+    /// machine. It used to be kept, so the lamp could be green about a
+    /// server nobody had ever contacted.
+    func testChangingTheServerThrowsAwayTheProbeItWasAbout() {
+        enableRemote()
+        coordinator.recordProbeForTesting(.remote, ok: true, detail: "Angemeldet.")
+        XCTAssertTrue(coordinator.systemChecks.contains { $0.id == "remote" && $0.state == .ok })
+
+        enableRemote { $0.host = "something-else.local" }
+        let lamp = coordinator.systemChecks.first { $0.id == "remote" }
+        XCTAssertEqual(lamp?.state, .warning,
+                       "the old server's green lamp survived the address changing")
+    }
+
+    /// And when the credential changes, because the probe was made with the
+    /// previous one.
+    func testChangingThePasswordThrowsAwayTheProbe() {
+        enableRemote { $0.authentication = .password }
+        coordinator.executeForTesting(.setSecret(.remotePassword, "first"))
+        coordinator.recordProbeForTesting(.remote, ok: true, detail: "Angemeldet.")
+
+        coordinator.executeForTesting(.setSecret(.remotePassword, "second"))
+        XCTAssertEqual(coordinator.systemChecks.first { $0.id == "remote" }?.state, .warning,
+                       "a probe made with the old password still reads as green")
+    }
+
+    /// Saving something unrelated must not throw away a good answer, or the
+    /// panel would be permanently amber.
+    func testAnUnrelatedSettingKeepsTheProbe() {
+        enableRemote()
+        coordinator.recordProbeForTesting(.remote, ok: true, detail: "Angemeldet.")
+
+        var settings = coordinator.settings
+        settings.conflictPolicy = .rename
+        coordinator.executeForTesting(.saveSettings(settings))
+
+        XCTAssertEqual(coordinator.systemChecks.first { $0.id == "remote" }?.state, .ok,
+                       "an unrelated save discarded a good probe")
+    }
+
     // MARK: Helpers
 
     private static func item(source: String, relative: String) -> RenameItem {

@@ -289,8 +289,23 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
 
     private func save(_ settings: WebSettings) {
         do {
+            let previous = self.settings
             try settingsStore.save(settings)
-            lock.lock(); _settings = settings.normalised(); lock.unlock()
+            lock.lock()
+            _settings = settings.normalised()
+            // A probe is about the thing it probed. Changing the address,
+            // the login or the target path makes the stored answer describe
+            // a different machine — and it used to be kept, so a green lamp
+            // could be reporting on a server nobody had ever contacted.
+            if settings.remote != previous.remote { _probes[.remote] = nil }
+            if settings.localLLMBaseURL != previous.localLLMBaseURL
+                || settings.localLLMModel != previous.localLLMModel {
+                _probes[.localLLM] = nil
+            }
+            if settings.jellyfinBaseURL != previous.jellyfinBaseURL {
+                _probes[.jellyfin] = nil
+            }
+            lock.unlock()
             update { $0.lastResult = "Settings saved." }
             updateWatchState()
             // So the interface stops offering a "send to the server" button
@@ -305,6 +320,14 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
     private func setSecret(_ key: SecretKey, _ value: String) {
         do {
             try secretStore.set(value, for: key)
+            lock.lock()
+            switch key {
+            case .remotePassword: _probes[.remote] = nil
+            case .localLLMAPIKey: _probes[.localLLM] = nil
+            case .jellyfinToken: _probes[.jellyfin] = nil
+            case .tmdbAPIKey: break
+            }
+            lock.unlock()
             // Never echo the value, not even its length.
             update {
                 $0.lastResult = value.isEmpty

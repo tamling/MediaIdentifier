@@ -142,6 +142,16 @@ public final class RemoteTransfer {
         guard absent.isEmpty else {
             return (false, Failure.toolsMissing(absent).description)
         }
+        // Checked here, where the user asked for a check, rather than in the
+        // status panel — which recomputes twice a second and must not start
+        // a process each time.
+        if target.transport == .rsync, let rsync = tools.rsync,
+           let version = Self.rsyncVersion(at: rsync), version < (3, 2, 3) {
+            return (false, "rsync \(version.0).\(version.1).\(version.2) ist zu alt: "
+                        + "--mkpath gibt es erst ab 3.2.3, und ohne das können die "
+                        + "Zielordner nicht angelegt werden. Entweder rsync aktualisieren "
+                        + "oder als Übertragung SFTP wählen.")
+        }
         let invocation: RemoteCommand.Invocation
         do {
             invocation = try RemoteCommand.probe(target, sshPath: tools.ssh ?? "ssh",
@@ -191,6 +201,31 @@ public final class RemoteTransfer {
             return (false, Self.explain(text))
         }
         return (true, "Angemeldet, \(target.basePath) ist beschreibbar.")
+    }
+
+    /// `rsync  version 3.2.7  protocol version 31` → (3, 2, 7).
+    static func rsyncVersion(at path: String) -> (Int, Int, Int)? {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: path)
+        process.arguments = ["--version"]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = Pipe()
+        guard (try? process.run()) != nil else { return nil }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        guard let text = String(data: data, encoding: .utf8) else { return nil }
+        return parseRsyncVersion(text)
+    }
+
+    /// Split out so it can be tested without rsync installed.
+    static func parseRsyncVersion(_ text: String) -> (Int, Int, Int)? {
+        guard let line = text.split(separator: "\n").first,
+              let range = line.range(of: "version ") else { return nil }
+        let rest = line[range.upperBound...].prefix { $0.isNumber || $0 == "." }
+        let parts = rest.split(separator: ".").compactMap { Int($0) }
+        guard parts.count >= 2 else { return nil }
+        return (parts[0], parts[1], parts.count > 2 ? parts[2] : 0)
     }
 
     // MARK: Output
@@ -257,6 +292,11 @@ public final class RemoteTransfer {
             return "Der Server ist unbekannt oder sein Schlüssel hat sich geändert. "
                 + "Einmal von Hand verbinden und den Fingerabdruck prüfen: "
                 + "ssh BENUTZER@SERVER — danach geht es hier automatisch. " + text
+        }
+        if lowered.contains("unknown option") && lowered.contains("mkpath") {
+            return "Das installierte rsync ist zu alt: --mkpath gibt es erst ab Version "
+                + "3.2.3. Entweder rsync aktualisieren oder als Übertragung SFTP "
+                + "wählen. " + text
         }
         if lowered.contains("permission denied") {
             return "Anmeldung abgelehnt — Benutzername, Schlüssel oder Passwort stimmen nicht. "
