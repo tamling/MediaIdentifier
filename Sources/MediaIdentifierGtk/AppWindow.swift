@@ -23,6 +23,7 @@ final class AppWindow {
     private let seriesChooser: UnsafeMutablePointer<GtkWidget>
     private let musicChooser: UnsafeMutablePointer<GtkWidget>
     private let libraryModeCombo: UnsafeMutablePointer<GtkWidget>
+    private let languageCombo: UnsafeMutablePointer<GtkWidget>
     private let scanButton: UnsafeMutablePointer<GtkWidget>
     private let applyButton: UnsafeMutablePointer<GtkWidget>
     private let undoButton: UnsafeMutablePointer<GtkWidget>
@@ -58,7 +59,6 @@ final class AppWindow {
     private let scheduleSendCheck: UnsafeMutablePointer<GtkWidget>
     private let scheduleSummary: UnsafeMutablePointer<GtkWidget>
     private let checksColumn: UnsafeMutablePointer<GtkWidget>
-    private let checksSummary: UnsafeMutablePointer<GtkWidget>
     private let checksExpander: UnsafeMutablePointer<GtkWidget>
 
     /// The log rows on screen, so they can be replaced without walking the
@@ -130,7 +130,7 @@ final class AppWindow {
         header = gtk_header_bar_new()!
         gtk_header_bar_set_show_close_button(Gtk.headerBar(header), 1)
         gtk_header_bar_set_title(Gtk.headerBar(header), "Mediafin")
-        scanButton = gtk_button_new_with_label("Durchsuchen")!
+        scanButton = gtk_button_new_with_label(Text.s("Durchsuchen", "Scan"))!
         // The theme's own accent, not a colour of ours — it follows whatever
         // the user has set.
         Styling.style(scanButton, "suggested-action")
@@ -180,7 +180,7 @@ final class AppWindow {
         checksColumn = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2)!
         Self.add(checksColumn, to: checks)
         let checkRow = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8)!
-        let checkButton = gtk_button_new_with_label("Alles prüfen")!
+        let checkButton = gtk_button_new_with_label(Text.s("Alles prüfen", "Check everything"))!
         gtk_box_pack_end(Gtk.box(checkRow), checkButton, 0, 0, 0)
         Self.add(checkRow, to: checks)
         // Behind an expander, with the summary on the expander's own label.
@@ -189,7 +189,7 @@ final class AppWindow {
         // to a row and a half to pay for them. Collapsed, the panel still
         // answers "is everything plugged in" in one line; opened, it says
         // which lamp and why.
-        checksExpander = gtk_expander_new("Status")!
+        checksExpander = gtk_expander_new(Text.s("Status", "Status"))!
         gtk_expander_set_expanded(Gtk.expander(checksExpander), expandSettings ? 1 : 0)
         gtk_container_add(Gtk.container(checksExpander), checks)
         gtk_box_pack_start(Gtk.box(page), checksExpander, 0, 0, 0)
@@ -199,43 +199,59 @@ final class AppWindow {
         // Above the folders because this is where a file comes from; what
         // happens to it afterwards is the rest of the window.
         urlEntry = Self.entry(placeholder: "https://…")
-        downloadButton = gtk_button_new_with_label("Laden")!
-        cancelDownloadButton = gtk_button_new_with_label("Stopp")!
+        downloadButton = gtk_button_new_with_label(Text.s("Laden", "Fetch"))!
+        cancelDownloadButton = gtk_button_new_with_label(Text.s("Stopp", "Stop"))!
         downloadProgress = gtk_progress_bar_new()!
 
-        let fetch = Self.card(titled: "Aus dem Netz laden")
+        let fetch = Self.card(titled: Text.s("Aus dem Netz laden", "Fetch from a link"))
         let urlRow = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8)!
         gtk_box_pack_start(Gtk.box(urlRow), urlEntry, 1, 1, 0)
         gtk_box_pack_start(Gtk.box(urlRow), downloadButton, 0, 0, 0)
         gtk_box_pack_start(Gtk.box(urlRow), cancelDownloadButton, 0, 0, 0)
         Self.add(urlRow, to: fetch)
         Self.add(downloadProgress, to: fetch)
-        Self.add(Self.label("Landet im Importordner und wird dann wie jede andere "
-                                + "gefundene Datei vorgeschlagen.", classes: "mf-dim"),
+        Self.add(Self.label(Text.s(
+                    "Landet im Importordner und wird dann wie jede andere gefundene "
+                        + "Datei vorgeschlagen.",
+                    "Lands in the import folder and is then proposed like any other "
+                        + "file found there."), classes: "mf-dim"),
                  to: fetch)
         gtk_box_pack_start(Gtk.box(page), fetch, 0, 0, 0)
 
         // MARK: Folders
 
-        sourceChooser = Self.folderChooser("Ordner mit den neuen Dateien")
-        moviesChooser = Self.folderChooser("Filmbibliothek")
-        seriesChooser = Self.folderChooser("Serienbibliothek")
+        sourceChooser = Self.folderChooser(Text.s("Ordner mit den neuen Dateien",
+                                                  "Folder the new files land in"))
+        moviesChooser = Self.folderChooser(Text.s("Filmbibliothek", "Film library"))
+        seriesChooser = Self.folderChooser(Text.s("Serienbibliothek", "Series library"))
 
-        musicChooser = Self.folderChooser("Musikbibliothek")
+        musicChooser = Self.folderChooser(Text.s("Musikbibliothek", "Music library"))
         libraryModeCombo = gtk_combo_box_text_new()!
         for mode in LibraryMode.allCases {
             gtk_combo_box_text_append_text(Gtk.comboBoxText(libraryModeCombo), mode.label)
         }
 
-        let folders = Self.card(titled: "Bibliothek")
-        Self.add(Self.row("Sortiert", libraryModeCombo), to: folders)
-        Self.add(Self.row("Quelle", sourceChooser), to: folders)
-        Self.add(Self.row("Filme", moviesChooser), to: folders)
-        Self.add(Self.row("Serien", seriesChooser), to: folders)
-        Self.add(Self.row("Musik", musicChooser), to: folders)
+        // Each language names itself in itself: somebody who has landed in
+        // the wrong one cannot read the other one's word for it. The first
+        // entry follows the machine's locale, which is a choice of its own
+        // and has to be choosable again after a language has been picked.
+        languageCombo = gtk_combo_box_text_new()!
+        gtk_combo_box_text_append_text(Gtk.comboBoxText(languageCombo),
+                                       Text.s("Wie das System", "Follow the system"))
+        for language in Language.allCases {
+            gtk_combo_box_text_append_text(Gtk.comboBoxText(languageCombo), language.label)
+        }
+
+        let folders = Self.card(titled: Text.s("Bibliothek", "Library"))
+        Self.add(Self.row(Text.s("Sprache", "Language"), languageCombo), to: folders)
+        Self.add(Self.row(Text.s("Sortiert", "Sorting"), libraryModeCombo), to: folders)
+        Self.add(Self.row(Text.s("Quelle", "Source"), sourceChooser), to: folders)
+        Self.add(Self.row(Text.s("Filme", "Films"), moviesChooser), to: folders)
+        Self.add(Self.row(Text.s("Serien", "Series"), seriesChooser), to: folders)
+        Self.add(Self.row(Text.s("Musik", "Music"), musicChooser), to: folders)
 
         let saveRow = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0)!
-        let saveButton = gtk_button_new_with_label("Übernehmen")!
+        let saveButton = gtk_button_new_with_label(Text.s("Übernehmen", "Apply"))!
         gtk_box_pack_end(Gtk.box(saveRow), saveButton, 0, 0, 0)
         Self.add(saveRow, to: folders)
         gtk_box_pack_start(Gtk.box(page), folders, 0, 0, 0)
@@ -258,17 +274,18 @@ final class AppWindow {
         llmKeyEntry = Self.entry(placeholder: "")
         gtk_entry_set_visibility(Gtk.entry(llmKeyEntry), 0)
 
-        let detection = Self.card(titled: "Erkennung")
-        Self.add(Self.row("Verfahren", modeCombo), to: detection)
-        Self.add(Self.row("Server", llmURLEntry), to: detection)
-        Self.add(Self.row("Modell", llmModelEntry), to: detection)
-        Self.add(Self.row("API-Key", llmKeyEntry), to: detection)
+        let detection = Self.card(titled: Text.s("Erkennung", "Identification"))
+        Self.add(Self.row(Text.s("Verfahren", "Method"), modeCombo), to: detection)
+        Self.add(Self.row(Text.s("Server", "Server"), llmURLEntry), to: detection)
+        Self.add(Self.row(Text.s("Modell", "Model"), llmModelEntry), to: detection)
+        Self.add(Self.row(Text.s("API-Key", "API key"), llmKeyEntry), to: detection)
         let testRow = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8)!
-        let testButton = gtk_button_new_with_label("Verbindung testen")!
+        let testButton = gtk_button_new_with_label(Text.s("Verbindung testen", "Test the connection"))!
         gtk_box_pack_end(Gtk.box(testRow), testButton, 0, 0, 0)
         Self.add(testRow, to: detection)
 
-        let detectionExpander = gtk_expander_new("Erkennung und Modellserver")!
+        let detectionExpander = gtk_expander_new(
+            Text.s("Erkennung und Modellserver", "Identification and model server"))!
         gtk_expander_set_expanded(Gtk.expander(detectionExpander), expandSettings ? 1 : 0)
         gtk_container_add(Gtk.container(detectionExpander), detection)
         gtk_box_pack_start(Gtk.box(page), detectionExpander, 0, 0, 0)
@@ -283,9 +300,10 @@ final class AppWindow {
             "Die Bibliothek liegt auf einem Server")!
         remoteHostEntry = Self.entry(placeholder: "nas.fritz.box")
         remotePortEntry = Self.entry(placeholder: "22")
-        remoteUserEntry = Self.entry(placeholder: "benutzer")
+        remoteUserEntry = Self.entry(placeholder: Text.s("benutzer", "user"))
         remoteBaseEntry = Self.entry(placeholder: "/volume1/Medien")
-        remoteIdentityEntry = Self.entry(placeholder: "~/.ssh/id_ed25519 (leer = Standard)")
+        remoteIdentityEntry = Self.entry(placeholder: Text.s("~/.ssh/id_ed25519 (leer = Standard)",
+                                       "~/.ssh/id_ed25519 (empty = default)"))
         // Write-only, like the model server's key: never filled in from
         // storage, so the password cannot end up in a screenshot.
         remotePasswordEntry = Self.entry(placeholder: "")
@@ -300,18 +318,19 @@ final class AppWindow {
             gtk_combo_box_text_append_text(Gtk.comboBoxText(remoteAuthCombo), auth.label)
         }
         remoteRemoveLocalCheck = gtk_check_button_new_with_label(
-            "Lokale Datei nach erfolgreicher Übertragung löschen")!
+            Text.s("Lokale Datei nach erfolgreicher Übertragung löschen",
+                   "Delete the local file after a successful transfer"))!
 
-        let remote = Self.card(titled: "Server")
+        let remote = Self.card(titled: Text.s("Server", "Server"))
         Self.add(remoteEnabledCheck, to: remote)
-        Self.add(Self.row("Adresse", remoteHostEntry), to: remote)
-        Self.add(Self.row("Port", remotePortEntry), to: remote)
-        Self.add(Self.row("Benutzer", remoteUserEntry), to: remote)
-        Self.add(Self.row("Zielpfad", remoteBaseEntry), to: remote)
-        Self.add(Self.row("Übertragung", remoteTransportCombo), to: remote)
-        Self.add(Self.row("Anmeldung", remoteAuthCombo), to: remote)
-        Self.add(Self.row("Schlüsseldatei", remoteIdentityEntry), to: remote)
-        Self.add(Self.row("Passwort", remotePasswordEntry), to: remote)
+        Self.add(Self.row(Text.s("Adresse", "Address"), remoteHostEntry), to: remote)
+        Self.add(Self.row(Text.s("Port", "Port"), remotePortEntry), to: remote)
+        Self.add(Self.row(Text.s("Benutzer", "User"), remoteUserEntry), to: remote)
+        Self.add(Self.row(Text.s("Zielpfad", "Target path"), remoteBaseEntry), to: remote)
+        Self.add(Self.row(Text.s("Übertragung", "Transfer"), remoteTransportCombo), to: remote)
+        Self.add(Self.row(Text.s("Anmeldung", "Login"), remoteAuthCombo), to: remote)
+        Self.add(Self.row(Text.s("Schlüsseldatei", "Key file"), remoteIdentityEntry), to: remote)
+        Self.add(Self.row(Text.s("Passwort", "Password"), remotePasswordEntry), to: remote)
         Self.add(remoteRemoveLocalCheck, to: remote)
 
         remoteProgress = gtk_progress_bar_new()!
@@ -321,17 +340,17 @@ final class AppWindow {
         // Testing the server on its own, rather than only as part of
         // "Alles prüfen": this is the one the user presses while they are
         // still getting the address and the key right.
-        let testServerButton = gtk_button_new_with_label("Server testen")!
+        let testServerButton = gtk_button_new_with_label(Text.s("Server testen", "Test the server"))!
         gtk_box_pack_start(Gtk.box(sendRow), testServerButton, 0, 0, 0)
-        sendButton = gtk_button_new_with_label("Zum Server senden")!
-        cancelSendButton = gtk_button_new_with_label("Stopp")!
+        sendButton = gtk_button_new_with_label(Text.s("Zum Server senden", "Send to the server"))!
+        cancelSendButton = gtk_button_new_with_label(Text.s("Stopp", "Stop"))!
         gtk_box_pack_end(Gtk.box(sendRow), sendButton, 0, 0, 0)
         gtk_box_pack_end(Gtk.box(sendRow), cancelSendButton, 0, 0, 0)
         Self.add(sendRow, to: remote)
 
         // MARK: Looking by itself
 
-        scheduleCheck = gtk_check_button_new_with_label("Von selbst nachsehen")!
+        scheduleCheck = gtk_check_button_new_with_label(Text.s("Von selbst nachsehen", "Look by itself"))!
         scheduleCadenceCombo = gtk_combo_box_text_new()!
         for cadence in Schedule.Cadence.allCases {
             gtk_combo_box_text_append_text(Gtk.comboBoxText(scheduleCadenceCombo),
@@ -340,34 +359,35 @@ final class AppWindow {
         scheduleTimeEntry = Self.entry(placeholder: "03:00")
         scheduleHoursEntry = Self.entry(placeholder: "6")
         scheduleRenameCheck = gtk_check_button_new_with_label(
-            "Dabei auch umbenennen")!
+            Text.s("Dabei auch umbenennen", "Rename what it finds"))!
         scheduleSendCheck = gtk_check_button_new_with_label(
-            "Dabei auch zum Server senden")!
+            Text.s("Dabei auch zum Server senden", "Also send to the server"))!
         scheduleSummary = Self.label("", classes: "mf-dim")
         gtk_label_set_line_wrap(Gtk.label(scheduleSummary), 1)
 
-        let scheduleCard = Self.card(titled: "Zeitplan")
+        let scheduleCard = Self.card(titled: Text.s("Zeitplan", "Schedule"))
         Self.add(scheduleCheck, to: scheduleCard)
-        Self.add(Self.row("Wann", scheduleCadenceCombo), to: scheduleCard)
-        Self.add(Self.row("Uhrzeit", scheduleTimeEntry), to: scheduleCard)
-        Self.add(Self.row("Abstand (h)", scheduleHoursEntry), to: scheduleCard)
+        Self.add(Self.row(Text.s("Wann", "When"), scheduleCadenceCombo), to: scheduleCard)
+        Self.add(Self.row(Text.s("Uhrzeit", "Time"), scheduleTimeEntry), to: scheduleCard)
+        Self.add(Self.row(Text.s("Abstand (h)", "Interval (h)"), scheduleHoursEntry), to: scheduleCard)
         Self.add(scheduleRenameCheck, to: scheduleCard)
         Self.add(scheduleSendCheck, to: scheduleCard)
         Self.add(scheduleSummary, to: scheduleCard)
 
-        let scheduleExpander = gtk_expander_new("Zeitplan")!
+        let scheduleExpander = gtk_expander_new(Text.s("Zeitplan", "Schedule"))!
         gtk_expander_set_expanded(Gtk.expander(scheduleExpander), expandSettings ? 1 : 0)
         gtk_container_add(Gtk.container(scheduleExpander), scheduleCard)
         gtk_box_pack_start(Gtk.box(page), scheduleExpander, 0, 0, 0)
 
-        let remoteExpander = gtk_expander_new("Server (rsync / SFTP)")!
+        let remoteExpander = gtk_expander_new(
+            Text.s("Server (rsync / SFTP)", "Server (rsync / SFTP)"))!
         gtk_expander_set_expanded(Gtk.expander(remoteExpander), expandSettings ? 1 : 0)
         gtk_container_add(Gtk.container(remoteExpander), remote)
         gtk_box_pack_start(Gtk.box(page), remoteExpander, 0, 0, 0)
 
         // MARK: Proposals
 
-        let proposals = Self.card(titled: "Vorschläge")
+        let proposals = Self.card(titled: Text.s("Vorschläge", "Proposals"))
         countsLabel = Self.label("", classes: "mf-dim")
         Self.add(countsLabel, to: proposals)
 
@@ -387,12 +407,12 @@ final class AppWindow {
         // Selecting on the left, acting on the right: the destructive end of
         // the row is the one that should take a deliberate reach.
         let actions = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8)!
-        let allButton = gtk_button_new_with_label("Alle")!
-        let noneButton = gtk_button_new_with_label("Keine")!
+        let allButton = gtk_button_new_with_label(Text.s("Alle", "All"))!
+        let noneButton = gtk_button_new_with_label(Text.s("Keine", "None"))!
         gtk_box_pack_start(Gtk.box(actions), allButton, 0, 0, 0)
         gtk_box_pack_start(Gtk.box(actions), noneButton, 0, 0, 0)
-        undoButton = gtk_button_new_with_label("Rückgängig")!
-        applyButton = gtk_button_new_with_label("Umbenennen")!
+        undoButton = gtk_button_new_with_label(Text.s("Rückgängig", "Undo"))!
+        applyButton = gtk_button_new_with_label(Text.s("Umbenennen", "Rename"))!
         Styling.style(applyButton, "suggested-action")
         gtk_box_pack_end(Gtk.box(actions), applyButton, 0, 0, 0)
         gtk_box_pack_end(Gtk.box(actions), undoButton, 0, 0, 0)
@@ -416,7 +436,7 @@ final class AppWindow {
         let logSide = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8)!
         Styling.style(logSide, "mf-log")
         gtk_widget_set_size_request(logSide, 264, -1)
-        let logTitle = Self.label("VERLAUF", classes: "mf-card-title")
+        let logTitle = Self.label(Text.s("VERLAUF", "HISTORY"), classes: "mf-card-title")
         gtk_box_pack_start(Gtk.box(logSide), logTitle, 0, 0, 0)
         logCountLabel = Self.label("", classes: "mf-dim")
         gtk_box_pack_start(Gtk.box(logSide), logCountLabel, 0, 0, 0)
@@ -550,6 +570,16 @@ final class AppWindow {
             Gtk.text(of: llmURLEntry).trimmingCharacters(in: .whitespacesAndNewlines)
         settings.localLLMModel =
             Gtk.text(of: llmModelEntry).trimmingCharacters(in: .whitespacesAndNewlines)
+        let languageRow = Int(gtk_combo_box_get_active(Gtk.comboBox(languageCombo)))
+        settings.language = languageRow <= 0 || languageRow > Language.allCases.count
+            ? nil : Language.allCases[languageRow - 1]
+        // A GTK label is given its text once, when it is built, so changing
+        // the language cannot reach the labels already on screen. The web
+        // interface re-renders every request and does not have this problem;
+        // here the honest thing is to say so rather than leave the user
+        // looking at a window that only half changed.
+        let languageChanged = settings.language != coordinator.settings.language
+
         let mode = Int(gtk_combo_box_get_active(Gtk.comboBox(modeCombo)))
         if mode >= 0, mode < IdentificationMode.allCases.count {
             settings.identification = IdentificationMode.allCases[mode]
@@ -566,6 +596,11 @@ final class AppWindow {
         settings.schedule = readScheduleFields(from: settings.schedule)
         settings.remote = readRemoteFields(from: settings.remote)
         coordinator.submit(.saveSettings(settings))
+        if languageChanged {
+            Gtk.setText(resultLabel, Text.s(
+                "Sprache gespeichert — das Fenster zeigt sie nach einem Neustart.",
+                "Language saved — the window shows it after a restart."))
+        }
 
         // Only when something was typed. An empty field means "leave the
         // stored key alone", not "delete it" — otherwise saving a folder
@@ -746,6 +781,11 @@ final class AppWindow {
         if let index = LibraryMode.allCases.firstIndex(of: settings.libraryMode) {
             gtk_combo_box_set_active(Gtk.comboBox(libraryModeCombo), Int32(index))
         }
+        // 0 is "follow the system"; the languages come after it.
+        let languageRow = settings.language
+            .flatMap { Language.allCases.firstIndex(of: $0) }
+            .map { $0 + 1 } ?? 0
+        gtk_combo_box_set_active(Gtk.comboBox(languageCombo), Int32(languageRow))
 
         Gtk.setText(of: llmURLEntry, settings.localLLMBaseURL)
         Gtk.setText(of: llmModelEntry, settings.localLLMModel)
@@ -804,17 +844,20 @@ final class AppWindow {
 
         let subtitle: String
         if state.hasError {
-            subtitle = "Mit Fehlern beendet"
+            subtitle = Text.s("Mit Fehlern beendet", "Finished with errors")
         } else if state.busy {
-            subtitle = "\(state.convertStatus ?? "Arbeitet") · \(state.activePercent) %"
+            subtitle = (state.convertStatus ?? Text.s("Arbeitet", "Working"))
+                + " · \(state.activePercent) %"
         } else {
-            subtitle = "Bereit"
+            subtitle = Text.s("Bereit", "Ready")
         }
         gtk_header_bar_set_subtitle(Gtk.headerBar(header), subtitle)
 
-        Gtk.setText(countsLabel,
-                    "\(state.totalItems) Vorschläge · \(state.ready) angehakt · "
-                        + "\(state.done) umbenannt")
+        Gtk.setText(countsLabel, Text.s(
+            "\(state.totalItems) Vorschläge · \(state.ready) angehakt · "
+                + "\(state.done) umbenannt",
+            "\(state.totalItems) proposals · \(state.ready) ticked · "
+                + "\(state.done) renamed"))
         Gtk.setText(resultLabel, state.lastResult ?? "")
 
         // Nothing to scan without a source folder, and a button that does
@@ -845,10 +888,12 @@ final class AppWindow {
                 gtk_progress_bar_pulse(Gtk.progressBar(downloadProgress))
                 gtk_progress_bar_set_show_text(Gtk.progressBar(downloadProgress), 1)
                 gtk_progress_bar_set_text(Gtk.progressBar(downloadProgress),
-                                          state.downloadDetail ?? "Wird geladen …")
+                                          state.downloadDetail
+                                              ?? Text.s("Wird geladen …", "Fetching…"))
             }
         } else {
-            Gtk.setProgress(downloadProgress, fraction: 0, text: "Kein Download")
+            Gtk.setProgress(downloadProgress, fraction: 0,
+                            text: Text.s("Kein Download", "No download"))
         }
         // Emptied when nothing is running: the bar used to stay visually
         // full after a run while the words beside it said "Keine
@@ -883,9 +928,9 @@ final class AppWindow {
         checkWidgets = []
 
         let summary = SystemChecks.summary(checks)
-        Gtk.setText(checksSummary, summary)
         // So a collapsed panel still says whether anything is wrong.
-        gtk_expander_set_label(Gtk.expander(checksExpander), "Status — " + summary)
+        gtk_expander_set_label(Gtk.expander(checksExpander),
+                               Text.s("Status — ", "Status — ") + summary)
         // A red lamp must not stay folded away behind a summary line. Opened
         // once, not on every refresh, so it cannot fight a user who closes it.
         if SystemChecks.worst(checks) == .failed, !hasOpenedChecksOnFailure {
@@ -955,11 +1000,13 @@ final class AppWindow {
         let total = coordinator.logEntries.count
         let failures = coordinator.logEntries.filter { $0.status == .failure }.count
         Gtk.setText(logCountLabel, failures > 0
-            ? "\(total) Einträge · \(failures) mit Fehler"
-            : "\(total) Einträge")
+            ? Text.s("\(total) Einträge · \(failures) mit Fehler",
+                     "\(total) entries · \(failures) with an error")
+            : Text.s("\(total) Einträge", "\(total) entries"))
 
         if entries.isEmpty {
-            let empty = Self.label("Noch nichts passiert.", classes: "mf-dim")
+            let empty = Self.label(Text.s("Noch nichts passiert.", "Nothing has happened yet."),
+                                       classes: "mf-dim")
             gtk_box_pack_start(Gtk.box(logColumn), empty, 0, 0, 0)
             logWidgets = [empty]
         } else {
@@ -1011,12 +1058,12 @@ final class AppWindow {
 
     private static func statusWord(_ status: RenameLogEntry.Status) -> String {
         switch status {
-        case .success: return "umbenannt"
-        case .failure: return "fehlgeschlagen"
-        case .skipped: return "übersprungen"
-        case .converted: return "konvertiert"
-        case .sent: return "gesendet"
-        case .downloaded: return "geladen"
+        case .success: return Text.s("umbenannt", "renamed")
+        case .failure: return Text.s("fehlgeschlagen", "failed")
+        case .skipped: return Text.s("übersprungen", "skipped")
+        case .converted: return Text.s("konvertiert", "converted")
+        case .sent: return Text.s("gesendet", "sent")
+        case .downloaded: return Text.s("geladen", "fetched")
         }
     }
 
@@ -1042,7 +1089,8 @@ final class AppWindow {
         rowChecks = []
 
         if items.isEmpty {
-            let empty = Self.label("Noch nichts durchsucht.", classes: "mf-empty")
+            let empty = Self.label(Text.s("Noch nichts durchsucht.", "Nothing scanned yet."),
+                                       classes: "mf-empty")
             gtk_label_set_xalign(Gtk.label(empty), 0.5)
             gtk_box_pack_start(Gtk.box(listColumn), empty, 0, 0, 0)
             rowWidgets = [empty]
@@ -1103,8 +1151,11 @@ final class AppWindow {
 
     private static func conflictText(_ kind: ConflictKind) -> String {
         switch kind {
-        case .existingFile: return "Dort liegt schon eine Datei"
-        case .duplicateInBatch: return "Zwei Dateien wollen denselben Namen"
+        case .existingFile:
+            return Text.s("Dort liegt schon eine Datei", "A file is already there")
+        case .duplicateInBatch:
+            return Text.s("Zwei Dateien wollen denselben Namen",
+                          "Two files want the same name")
         }
     }
 

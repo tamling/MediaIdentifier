@@ -158,6 +158,15 @@ final class ScheduleTests: XCTestCase {
 
     /// A schedule the user cannot read back is one they cannot tell is
     /// wrong.
+    /// The language is global and these assert German, so it is said out
+    /// loud rather than relied on: another test class setting English and
+    /// failing to put it back would otherwise fail this one, somewhere else
+    /// entirely.
+    override func setUp() {
+        super.setUp()
+        Text.language = .german
+    }
+
     func testTheSummarySaysWhatWillHappen() {
         var schedule = Schedule(isEnabled: true, cadence: .daily, hour: 3, minute: 5)
         XCTAssertTrue(schedule.summary.contains("03:05"), schedule.summary)
@@ -172,6 +181,30 @@ final class ScheduleTests: XCTestCase {
 
         schedule.isEnabled = false
         XCTAssertTrue(schedule.summary.lowercased().contains("aus"), schedule.summary)
+    }
+
+    /// The same sentence in the other language, which is the only way to
+    /// notice that half of it was left untranslated: `summary` is built from
+    /// five separate pieces and any one of them could still be German.
+    func testTheSummaryIsSaidInEnglishToo() {
+        Text.language = .english
+        defer { Text.language = .german }
+
+        var schedule = Schedule(isEnabled: true, cadence: .daily, hour: 3, minute: 5)
+        XCTAssertEqual(schedule.summary, "Daily at 03:05: look through.")
+
+        schedule.alsoRename = true
+        schedule.alsoSend = true
+        XCTAssertEqual(schedule.summary,
+                       "Daily at 03:05: look through, rename, send to the server.")
+
+        schedule.cadence = .everyFewHours
+        schedule.everyHours = 6
+        XCTAssertEqual(schedule.summary,
+                       "Every 6 hours: look through, rename, send to the server.")
+
+        schedule.isEnabled = false
+        XCTAssertEqual(schedule.summary, "Off — nothing runs by itself.")
     }
 
     /// Both off by default, and separately: an unattended run that only

@@ -15,8 +15,9 @@ public struct Schedule: Codable, Sendable, Equatable {
 
         public var label: String {
             switch self {
-            case .daily: return "Jeden Tag zu einer festen Uhrzeit"
-            case .everyFewHours: return "Alle paar Stunden"
+            case .daily: return Text.s("Jeden Tag zu einer festen Uhrzeit",
+                                       "Every day at a fixed time")
+            case .everyFewHours: return Text.s("Alle paar Stunden", "Every few hours")
             }
         }
     }
@@ -110,11 +111,15 @@ public struct Schedule: Codable, Sendable, Equatable {
         var found: [WebSettings.Problem] = []
         if !(0...23).contains(hour) || !(0...59).contains(minute) {
             found.append(.init(field: "scheduleTime",
-                               message: "Die Uhrzeit muss zwischen 00:00 und 23:59 liegen."))
+                               message: Text.s(
+                                "Die Uhrzeit muss zwischen 00:00 und 23:59 liegen.",
+                                "The time must be between 00:00 and 23:59.")))
         }
         if cadence == .everyFewHours, !(1...24).contains(everyHours) {
             found.append(.init(field: "scheduleEveryHours",
-                               message: "Der Abstand muss zwischen 1 und 24 Stunden liegen."))
+                               message: Text.s(
+                                "Der Abstand muss zwischen 1 und 24 Stunden liegen.",
+                                "The interval must be between 1 and 24 hours.")))
         }
         return found
     }
@@ -124,17 +129,23 @@ public struct Schedule: Codable, Sendable, Equatable {
     /// Worth having: a schedule the user cannot read back is a schedule
     /// they cannot tell is wrong.
     public var summary: String {
-        guard isEnabled else { return "Aus — es läuft nichts von selbst." }
+        guard isEnabled else {
+            return Text.s("Aus — es läuft nichts von selbst.",
+                          "Off — nothing runs by itself.")
+        }
         let when: String
         switch cadence {
         case .daily:
-            when = String(format: "täglich um %02d:%02d", hour, minute)
+            when = Text.s(String(format: "täglich um %02d:%02d", hour, minute),
+                          String(format: "daily at %02d:%02d", hour, minute))
         case .everyFewHours:
-            when = everyHours == 1 ? "jede Stunde" : "alle \(everyHours) Stunden"
+            when = everyHours == 1
+                ? Text.s("jede Stunde", "every hour")
+                : Text.s("alle \(everyHours) Stunden", "every \(everyHours) hours")
         }
-        var what = "durchsuchen"
-        if alsoRename { what += ", umbenennen" }
-        if alsoSend { what += ", zum Server senden" }
+        var what = Text.s("durchsuchen", "look through")
+        if alsoRename { what += Text.s(", umbenennen", ", rename") }
+        if alsoSend { what += Text.s(", zum Server senden", ", send to the server") }
         return "\(when.prefix(1).uppercased())\(when.dropFirst()): \(what)."
     }
 
@@ -157,9 +168,13 @@ public struct Schedule: Codable, Sendable, Equatable {
         let parts = calendar.dateComponents([.month, .day, .hour, .minute], from: moment)
         let time = String(format: "%02d:%02d", parts.hour ?? 0, parts.minute ?? 0)
 
-        if calendar.isDate(moment, inSameDayAs: now) { return "heute \(time)" }
+        if calendar.isDate(moment, inSameDayAs: now) {
+            return Text.s("heute \(time)", "today \(time)")
+        }
         if let tomorrow = calendar.date(byAdding: .day, value: 1, to: now),
-           calendar.isDate(moment, inSameDayAs: tomorrow) { return "morgen \(time)" }
+           calendar.isDate(moment, inSameDayAs: tomorrow) {
+            return Text.s("morgen \(time)", "tomorrow \(time)")
+        }
 
         return String(format: "%02d.%02d. ", parts.day ?? 0, parts.month ?? 0) + time
     }
@@ -222,12 +237,14 @@ public enum ScheduleLine {
     public static func describe(_ schedule: Schedule, _ state: StatusSnapshot) -> String {
         guard schedule.isEnabled else { return schedule.summary }
         guard let next = state.nextScheduledRun else {
-            return schedule.summary
-                + "\nL\u{00E4}uft gerade nicht \u{2014} \u{201A}Speichern\u{2018} schaltet ihn wieder scharf."
+            return schedule.summary + "\n" + Text.s(
+                "L\u{00E4}uft gerade nicht \u{2014} \u{201A}Speichern\u{2018} schaltet ihn wieder scharf.",
+                "Not running \u{2014} \u{2018}Save\u{2019} arms it again.")
         }
-        var line = schedule.summary + "\nN\u{00E4}chster Lauf: " + Schedule.describe(next) + "."
+        var line = schedule.summary + "\n"
+            + Text.s("N\u{00E4}chster Lauf: ", "Next run: ") + Schedule.describe(next) + "."
         if let last = state.lastScheduledRun {
-            line += " Zuletzt: " + Schedule.describe(last) + "."
+            line += Text.s(" Zuletzt: ", " Last: ") + Schedule.describe(last) + "."
         }
         return line
     }

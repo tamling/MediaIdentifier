@@ -22,10 +22,10 @@ public struct SystemCheck: Identifiable, Equatable, Sendable {
         /// not carry: the lamp always has a word next to it.
         public var word: String {
             switch self {
-            case .ok: return "bereit"
-            case .warning: return "prüfen"
-            case .failed: return "Problem"
-            case .off: return "aus"
+            case .ok: return Text.s("bereit", "ready")
+            case .warning: return Text.s("prüfen", "check")
+            case .failed: return Text.s("Problem", "problem")
+            case .off: return Text.s("aus", "off")
             }
         }
     }
@@ -88,10 +88,14 @@ public enum SystemChecks {
     ) -> [SystemCheck] {
         var checks: [SystemCheck] = []
 
-        checks.append(folder(id: "source", name: "Importordner",
+        checks.append(folder(id: "source",
+                             name: Text.s("Importordner", "Import folder"),
                              path: settings.sourceFolder,
-                             missingDetail: "Noch kein Ordner gewählt — ohne ihn gibt es "
-                                 + "nichts zu durchsuchen.",
+                             missingDetail: Text.s(
+                                "Noch kein Ordner gewählt — ohne ihn gibt es nichts zu "
+                                    + "durchsuchen.",
+                                "No folder chosen yet — without one there is nothing to "
+                                    + "look through."),
                              fileManager: fileManager))
 
         // With a server configured, the local library folders are not where
@@ -101,21 +105,31 @@ public enum SystemChecks {
         // configured: "Umbenennen" still writes to them, so hiding the lamp
         // when the server is on took away the unmounted-drive warning from
         // the exact setup most likely to have a network mount.
-        checks.append(folder(id: "movies", name: "Filme", path: settings.moviesFolder,
-                             missingDetail: "Kein Ordner gewählt — Filme werden dort "
-                                 + "umbenannt, wo sie liegen.",
+        checks.append(folder(id: "movies", name: Text.s("Filme", "Films"),
+                             path: settings.moviesFolder,
+                             missingDetail: Text.s(
+                                "Kein Ordner gewählt — Filme werden dort umbenannt, wo "
+                                    + "sie liegen.",
+                                "No folder chosen — films are renamed where they lie."),
                              missingState: .warning, fileManager: fileManager))
-        checks.append(folder(id: "series", name: "Serien", path: settings.seriesFolder,
-                             missingDetail: "Kein Ordner gewählt — Serien werden dort "
-                                 + "umbenannt, wo sie liegen.",
+        checks.append(folder(id: "series", name: Text.s("Serien", "Series"),
+                             path: settings.seriesFolder,
+                             missingDetail: Text.s(
+                                "Kein Ordner gewählt — Serien werden dort umbenannt, wo "
+                                    + "sie liegen.",
+                                "No folder chosen — series are renamed where they lie."),
                              missingState: .warning, fileManager: fileManager))
 
         checks.append(SystemCheck(
             id: "ffmpeg", name: "FFmpeg",
             state: ffmpegAvailable ? .ok : .warning,
             detail: ffmpegAvailable
-                ? "Gefunden — Konvertieren ist möglich."
-                : "Nicht gefunden. Nur zum Konvertieren nötig: sudo apt install ffmpeg"))
+                ? Text.s("Gefunden — Konvertieren ist möglich.",
+                         "Found — converting is possible.")
+                : Text.s("Nicht gefunden. Nur zum Konvertieren nötig: "
+                             + "sudo apt install ffmpeg",
+                         "Not found. Only needed for converting: "
+                             + "sudo apt install ffmpeg")))
 
         checks.append(identification(settings: settings, secrets: secrets,
                                      probes: probes, now: now))
@@ -136,10 +150,11 @@ public enum SystemChecks {
     /// switched on in the settings, with nothing armed to run it.
     static func schedule(_ schedule: Schedule, nextRun: Date?,
                          now: Date = Date()) -> SystemCheck {
-        let name = "Zeitplan"
+        let name = Text.s("Zeitplan", "Schedule")
         guard schedule.isEnabled else {
             return SystemCheck(id: "schedule", name: name, state: .off,
-                               detail: "Aus — es läuft nichts von selbst.")
+                               detail: Text.s("Aus — es läuft nichts von selbst.",
+                                              "Off — nothing runs by itself."))
         }
         let problems = schedule.problems()
         if let first = problems.first {
@@ -148,12 +163,15 @@ public enum SystemChecks {
         }
         guard let nextRun else {
             return SystemCheck(id: "schedule", name: name, state: .failed,
-                               detail: "Eingeschaltet, läuft aber nicht. "
-                                   + "‚Speichern‘ in den Einstellungen "
-                                   + "schaltet ihn wieder scharf.")
+                               detail: Text.s(
+                                "Eingeschaltet, läuft aber nicht. ‚Speichern‘ in den "
+                                    + "Einstellungen schaltet ihn wieder scharf.",
+                                "Switched on but not running. ‘Save’ in the settings "
+                                    + "arms it again."))
         }
         return SystemCheck(id: "schedule", name: name, state: .ok,
-                           detail: schedule.summary + " Nächster Lauf: "
+                           detail: schedule.summary
+                               + Text.s(" Nächster Lauf: ", " Next run: ")
                                + Schedule.describe(nextRun, now: now) + ".")
     }
 
@@ -176,6 +194,12 @@ public enum SystemChecks {
 
     // MARK: The individual lamps
 
+    /// Used by three lamps, so it is written once.
+    private static var untested: String {
+        Text.s("Eingerichtet, aber noch nicht geprüft.",
+               "Set up, but not checked yet.")
+    }
+
     private static func folder(id: String, name: String, path: String,
                                missingDetail: String,
                                missingState: SystemCheck.State = .failed,
@@ -192,12 +216,16 @@ public enum SystemChecks {
             // silently does real damage.
             return SystemCheck(id: id, name: name, state: .failed,
                                detail: exists
-                                   ? "\(path) ist kein Ordner."
-                                   : "\(path) gibt es nicht — Laufwerk nicht eingebunden?")
+                                   ? Text.s("\(path) ist kein Ordner.",
+                                            "\(path) is not a folder.")
+                                   : Text.s(
+                                    "\(path) gibt es nicht — Laufwerk nicht eingebunden?",
+                                    "\(path) does not exist — drive not mounted?"))
         }
         guard fileManager.isWritableFile(atPath: path) else {
             return SystemCheck(id: id, name: name, state: .failed,
-                               detail: "\(path) ist nicht beschreibbar.")
+                               detail: Text.s("\(path) ist nicht beschreibbar.",
+                                              "\(path) is not writable."))
         }
         return SystemCheck(id: id, name: name, state: .ok, detail: path)
     }
@@ -207,24 +235,33 @@ public enum SystemChecks {
                                        now: Date) -> SystemCheck {
         switch settings.identification {
         case .offline:
-            return SystemCheck(id: "identification", name: "Erkennung", state: .ok,
-                               detail: "Nur Dateinamen — nichts verlässt diesen Rechner.")
+            return SystemCheck(id: "identification",
+                               name: Text.s("Erkennung", "Identification"), state: .ok,
+                               detail: Text.s(
+                                "Nur Dateinamen — nichts verlässt diesen Rechner.",
+                                "File names only — nothing leaves this machine."))
         case .tmdb:
             let hasKey = secrets.contains(.tmdbAPIKey)
             return SystemCheck(id: "identification", name: "TMDb",
                                state: hasKey ? .ok : .failed,
                                detail: hasKey
-                                   ? "API-Key hinterlegt."
-                                   : "Kein API-Key hinterlegt — die Erkennung fällt auf "
-                                       + "Dateinamen zurück.")
+                                   ? Text.s("API-Key hinterlegt.", "API key stored.")
+                                   : Text.s(
+                                    "Kein API-Key hinterlegt — die Erkennung fällt auf "
+                                        + "Dateinamen zurück.",
+                                    "No API key stored — identification falls back to "
+                                        + "file names."))
         case .localLLM:
             guard !settings.localLLMBaseURL.isEmpty, !settings.localLLMModel.isEmpty else {
-                return SystemCheck(id: "identification", name: "Modellserver", state: .failed,
-                                   detail: "Adresse oder Modellname fehlt.")
+                return SystemCheck(id: "identification",
+                                   name: Text.s("Modellserver", "Model server"),
+                                   state: .failed,
+                                   detail: Text.s("Adresse oder Modellname fehlt.",
+                                                  "The address or the model name is missing."))
             }
-            return probed(id: "identification", name: "Modellserver",
+            return probed(id: "identification", name: Text.s("Modellserver", "Model server"),
                           probe: probes[.localLLM],
-                          untested: "Eingerichtet, aber noch nicht geprüft.", now: now)
+                          untested: Self.untested, now: now)
         }
     }
 
@@ -233,14 +270,15 @@ public enum SystemChecks {
                                  now: Date) -> SystemCheck {
         guard !settings.jellyfinBaseURL.isEmpty else {
             return SystemCheck(id: "jellyfin", name: "Jellyfin", state: .off,
-                               detail: "Nicht eingerichtet.")
+                               detail: Text.s("Nicht eingerichtet.", "Not set up."))
         }
         guard secrets.contains(.jellyfinToken) else {
             return SystemCheck(id: "jellyfin", name: "Jellyfin", state: .warning,
-                               detail: "Adresse steht, aber kein API-Key hinterlegt.")
+                               detail: Text.s("Adresse steht, aber kein API-Key hinterlegt.",
+                                              "The address is set but no API key is stored."))
         }
         return probed(id: "jellyfin", name: "Jellyfin", probe: probes[.jellyfin],
-                      untested: "Eingerichtet, aber noch nicht geprüft.", now: now)
+                      untested: Self.untested, now: now)
     }
 
     private static func remote(settings: WebSettings, tools: RemoteTools,
@@ -250,17 +288,20 @@ public enum SystemChecks {
         let target = settings.remote
         guard target.isEnabled else {
             return [SystemCheck(id: "remote", name: "Server", state: .off,
-                                detail: "Nicht eingeschaltet.")]
+                                detail: Text.s("Nicht eingeschaltet.", "Not switched on."))]
         }
 
         var checks: [SystemCheck] = []
         let missing = tools.missing(for: target)
         checks.append(SystemCheck(
-            id: "remote-tools", name: "Übertragungsprogramme",
+            id: "remote-tools",
+            name: Text.s("Übertragungsprogramme", "Transfer programs"),
             state: missing.isEmpty ? .ok : .failed,
             detail: missing.isEmpty
-                ? "\(target.transport.rawValue) und OpenSSH sind da."
-                : "Fehlt: \(missing.joined(separator: ", ")). "
+                ? Text.s("\(target.transport.rawValue) und OpenSSH sind da.",
+                         "\(target.transport.rawValue) and OpenSSH are present.")
+                : Text.s("Fehlt: \(missing.joined(separator: ", ")). ",
+                         "Missing: \(missing.joined(separator: ", ")). ")
                     + "sudo apt install \(missing.joined(separator: " "))"))
 
         let problems = target.problems()
@@ -272,12 +313,14 @@ public enum SystemChecks {
         }
         if target.authentication == .password, !secrets.contains(.remotePassword) {
             checks.append(SystemCheck(id: "remote", name: "Server", state: .failed,
-                                      detail: "Anmeldung per Passwort gewählt, aber keines "
-                                          + "hinterlegt."))
+                                      detail: Text.s(
+                                        "Anmeldung per Passwort gewählt, aber keines "
+                                            + "hinterlegt.",
+                                        "Password login is selected but none is stored.")))
             return checks
         }
         checks.append(probed(id: "remote", name: "Server", probe: probes[.remote],
-                             untested: "Eingerichtet, aber noch nicht geprüft.", now: now))
+                             untested: Self.untested, now: now))
         return checks
     }
 
@@ -298,10 +341,13 @@ public enum SystemChecks {
         let age = now.timeIntervalSince(probe.date)
         let when: String
         switch age {
-        case ..<90: when = "gerade geprüft"
-        case ..<3600: when = "vor \(Int(age / 60)) Min geprüft"
-        case ..<86400: when = "vor \(Int(age / 3600)) Std geprüft"
-        default: when = "vor über einem Tag geprüft"
+        case ..<90: when = Text.s("gerade geprüft", "just checked")
+        case ..<3600: when = Text.s("vor \(Int(age / 60)) Min geprüft",
+                                    "checked \(Int(age / 60)) min ago")
+        case ..<86400: when = Text.s("vor \(Int(age / 3600)) Std geprüft",
+                                     "checked \(Int(age / 3600)) h ago")
+        default: when = Text.s("vor über einem Tag geprüft",
+                               "checked over a day ago")
         }
         // Stale and green is amber: it was true once, and nobody has
         // checked since.

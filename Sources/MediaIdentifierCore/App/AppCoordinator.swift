@@ -153,10 +153,12 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         // A secrets file left readable by other accounts is a problem whether
         // or not it is read today.
         if secretStore.tightenPermissionsIfNeeded() {
-            _snapshot.lastResult = """
-            The credentials file was readable by other accounts; its permissions \
-            have been corrected. Consider replacing the stored keys.
-            """
+            _snapshot.lastResult = Text.s(
+                "Die Datei mit den Zugangsdaten war für andere Konten lesbar; die "
+                    + "Rechte wurden korrigiert. Die gespeicherten Schlüssel sollten "
+                    + "ersetzt werden.",
+                "The credentials file was readable by other accounts; its permissions "
+                    + "have been corrected. Consider replacing the stored keys.")
         }
         refreshSnapshotCounts()
         // Not on the queue yet, so hand it over rather than touching the timer.
@@ -384,7 +386,8 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
             // scan.
             refreshSnapshotCounts()
         } catch {
-            update { $0.lastResult = "Settings could not be saved: \(error)" }
+            update { $0.lastResult = Text.s("Einstellungen nicht gespeichert: \(error)",
+                                            "Settings could not be saved: \(error)") }
         }
     }
 
@@ -402,11 +405,12 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
             // Never echo the value, not even its length.
             update {
                 $0.lastResult = value.isEmpty
-                    ? "\(key.label) removed."
-                    : "\(key.label) stored."
+                    ? Text.s("\(key.label) entfernt.", "\(key.label) removed.")
+                    : Text.s("\(key.label) gespeichert.", "\(key.label) stored.")
             }
         } catch {
-            update { $0.lastResult = "\(key.label) could not be stored." }
+            update { $0.lastResult = Text.s("\(key.label) ließ sich nicht speichern.",
+                                            "\(key.label) could not be stored.") }
         }
     }
 
@@ -415,20 +419,25 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
     private func testLocalLLM() {
         let settings = self.settings
         guard let provider = localLLMProvider(settings) else {
-            update { $0.lastResult = "Enter the model server address and model name first." }
+            update { $0.lastResult = Text.s(
+                "Erst Adresse und Modellnamen des Modellservers eintragen.",
+                "Enter the model server address and model name first.") }
             return
         }
-        update { $0.lastResult = "Testing the model server…" }
+        update { $0.lastResult = Text.s("Modellserver wird geprüft …",
+                                        "Testing the model server…") }
         runAndWait { [weak self] in
             do {
                 let status = try await provider.verify()
-                let message = Self.describe(status: status, service: "model server")
+                let message = Self.describe(
+                    status: status, service: Text.s("Modellserver", "model server"))
                 // 2xx only. A 401 is an answer, not a working connection, and
                 // a lamp that went green on it would be the panel lying.
                 self?.record(.localLLM, ok: (200..<300).contains(status), detail: message)
                 self?.update { $0.lastResult = message }
             } catch {
-                let message = "The model server could not be reached: "
+                let message = Text.s("Modellserver nicht erreichbar: ",
+                                     "The model server could not be reached: ")
                     + Self.reason(for: error)
                 self?.record(.localLLM, ok: false, detail: message)
                 self?.update { $0.lastResult = message }
@@ -440,10 +449,12 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         let settings = self.settings
         guard !settings.jellyfinBaseURL.isEmpty,
               let apiKey = secretStore.value(for: .jellyfinToken) else {
-            update { $0.lastResult = "Enter the Jellyfin address and API key first." }
+            update { $0.lastResult = Text.s(
+                "Erst Jellyfin-Adresse und API-Key eintragen.",
+                "Enter the Jellyfin address and API key first.") }
             return
         }
-        update { $0.lastResult = "Testing Jellyfin…" }
+        update { $0.lastResult = Text.s("Jellyfin wird geprüft …", "Testing Jellyfin…") }
         runAndWait { [weak self] in
             do {
                 let connector = try JellyfinConnector(serverURL: settings.jellyfinBaseURL,
@@ -453,7 +464,9 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
                 self?.record(.jellyfin, ok: (200..<300).contains(status), detail: message)
                 self?.update { $0.lastResult = message }
             } catch {
-                let message = "Jellyfin could not be reached: " + Self.reason(for: error)
+                let message = Text.s("Jellyfin nicht erreichbar: ",
+                                     "Jellyfin could not be reached: ")
+                    + Self.reason(for: error)
                 self?.record(.jellyfin, ok: false, detail: message)
                 self?.update { $0.lastResult = message }
             }
@@ -463,11 +476,23 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
     /// Turns an HTTP status into something a user can act on.
     static func describe(status: Int, service: String) -> String {
         switch status {
-        case 200..<300: return "The \(service) answered. The connection works."
-        case 401, 403: return "The \(service) refused the key. Check the API key."
-        case 404: return "The \(service) answered, but not on that address. Check the URL."
-        case -1: return "The \(service) answered in a way that was not understood."
-        default: return "The \(service) answered with status \(status)."
+        case 200..<300:
+            return Text.s("\(service): antwortet. Die Verbindung steht.",
+                          "The \(service) answered. The connection works.")
+        case 401, 403:
+            return Text.s("\(service): Schlüssel abgelehnt. API-Key prüfen.",
+                          "The \(service) refused the key. Check the API key.")
+        case 404:
+            return Text.s("\(service): antwortet, aber nicht unter dieser Adresse. "
+                              + "URL prüfen.",
+                          "The \(service) answered, but not on that address. "
+                              + "Check the URL.")
+        case -1:
+            return Text.s("\(service): antwortet auf eine Art, die nicht verstanden wurde.",
+                          "The \(service) answered in a way that was not understood.")
+        default:
+            return Text.s("\(service): antwortet mit Status \(status).",
+                          "The \(service) answered with status \(status).")
         }
     }
 
@@ -503,7 +528,9 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         guard !source.isEmpty else {
             update {
                 $0.hasError = true
-                $0.lastResult = "Set the import folder in the settings first."
+                $0.lastResult = Text.s(
+                    "Erst den Importordner in den Einstellungen setzen.",
+                    "Set the import folder in the settings first.")
             }
             return false
         }
@@ -513,7 +540,8 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
               isDirectory.boolValue else {
             update {
                 $0.hasError = true
-                $0.lastResult = "The import folder does not exist: \(source)"
+                $0.lastResult = Text.s("Den Importordner gibt es nicht: \(source)",
+                                       "The import folder does not exist: \(source)")
             }
             return false
         }
@@ -530,7 +558,8 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
                 $0.busy = false
                 $0.convertStatus = nil
                 $0.hasError = false
-                $0.lastResult = "No video files found in \(source)."
+                $0.lastResult = Text.s("Keine Videodateien in \(source) gefunden.",
+                                       "No video files found in \(source).")
             }
             refreshSnapshotCounts()
             return true
@@ -572,7 +601,9 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
             $0.busy = false
             $0.convertStatus = nil
             $0.hasError = false
-            $0.lastResult = "\(plan.count) file\(plan.count == 1 ? "" : "s") ready to rename."
+            $0.lastResult = Text.s(
+                "\(plan.count) Datei\(plan.count == 1 ? "" : "en") bereit zum Umbenennen.",
+                "\(plan.count) file\(plan.count == 1 ? "" : "s") ready to rename.")
         }
         refreshSnapshotCounts()
         return true
@@ -590,8 +621,9 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
             update {
                 $0.busy = false
                 $0.hasError = true
-                $0.lastResult = "Für den Musikmodus fehlt der Musikordner in den "
-                    + "Einstellungen."
+                $0.lastResult = Text.s(
+                    "Für den Musikmodus fehlt der Musikordner in den Einstellungen.",
+                    "The music folder is missing from the settings; music mode needs it.")
             }
             return false
         }
@@ -599,8 +631,11 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
             update {
                 $0.busy = false
                 $0.hasError = true
-                $0.lastResult = "ffmpeg/ffprobe wurden nicht gefunden; ohne sie lassen "
-                    + "sich die Tags nicht lesen: sudo apt install ffmpeg"
+                $0.lastResult = Text.s(
+                    "ffmpeg/ffprobe wurden nicht gefunden; ohne sie lassen sich die Tags "
+                        + "nicht lesen: sudo apt install ffmpeg",
+                    "ffmpeg/ffprobe were not found; without them the tags cannot be "
+                        + "read: sudo apt install ffmpeg")
             }
             return false
         }
@@ -640,13 +675,20 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
             $0.hasError = false
             if plan.isEmpty {
                 $0.lastResult = urls.isEmpty
-                    ? "Keine Musikdateien in \(root.path) gefunden."
-                    : "\(urls.count) Musikdatei\(urls.count == 1 ? "" : "en") gefunden, "
-                        + "aber keine mit genug Tags (Künstler, Album, Titel)."
+                    ? Text.s("Keine Musikdateien in \(root.path) gefunden.",
+                             "No music files found in \(root.path).")
+                    : Text.s(
+                        "\(urls.count) Musikdatei\(urls.count == 1 ? "" : "en") gefunden, "
+                            + "aber keine mit genug Tags (Künstler, Album, Titel).",
+                        "\(urls.count) music file\(urls.count == 1 ? "" : "s") found, but "
+                            + "none with enough tags (artist, album, title).")
             } else {
-                $0.lastResult = "\(plan.count) Titel bereit"
+                $0.lastResult = Text.s("\(plan.count) Titel bereit",
+                                       "\(plan.count) tracks ready")
                     + (unreadable > 0
-                        ? " · \(unreadable) ohne ausreichende Tags übersprungen." : ".")
+                        ? Text.s(" · \(unreadable) ohne ausreichende Tags übersprungen.",
+                                 " · \(unreadable) skipped for want of tags.")
+                        : ".")
             }
         }
         refreshSnapshotCounts()
@@ -658,7 +700,9 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
     private func applyRenames(accepting: Set<UUID>?) -> RenameOutcome? {
         var plan = items
         guard !plan.isEmpty else {
-            update { $0.lastResult = "Nothing to rename — scan the import folder first." }
+            update { $0.lastResult = Text.s(
+                "Nichts umzubenennen — erst den Importordner durchsuchen.",
+                "Nothing to rename — scan the import folder first.") }
             return nil
         }
         // The page sends the ids the user ticked. An empty selection means they
@@ -666,7 +710,9 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         if let accepting {
             plan = plan.filter { accepting.contains($0.id) }
             guard !plan.isEmpty else {
-                update { $0.lastResult = "No files were ticked, so nothing was renamed." }
+                update { $0.lastResult = Text.s(
+                    "Es war nichts angehakt, also wurde nichts umbenannt.",
+                    "No files were ticked, so nothing was renamed.") }
                 return nil
             }
         }
@@ -690,9 +736,11 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
             collided = true
             update {
                 $0.hasError = true
-                $0.lastResult = "Mehrere Dateien sollen denselben Namen bekommen: "
-                    + names + ". Diese wurden nicht umbenannt — bitte eine davon "
-                    + "abwählen."
+                $0.lastResult = Text.s(
+                    "Mehrere Dateien sollen denselben Namen bekommen: " + names
+                        + ". Diese wurden nicht umbenannt — bitte eine davon abwählen.",
+                    "Several files would be given the same name: " + names
+                        + ". They were not renamed — please untick one of them.")
             }
             guard !plan.isEmpty else { return nil }
         }
@@ -713,9 +761,13 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
             $0.renameProgress = 1
             $0.hasError = outcome.failed > 0 || collided
             $0.lastResult = (collided
-                ? "Namenskonflikte übersprungen. " : "")
-                + "Renamed \(outcome.succeeded), skipped \(outcome.skipped)"
-                + (outcome.failed > 0 ? ", failed \(outcome.failed)" : "") + "."
+                ? Text.s("Namenskonflikte übersprungen. ", "Name clashes skipped. ") : "")
+                + Text.s("Umbenannt \(outcome.succeeded), übersprungen \(outcome.skipped)",
+                         "Renamed \(outcome.succeeded), skipped \(outcome.skipped)")
+                + (outcome.failed > 0
+                    ? Text.s(", fehlgeschlagen \(outcome.failed)",
+                             ", failed \(outcome.failed)")
+                    : "") + "."
         }
         // Only for the files that are now in the library, and only for the
         // audio ones. Driving this off `libraryMode` instead meant a plan
@@ -800,7 +852,8 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         guard written > 0 else { return }
         update {
             $0.lastResult = ($0.lastResult ?? "")
-                + " \(written) Albumcover geschrieben."
+                + Text.s(" \(written) Albumcover geschrieben.",
+                         " \(written) album covers written.")
         }
     }
 
@@ -815,11 +868,14 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
                 let connector = try JellyfinConnector(serverURL: settings.jellyfinBaseURL,
                                                       apiKey: apiKey)
                 try await connector.refresh()
-                self?.update { $0.lastResult = ($0.lastResult ?? "") + " Jellyfin is rescanning." }
+                self?.update { $0.lastResult = ($0.lastResult ?? "")
+                    + Text.s(" Jellyfin durchsucht neu.", " Jellyfin is rescanning.") }
             } catch {
                 self?.update {
                     $0.lastResult = ($0.lastResult ?? "")
-                        + " Jellyfin could not be told to rescan: " + Self.reason(for: error)
+                        + Text.s(" Jellyfin ließ sich nicht zum Neudurchsuchen bewegen: ",
+                                 " Jellyfin could not be told to rescan: ")
+                        + Self.reason(for: error)
                 }
             }
         }
@@ -833,8 +889,10 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         lock.unlock()
         update {
             $0.lastResult = count == 0
-                ? "Es gibt nichts zum Anhaken."
-                : (accepted ? "Alle \(count) angehakt." : "Alle abgehakt.")
+                ? Text.s("Es gibt nichts zum Anhaken.", "There is nothing to tick.")
+                : (accepted
+                    ? Text.s("Alle \(count) angehakt.", "All \(count) ticked.")
+                    : Text.s("Alle abgehakt.", "All unticked."))
         }
     }
 
@@ -842,8 +900,10 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         let restored = executor.undoLast()
         update {
             $0.lastResult = restored == 0
-                ? "There was nothing to undo."
-                : "Put \(restored) file\(restored == 1 ? "" : "s") back."
+                ? Text.s("Es gab nichts rückgängig zu machen.",
+                         "There was nothing to undo.")
+                : Text.s("\(restored) Datei\(restored == 1 ? "" : "en") zurückgelegt.",
+                         "Put \(restored) file\(restored == 1 ? "" : "s") back.")
         }
         refreshSnapshotCounts()
     }
@@ -851,7 +911,7 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
     private func clearHistory() {
         log.clear()
         journal.clear()
-        update { $0.lastResult = "History cleared." }
+        update { $0.lastResult = Text.s("Verlauf geleert.", "History cleared.") }
         refreshSnapshotCounts()
     }
 
@@ -866,7 +926,9 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
             .map { URL(fileURLWithPath: $0, isDirectory: true) }
 
         guard !roots.isEmpty else {
-            update { $0.lastResult = "Set your library folders in the settings first." }
+            update { $0.lastResult = Text.s(
+                "Erst die Bibliotheksordner in den Einstellungen setzen.",
+                "Set your library folders in the settings first.") }
             return
         }
 
@@ -890,8 +952,12 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
             $0.busy = false
             $0.convertStatus = nil
             $0.lastResult = found.isEmpty
-                ? "No files to convert were found."
-                : "\(found.count) file\(found.count == 1 ? "" : "s") could be converted."
+                ? Text.s("Keine Dateien zum Konvertieren gefunden.",
+                         "No files to convert were found.")
+                : Text.s(
+                    "\(found.count) Datei\(found.count == 1 ? "" : "en") "
+                        + "könnte\(found.count == 1 ? "" : "n") konvertiert werden.",
+                    "\(found.count) file\(found.count == 1 ? "" : "s") could be converted.")
         }
     }
 
@@ -907,7 +973,9 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         let pending = all.filter { accepting.contains($0.id) }
         guard !pending.isEmpty else {
             clearCancelRequest()
-            update { $0.lastResult = "No files were ticked, so nothing was converted." }
+            update { $0.lastResult = Text.s(
+                "Es war nichts angehakt, also wurde nichts konvertiert.",
+                "No files were ticked, so nothing was converted.") }
             return
         }
         let options = settings.conversion.options
@@ -1003,10 +1071,12 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
             $0.convertDetail = nil
             $0.pendingConversions = 0
             $0.hasError = failed > 0
-            $0.lastResult = "Converted \(done)"
-                + (failed > 0 ? ", \(failed) failed" : "")
-                + (stopped ? " — stopped early" : "")
-                + ". The originals are still there."
+            $0.lastResult = Text.s("Konvertiert \(done)", "Converted \(done)")
+                + (failed > 0
+                    ? Text.s(", \(failed) fehlgeschlagen", ", \(failed) failed") : "")
+                + (stopped ? Text.s(" — vorzeitig gestoppt", " — stopped early") : "")
+                + Text.s(". Die Originale sind noch da.",
+                         ". The originals are still there.")
         }
         refreshSnapshotCounts()
     }
@@ -1022,15 +1092,18 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         lock.unlock()
 
         guard hasTarget else {
-            update { $0.lastResult = "Nothing is converting." }
+            update { $0.lastResult = Text.s("Es konvertiert gerade nichts.",
+                                            "Nothing is converting.") }
             return
         }
         // End the encoder now rather than waiting out a long file.
         process?.terminate()
         update {
             $0.lastResult = process == nil
-                ? "Stopping before the next file."
-                : "Stopping after the current file."
+                ? Text.s("Stoppt vor der nächsten Datei.",
+                         "Stopping before the next file.")
+                : Text.s("Stoppt nach der aktuellen Datei.",
+                         "Stopping after the current file.")
         }
     }
 
@@ -1055,8 +1128,9 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
             clearDownloadCancelRequest()
             update {
                 $0.hasError = true
-                $0.lastResult = "Es ist kein Importordner eingestellt, in den geladen "
-                    + "werden könnte."
+                $0.lastResult = Text.s(
+                    "Es ist kein Importordner eingestellt, in den geladen werden könnte.",
+                    "No import folder is set, so there is nowhere to download to.")
             }
             return
         }
@@ -1067,7 +1141,9 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         _cancelDownload = false
         lock.unlock()
         if alreadyCancelled {
-            update { $0.lastResult = "Der Download wurde abgebrochen, bevor er begann." }
+            update { $0.lastResult = Text.s(
+                "Der Download wurde abgebrochen, bevor er begann.",
+                "The download was cancelled before it started.") }
             return
         }
 
@@ -1185,11 +1261,13 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         lock.unlock()
 
         guard hasTarget else {
-            update { $0.lastResult = "Es läuft kein Download." }
+            update { $0.lastResult = Text.s("Es läuft kein Download.",
+                                            "No download is running.") }
             return
         }
         process?.terminate()
-        update { $0.lastResult = "Der Download wird abgebrochen." }
+        update { $0.lastResult = Text.s("Der Download wird abgebrochen.",
+                                        "The download is being cancelled.") }
     }
 
     private func clearDownloadCancelRequest() {
@@ -1242,7 +1320,8 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
     private func testRemote() {
         let target = settings.remote
         guard target.isEnabled else {
-            update { $0.lastResult = "Der Server ist nicht eingeschaltet." }
+            update { $0.lastResult = Text.s("Der Server ist nicht eingeschaltet.",
+                                            "The server is not switched on.") }
             return
         }
         let problems = target.problems()
@@ -1256,20 +1335,23 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         if target.authentication == .password {
             password = secretStore.value(for: .remotePassword)
             guard let stored = password, !stored.isEmpty else {
-                let message = "Für die Anmeldung per Passwort ist keines gespeichert."
+                let message = Text.s(
+                    "Für die Anmeldung per Passwort ist keines gespeichert.",
+                    "Password login is selected but no password is stored.")
                 record(.remote, ok: false, detail: message)
                 update { $0.hasError = true; $0.lastResult = message }
                 return
             }
         }
-        update { $0.lastResult = "Server wird geprüft …" }
+        update { $0.lastResult = Text.s("Server wird geprüft …", "Testing the server…") }
         let outcome = RemoteTransfer().check(target, password: password)
         record(.remote, ok: outcome.ok, detail: outcome.detail)
         update {
             $0.hasError = !outcome.ok
             $0.lastResult = outcome.ok
-                ? "Der Server antwortet. " + outcome.detail
-                : "Der Server antwortet nicht: " + outcome.detail
+                ? Text.s("Der Server antwortet. ", "The server answers. ") + outcome.detail
+                : Text.s("Der Server antwortet nicht: ",
+                         "The server does not answer: ") + outcome.detail
         }
     }
 
@@ -1285,7 +1367,8 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         let checks = systemChecks
         update {
             $0.hasError = SystemChecks.worst(checks) == .failed
-            $0.lastResult = "Prüfung fertig: " + SystemChecks.summary(checks)
+            $0.lastResult = Text.s("Prüfung fertig: ", "Check finished: ")
+                + SystemChecks.summary(checks)
         }
     }
 
@@ -1343,7 +1426,9 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         let target = settings.remote
         guard target.isEnabled else {
             clearTransferCancelRequest()
-            update { $0.lastResult = "Der Server ist in den Einstellungen nicht aktiviert." }
+            update { $0.lastResult = Text.s(
+                "Der Server ist in den Einstellungen nicht aktiviert.",
+                "The server is not switched on in the settings.") }
             return
         }
         let problems = target.problems()
@@ -1351,7 +1436,8 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
             clearTransferCancelRequest()
             update {
                 $0.hasError = true
-                $0.lastResult = "Die Servereinstellungen sind unvollständig: "
+                $0.lastResult = Text.s("Die Servereinstellungen sind unvollständig: ",
+                                       "The server settings are incomplete: ")
                     + problems.map(\.message).joined(separator: " ")
             }
             return
@@ -1366,7 +1452,9 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
                 clearTransferCancelRequest()
                 update {
                     $0.hasError = true
-                    $0.lastResult = "Für die Anmeldung per Passwort ist keines gespeichert."
+                    $0.lastResult = Text.s(
+                        "Für die Anmeldung per Passwort ist keines gespeichert.",
+                        "Password login is selected but no password is stored.")
                 }
                 return
             }
@@ -1375,7 +1463,9 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         var pending = requested
         guard !pending.isEmpty else {
             clearTransferCancelRequest()
-            update { $0.lastResult = "Es war nichts angehakt, also wurde nichts gesendet." }
+            update { $0.lastResult = Text.s(
+                "Es war nichts angehakt, also wurde nichts gesendet.",
+                "No files were ticked, so nothing was sent.") }
             return
         }
 
@@ -1399,9 +1489,12 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
             collided = true
             update {
                 $0.hasError = true
-                $0.lastResult = "Mehrere Dateien sollen an dieselbe Stelle auf dem Server: "
-                    + names + ". Diese wurden nicht gesendet — bitte eine davon abwählen "
-                    + "oder umbenennen."
+                $0.lastResult = Text.s(
+                    "Mehrere Dateien sollen an dieselbe Stelle auf dem Server: " + names
+                        + ". Diese wurden nicht gesendet — bitte eine davon abwählen "
+                        + "oder umbenennen.",
+                    "Several files would go to the same place on the server: " + names
+                        + ". They were not sent — please untick or rename one of them.")
             }
             guard !pending.isEmpty else {
                 clearTransferCancelRequest()
@@ -1444,7 +1537,8 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
                     log.append(RenameLogEntry(
                         oldName: local.lastPathComponent, newName: relative,
                         status: isPrimary ? .failure : .skipped,
-                        errorDescription: "Die Datei ist nicht mehr da."))
+                        errorDescription: Text.s("Die Datei ist nicht mehr da.",
+                                                 "The file is no longer there.")))
                     if isPrimary {
                         // Counted, not just flagged: `hasError` is derived
                         // from this, and without it the run ended reporting
@@ -1467,7 +1561,8 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
                     // beats a bar that sits at the same number for ten
                     // minutes and looks like a stall.
                     $0.transferDetail = target.transport.reportsProgress
-                        ? nil : "läuft – SFTP meldet keinen Fortschritt"
+                        ? nil : Text.s("läuft – SFTP meldet keinen Fortschritt",
+                                       "running – SFTP reports no progress")
                 }
                 do {
                     try transfer.send(
@@ -1507,9 +1602,13 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
                         log.append(RenameLogEntry(
                             oldName: local.lastPathComponent, newName: relative,
                             status: .failure,
-                            errorDescription: "Die Datei wurde während der Übertragung noch "
-                                + "geschrieben; was angekommen ist, ist unvollständig. "
-                                + "Erneut senden, wenn der Download fertig ist."))
+                            errorDescription: Text.s(
+                                "Die Datei wurde während der Übertragung noch geschrieben; "
+                                    + "was angekommen ist, ist unvollständig. Erneut "
+                                    + "senden, wenn der Download fertig ist.",
+                                "The file was still being written during the transfer; "
+                                    + "what arrived is incomplete. Send it again once the "
+                                    + "download has finished.")))
                     } else {
                         sent += 1
                         arrived.append(local)
@@ -1525,8 +1624,9 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
                     log.append(RenameLogEntry(oldName: local.lastPathComponent,
                                               newName: relative,
                                               status: .skipped,
-                                              errorDescription: "Liegt schon auf dem "
-                                                  + "Server: \(remote)"))
+                                              errorDescription: Text.s(
+                                                "Liegt schon auf dem Server: \(remote)",
+                                                "Already on the server: \(remote)")))
                 } catch {
                     failed += 1
                     itemFailed = true
@@ -1557,8 +1657,11 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
                                 oldName: local.lastPathComponent,
                                 newName: "—",
                                 status: .failure,
-                                errorDescription: "Gesendet, aber die lokale Datei ließ sich "
-                                    + "nicht löschen: " + Self.describe(error)))
+                                errorDescription: Text.s(
+                                    "Gesendet, aber die lokale Datei ließ sich nicht "
+                                        + "löschen: ",
+                                    "Sent, but the local file could not be deleted: ")
+                                    + Self.describe(error)))
                         }
                     }
                 }
@@ -1590,12 +1693,16 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
             // `collided` too: the refusal set hasError and this line used
             // to clear it again, so the warning vanished with the run.
             $0.hasError = failed > 0 || collided
-            $0.lastResult = "\(sent) Datei\(sent == 1 ? "" : "en") gesendet"
-                + (failed > 0 ? ", \(failed) fehlgeschlagen" : "")
-                + (stopped ? " — vorzeitig gestoppt" : "")
+            $0.lastResult = Text.s("\(sent) Datei\(sent == 1 ? "" : "en") gesendet",
+                                   "\(sent) file\(sent == 1 ? "" : "s") sent")
+                + (failed > 0
+                    ? Text.s(", \(failed) fehlgeschlagen", ", \(failed) failed") : "")
+                + (stopped ? Text.s(" — vorzeitig gestoppt", " — stopped early") : "")
                 + (target.removeLocalAfterSend
-                    ? ", \(removed) lokal gelöscht."
-                    : ". Die lokalen Dateien sind noch da.")
+                    ? Text.s(", \(removed) lokal gelöscht.",
+                             ", \(removed) deleted locally.")
+                    : Text.s(". Die lokalen Dateien sind noch da.",
+                             ". The local files are still there."))
         }
         refreshSnapshotCounts()
     }
@@ -1614,7 +1721,8 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         lock.unlock()
 
         guard hasTarget else {
-            update { $0.lastResult = "Es läuft keine Übertragung." }
+            update { $0.lastResult = Text.s("Es läuft keine Übertragung.",
+                                            "No transfer is running.") }
             return
         }
         // rsync leaves a partial file behind on purpose, so the next run
@@ -1622,8 +1730,10 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         process?.terminate()
         update {
             $0.lastResult = process == nil
-                ? "Stoppt vor der nächsten Datei."
-                : "Stoppt nach der aktuellen Datei."
+                ? Text.s("Stoppt vor der nächsten Datei.",
+                         "Stopping before the next file.")
+                : Text.s("Stoppt nach der aktuellen Datei.",
+                         "Stopping after the current file.")
         }
     }
 
@@ -1825,15 +1935,20 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
                                                                   settings: settings)
             if !blocked.isEmpty {
                 failedSomething = true
-                notes.append("\(blocked.count) Datei"
-                    + (blocked.count == 1 ? " wurde" : "en wurden")
-                    + " nicht umbenannt, weil der Zielordner in den Einstellungen "
-                    + "fehlt — sonst landen sie in Unterordnern neben sich selbst.")
+                notes.append(Text.s(
+                    "\(blocked.count) Datei" + (blocked.count == 1 ? " wurde" : "en wurden")
+                        + " nicht umbenannt, weil der Zielordner in den Einstellungen "
+                        + "fehlt — sonst landen sie in Unterordnern neben sich selbst.",
+                    "\(blocked.count) file\(blocked.count == 1 ? " was" : "s were") not "
+                        + "renamed because the target folder is missing from the settings "
+                        + "— they would end up in subfolders beside themselves."))
                 for item in blocked {
                     log.append(RenameLogEntry(
                         oldName: item.originalFileName, newName: "—",
                         status: .skipped,
-                        errorDescription: "Geplanter Lauf: kein Zielordner gesetzt."))
+                        errorDescription: Text.s(
+                            "Geplanter Lauf: kein Zielordner gesetzt.",
+                            "Scheduled run: no target folder is set.")))
                 }
             }
             guard !renameable.isEmpty else { return }
@@ -1854,7 +1969,9 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         guard schedule.alsoSend else { return }
         guard settings.remote.isEnabled else {
             failedSomething = true
-            notes.append("Senden war geplant, aber der Server ist abgeschaltet.")
+            notes.append(Text.s(
+                "Senden war geplant, aber der Server ist abgeschaltet.",
+                "Sending was scheduled, but the server is switched off."))
             return
         }
         // Reached whether or not renaming was asked for: "also send" used to
