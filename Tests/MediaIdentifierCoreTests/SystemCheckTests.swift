@@ -15,12 +15,18 @@ final class SystemCheckTests: XCTestCase {
 
     override func setUpWithError() throws {
         try super.setUpWithError()
+        // This class asserts the German wording. It builds no coordinator,
+        // so nothing would otherwise set the language and it would come from
+        // the machine's LANG — German on a Mac with none set, English in the
+        // CI container, which sets C.UTF-8. The same code, two answers.
+        Text.language = .german
         root = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("mediafin-checks-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     }
 
     override func tearDownWithError() throws {
+        Text.language = .german
         if let root { try? FileManager.default.removeItem(at: root) }
         try super.tearDownWithError()
     }

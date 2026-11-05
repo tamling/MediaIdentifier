@@ -25,9 +25,14 @@ final class ConversionCancelTests: XCTestCase {
         try FileManager.default.createDirectory(at: root.appendingPathComponent("config"),
                                                 withIntermediateDirectories: true)
         coordinator = AppCoordinator(configDirectory: root.appendingPathComponent("config"))
+        // Last, after the coordinator exists: its init calls Text.start from
+        // the settings it loads, which would otherwise undo this. These
+        // tests assert the English wording and German is the default.
+        Text.language = .english
     }
 
     override func tearDownWithError() throws {
+        Text.language = .german
         coordinator = nil
         if let root { try? FileManager.default.removeItem(at: root) }
         try super.tearDownWithError()

@@ -322,6 +322,8 @@ final class UnattendedRunTests: XCTestCase {
         XCTAssertEqual(Schedule.describe(formatter.date(from: "2026-06-11 03:00")!,
                                          now: now, calendar: calendar),
                        "morgen 03:00")
+
+        Text.language = .english
         XCTAssertEqual(Schedule.describe(formatter.date(from: "2026-06-10 23:30")!,
                                          now: now, calendar: calendar),
                        "today 23:30")
