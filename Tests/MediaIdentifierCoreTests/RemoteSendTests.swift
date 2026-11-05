@@ -75,6 +75,33 @@ final class RemoteSendTests: XCTestCase {
         XCTAssertEqual(sends[1].local.path, "/downloads/Dark.S01E01.ger.srt")
     }
 
+    /// Each file carries the library it belongs to, because the server has
+    /// one path per kind and sending an album under the film path puts it
+    /// where the media server will not look for it.
+    func testEachSendCarriesTheLibraryItBelongsTo() {
+        let episode = Self.item(source: "/downloads/Dark.S01E01.mkv",
+                                relative: "Dark/Staffel 01/Dark - S01E01.mkv")
+        XCTAssertEqual(AppCoordinator.remoteTransfers(for: episode)[0].library, .series)
+
+        let track = Self.item(source: "/downloads/01 - Song.flac",
+                              relative: "Artist/Album (1998)/01 - Song.flac")
+        XCTAssertEqual(AppCoordinator.remoteTransfers(for: track)[0].library, .music)
+    }
+
+    /// The primary decides for its companions. A subtitle is neither film
+    /// nor music by its own extension, and it belongs beside its episode.
+    func testACompanionGoesToTheSameLibraryAsItsPrimary() {
+        var item = Self.item(source: "/downloads/Dark.S01E01.mkv",
+                             relative: "Dark/Staffel 01/Dark - S01E01.mkv")
+        item.companionMoves = [
+            PlannedMove(source: URL(fileURLWithPath: "/downloads/Dark.S01E01.ger.srt"),
+                        destination: URL(fileURLWithPath:
+                            "/library/Dark/Staffel 01/Dark - S01E01.ger.srt")),
+        ]
+        let sends = AppCoordinator.remoteTransfers(for: item)
+        XCTAssertEqual(sends.map(\.library), [.series, .series])
+    }
+
     /// A film proposed at the top of the library has no folder to join; the
     /// companion must not end up at "/name".
     func testACompanionOfAFileWithNoFolderKeepsItsBareName() {

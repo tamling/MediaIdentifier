@@ -112,7 +112,7 @@ final class RemoteTransferIntegrationTests: XCTestCase {
         let relative = relativePath("\(transport)-\(auth)")
         let seen = ProgressRecorder()
 
-        try RemoteTransfer().send(sourceFile, relativePath: relative,
+        try RemoteTransfer().send(sourceFile, relativePath: relative, library: .series,
                                   to: try target(transport, auth),
                                   password: password(for: auth),
                                   progress: { seen.record($0) })
@@ -141,7 +141,7 @@ final class RemoteTransferIntegrationTests: XCTestCase {
     /// episode of the same series does not need them to exist already.
     func testCreatesTheSeasonFolder() throws {
         let relative = relativePath("deep/one/two/three")
-        try RemoteTransfer().send(sourceFile, relativePath: relative,
+        try RemoteTransfer().send(sourceFile, relativePath: relative, library: .series,
                                   to: try target(.rsync, .key), password: nil)
         try assertArrived(relative)
     }
@@ -152,7 +152,7 @@ final class RemoteTransferIntegrationTests: XCTestCase {
     func testPathsWithSpacesArriveInOnePiece() throws {
         let relative = "Serien/Der Name der Rose/Staffel 01/"
             + "Folge 1 - Ein später Tag-\(UUID().uuidString).mkv"
-        try RemoteTransfer().send(sourceFile, relativePath: relative,
+        try RemoteTransfer().send(sourceFile, relativePath: relative, library: .series,
                                   to: try target(.rsync, .key), password: nil)
         try assertArrived(relative)
     }
@@ -160,7 +160,7 @@ final class RemoteTransferIntegrationTests: XCTestCase {
     func testPathsWithSpacesArriveOverSftpToo() throws {
         let relative = "Serien/Der Name der Rose/Staffel 02/"
             + "Folge 2 - Noch später-\(UUID().uuidString).mkv"
-        try RemoteTransfer().send(sourceFile, relativePath: relative,
+        try RemoteTransfer().send(sourceFile, relativePath: relative, library: .series,
                                   to: try target(.sftp, .key), password: nil)
         try assertArrived(relative)
     }
@@ -182,6 +182,7 @@ final class RemoteTransferIntegrationTests: XCTestCase {
         unknown.host = "localhost"
         XCTAssertThrowsError(
             try RemoteTransfer().send(sourceFile, relativePath: relativePath("refused"),
+                                      library: .series,
                                       to: unknown, password: nil)
         ) { error in
             let message = "\(error)"

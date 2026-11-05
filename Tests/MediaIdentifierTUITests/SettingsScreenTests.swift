@@ -41,9 +41,10 @@ final class SettingsScreenTests: XCTestCase {
                          "jellyfinBaseURL", "scheduleEnabled", "scheduleCadence",
                          "scheduleTime", "scheduleEveryHours", "scheduleRename",
                          "scheduleSend", "remoteEnabled", "remoteHost", "remotePort",
-                         "remoteUser", "remoteBasePath", "remoteTransport",
+                         "remoteUser", "remoteBasePath", "remoteMoviesPath",
+                         "remoteSeriesPath", "remoteMusicPath", "remoteTransport",
                          "remoteAuthentication", "remoteIdentityFile",
-                         "remoteRemoveLocal"] {
+                         "remoteTrustOnFirstUse", "remoteRemoveLocal"] {
             XCTAssertTrue(ids.contains(expected), "no field for \(expected)")
         }
         for key in SecretKey.allCases {
@@ -392,8 +393,47 @@ final class SettingsTestingTests: XCTestCase {
         XCTAssertFalse(folder.contains("test"), folder)
     }
 
+    // MARK: The server's three paths, and the login that failed silently
+
+    func testEachKindsPathCanBeTypedAndReachesTheRightField() {
+        let settings = WebSettings()
+        XCTAssertEqual(SettingsForm.applying("/v1/Filme", to: "remoteMoviesPath",
+                                             in: settings).remote.moviesPath, "/v1/Filme")
+        XCTAssertEqual(SettingsForm.applying("/v2/Serien", to: "remoteSeriesPath",
+                                             in: settings).remote.seriesPath, "/v2/Serien")
+        XCTAssertEqual(SettingsForm.applying("/v1/Musik", to: "remoteMusicPath",
+                                             in: settings).remote.musicPath, "/v1/Musik")
+    }
+
+    func testTrustingTheServerIsAToggleAndStartsOff() {
+        let settings = WebSettings()
+        XCTAssertFalse(settings.remote.trustOnFirstUse)
+        XCTAssertTrue(SettingsForm.toggling("remoteTrustOnFirstUse", in: settings)
+            .remote.trustOnFirstUse)
+    }
+
+    /// The field that cost the evening. With login set to "key", ssh is not
+    /// allowed to ask for anything, so a stored password is never offered —
+    /// and the row said nothing about that, while the arrows that change it
+    /// did nothing at all.
+    func testTheLoginFieldSaysThatAKeyIgnoresTheStoredPassword() {
+        let hint = SettingsForm.fields(for: WebSettings(), secrets: [.remotePassword])
+            .first { $0.id == "remoteAuthentication" }?.hint ?? ""
+        XCTAssertTrue(hint.lowercased().contains("password"), hint)
+        XCTAssertTrue(hint.contains("←→"), hint)
+    }
+
+    /// The paths are part of the server, so [t] tests the server from them
+    /// rather than offering nothing where it is most wanted.
+    func testThePerKindPathsOfferTheServerTest() {
+        for id in ["remoteMoviesPath", "remoteSeriesPath", "remoteMusicPath"] {
+            XCTAssertEqual(SettingsForm.test(for: id), .testRemoteConnection, id)
+        }
+    }
+
     func testTheRowStillFitsEveryWidth() {
-        for id in ["sourceFolder", "libraryMode", "remoteHost", "watchSourceFolder"] {
+        for id in ["sourceFolder", "libraryMode", "remoteHost", "watchSourceFolder",
+                   "remoteMusicPath", "remoteAuthentication"] {
             let state = moved(to: id)
             for columns in [40, 60, 80, 120] {
                 let size = ScreenSize(columns: columns, rows: 30)

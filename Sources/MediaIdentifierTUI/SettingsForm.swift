@@ -187,7 +187,34 @@ public enum SettingsForm {
         out.append(Field(
             id: "remoteBasePath", label: Text.s("Zielpfad", "Target path"),
             kind: .text(placeholder: "/volume1/Medien"),
-            value: settings.remote.basePath, problem: problem("remoteBasePath")))
+            value: settings.remote.basePath,
+            hint: Text.s("Gilt für alles, wofür unten kein eigener Pfad steht.",
+                         "Used for anything that has no path of its own below."),
+            problem: problem("remoteBasePath")))
+        // One path per kind, because a server rarely has all three under one
+        // parent — two disks and three libraries is the normal case, and the
+        // single path above could not say it.
+        out.append(Field(
+            id: "remoteMoviesPath", label: Text.s("· Filme", "· Films"),
+            kind: .text(placeholder: Text.s("leer = Zielpfad", "empty = target path")),
+            value: settings.remote.moviesPath,
+            hint: Text.s("Wohin Filme auf dem Server gehen.",
+                         "Where films go on the server."),
+            problem: problem("remoteMoviesPath")))
+        out.append(Field(
+            id: "remoteSeriesPath", label: Text.s("· Serien", "· Series"),
+            kind: .text(placeholder: Text.s("leer = Zielpfad", "empty = target path")),
+            value: settings.remote.seriesPath,
+            hint: Text.s("Wohin Serien auf dem Server gehen.",
+                         "Where series go on the server."),
+            problem: problem("remoteSeriesPath")))
+        out.append(Field(
+            id: "remoteMusicPath", label: Text.s("· Musik", "· Music"),
+            kind: .text(placeholder: Text.s("leer = Zielpfad", "empty = target path")),
+            value: settings.remote.musicPath,
+            hint: Text.s("Wohin Musik auf dem Server geht.",
+                         "Where music goes on the server."),
+            problem: problem("remoteMusicPath")))
         out.append(Field(
             id: "remoteTransport", label: Text.s("Übertragung", "Transfer"),
             kind: .choice(RemoteTarget.Transport.allCases.map(\.label)),
@@ -195,14 +222,34 @@ public enum SettingsForm {
         out.append(Field(
             id: "remoteAuthentication", label: Text.s("Anmeldung", "Login"),
             kind: .choice(RemoteTarget.Authentication.allCases.map(\.label)),
-            value: settings.remote.authentication.label))
+            value: settings.remote.authentication.label,
+            // Spelled out, because the wrong setting here fails silently:
+            // with „Schlüssel“ ssh may not ask for anything, so a stored
+            // password is never offered and the login simply says no.
+            hint: Text.s("Mit ←→ umstellen. Bei „Schlüssel“ wird ein gespeichertes "
+                             + "Passwort nicht benutzt.",
+                         "Change with ←→. With “key” a stored password is not used.")))
         out.append(Field(
             id: "remoteIdentityFile", label: Text.s("Schlüssel", "Key file"),
             kind: .text(placeholder: "~/.ssh/id_ed25519"),
-            value: settings.remote.identityFile))
+            value: settings.remote.identityFile,
+            hint: Text.s("Nur bei Anmeldung per Schlüssel. Leer = die ssh-Einrichtung "
+                             + "des Rechners.",
+                         "Only for key login. Empty = whatever this machine's ssh "
+                             + "setup already does.")))
         out.append(Field(
             id: Self.secretField(.remotePassword), label: Text.s("Passwort", "Password"),
-            kind: .secret, value: stored(.remotePassword)))
+            kind: .secret, value: stored(.remotePassword),
+            hint: Text.s("Nur bei Anmeldung per Passwort.",
+                         "Only for password login.")))
+        out.append(Field(
+            id: "remoteTrustOnFirstUse",
+            label: Text.s("Erstmals vertrauen", "Trust first time"),
+            kind: .toggle, value: flag(settings.remote.trustOnFirstUse),
+            hint: Text.s("Den Schlüssel des Servers beim ersten Mal übernehmen. Ein "
+                             + "geänderter Schlüssel wird weiterhin abgelehnt.",
+                         "Accept the server's key the first time it is seen. A key that "
+                             + "has changed is still refused.")))
         out.append(Field(
             id: "remoteRemoveLocal",
             label: Text.s("Lokal löschen", "Delete locally"),
@@ -230,6 +277,9 @@ public enum SettingsForm {
         case "remoteHost": out.remote.host = trimmed
         case "remoteUser": out.remote.user = trimmed
         case "remoteBasePath": out.remote.basePath = trimmed
+        case "remoteMoviesPath": out.remote.moviesPath = trimmed
+        case "remoteSeriesPath": out.remote.seriesPath = trimmed
+        case "remoteMusicPath": out.remote.musicPath = trimmed
         case "remoteIdentityFile": out.remote.identityFile = trimmed
         case "remotePort":
             // Kept impossible rather than clamped when it is not a number:
@@ -263,6 +313,7 @@ public enum SettingsForm {
         case "scheduleRename": out.schedule.alsoRename.toggle()
         case "scheduleSend": out.schedule.alsoSend.toggle()
         case "remoteEnabled": out.remote.isEnabled.toggle()
+        case "remoteTrustOnFirstUse": out.remote.trustOnFirstUse.toggle()
         case "remoteRemoveLocal": out.remote.removeLocalAfterSend.toggle()
         default: break
         }

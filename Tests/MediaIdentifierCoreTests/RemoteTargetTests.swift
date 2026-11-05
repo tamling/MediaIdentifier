@@ -116,4 +116,127 @@ final class RemoteTargetTests: XCTestCase {
         settings.remote = RemoteTarget(isEnabled: true, host: "", user: "", basePath: "")
         XCTAssertFalse(settings.problems().isEmpty)
     }
+
+    // MARK: One path per kind
+
+    func testAKindWithNoPathOfItsOwnUsesTheBasePath() {
+        let target = RemoteTarget(isEnabled: true, host: "nas", user: "tam",
+                                  basePath: "/srv/media")
+        for library in RemoteTarget.Library.allCases {
+            XCTAssertEqual(target.path(for: library), "/srv/media")
+        }
+    }
+
+    func testAKindsOwnPathWinsOverTheBase() {
+        let target = RemoteTarget(isEnabled: true, host: "nas", user: "tam",
+                                  basePath: "/srv/media", musicPath: "/volume2/Musik")
+        XCTAssertEqual(target.path(for: .music), "/volume2/Musik")
+        XCTAssertEqual(target.path(for: .movies), "/srv/media")
+        XCTAssertEqual(target.path(for: .series), "/srv/media")
+    }
+
+    /// The connection test uses this list, and checking the same path three
+    /// times would make a one-path setup three times slower for nothing.
+    func testTargetPathsFoldsPathsThatAreTheSame() {
+        var target = RemoteTarget(isEnabled: true, host: "nas", user: "tam",
+                                  basePath: "/srv/media")
+        XCTAssertEqual(target.targetPaths().count, 1)
+        XCTAssertEqual(target.targetPaths()[0].libraries.count, 3)
+
+        target.musicPath = "/volume2/Musik"
+        let paths = target.targetPaths()
+        XCTAssertEqual(paths.map(\.path), ["/srv/media", "/volume2/Musik"])
+        XCTAssertEqual(paths[0].libraries, [.movies, .series])
+        XCTAssertEqual(paths[1].libraries, [.music])
+    }
+
+    /// With all three filled in there is nothing left for a base path to do,
+    /// so demanding one would be a complaint about a complete setup.
+    func testTheBasePathIsOptionalOnceAllThreeAreSet() {
+        let target = RemoteTarget(isEnabled: true, host: "nas", user: "tam",
+                                  basePath: "", moviesPath: "/a",
+                                  seriesPath: "/b", musicPath: "/c")
+        XCTAssertTrue(target.problems().isEmpty, "\(target.problems())")
+    }
+
+    /// Two of three is not enough: the third would silently have nowhere to
+    /// go, which is the failure this whole check exists to prevent.
+    func testTheBasePathIsStillNeededWhenOneKindIsLeftOut() {
+        let target = RemoteTarget(isEnabled: true, host: "nas", user: "tam",
+                                  basePath: "", moviesPath: "/a", seriesPath: "/b")
+        XCTAssertEqual(target.problems().map(\.field), ["remoteBasePath"])
+    }
+
+    func testARelativePerKindPathIsRejectedAndNamed() {
+        let target = RemoteTarget(isEnabled: true, host: "nas", user: "tam",
+                                  basePath: "/srv", seriesPath: "Serien")
+        XCTAssertEqual(target.problems().map(\.field), ["remoteSeriesPath"])
+    }
+
+    func testThePerKindPathsSurviveARoundTrip() throws {
+        let original = RemoteTarget(isEnabled: true, host: "nas.local", port: 2222,
+                                    user: "tam", basePath: "/srv/media",
+                                    moviesPath: "/v1/Filme", seriesPath: "/v2/Serien",
+                                    musicPath: "/v1/Musik", transport: .sftp,
+                                    authentication: .password,
+                                    identityFile: "/home/tam/.ssh/nas",
+                                    trustOnFirstUse: true)
+        let data = try JSONEncoder().encode(original)
+        XCTAssertEqual(try JSONDecoder().decode(RemoteTarget.self, from: data), original)
+    }
+
+    /// A settings file written before the three paths existed must load, and
+    /// must not come back trusting a server it was never told to trust.
+    func testASettingsFileFromBeforeThePerKindPathsStillLoads() throws {
+        let json = #"{"isEnabled":true,"host":"nas","user":"tam","basePath":"/srv"}"#
+        let target = try JSONDecoder().decode(RemoteTarget.self, from: Data(json.utf8))
+        XCTAssertEqual(target.path(for: .music), "/srv")
+        XCTAssertFalse(target.trustOnFirstUse)
+        XCTAssertTrue(target.problems().isEmpty, "\(target.problems())")
+    }
+
+    /// A checkbox sends nothing when unticked, so it needs the hidden
+    /// companion field that says the section was on the form at all —
+    /// otherwise another page's form would silently untick it.
+    func testTrustingTheServerNeedsItsSectionToBePresent() {
+        var trusting = RemoteTarget(isEnabled: true, host: "nas", user: "tam",
+                                    basePath: "/srv")
+        trusting.trustOnFirstUse = true
+        XCTAssertTrue(RemoteTarget.fromForm([:], current: trusting).trustOnFirstUse,
+                      "a form without the server section turned the trust off")
+        XCTAssertFalse(RemoteTarget.fromForm(["remoteTrustOnFirstUsePresent": "1"],
+                                             current: trusting).trustOnFirstUse)
+        XCTAssertTrue(RemoteTarget.fromForm(["remoteTrustOnFirstUsePresent": "1",
+                                             "remoteTrustOnFirstUse": "1"],
+                                            current: RemoteTarget()).trustOnFirstUse)
+    }
+
+    func testThePerKindPathsComeInFromTheForm() {
+        let target = RemoteTarget.fromForm(["remoteMoviesPath": "/v1/Filme",
+                                            "remoteSeriesPath": "/v2/Serien",
+                                            "remoteMusicPath": "/v1/Musik"],
+                                           current: RemoteTarget())
+        XCTAssertEqual(target.moviesPath, "/v1/Filme")
+        XCTAssertEqual(target.seriesPath, "/v2/Serien")
+        XCTAssertEqual(target.musicPath, "/v1/Musik")
+    }
+
+    // MARK: Which library a file belongs to
+
+    /// A track is parsed as `.unknown`, and so is an unrecognised film, so
+    /// the kind alone cannot tell them apart. The extension can.
+    func testMusicIsRecognisedByItsFileAndNotByItsParsedKind() {
+        XCTAssertEqual(
+            RemoteTarget.Library.of(URL(fileURLWithPath: "/x/01 - Song.flac"),
+                                    kind: .unknown), .music)
+        XCTAssertEqual(
+            RemoteTarget.Library.of(URL(fileURLWithPath: "/x/Film (2020).mkv"),
+                                    kind: .unknown), .movies)
+        XCTAssertEqual(
+            RemoteTarget.Library.of(URL(fileURLWithPath: "/x/Dark - S01E01.mkv"),
+                                    kind: .episode), .series)
+        XCTAssertEqual(
+            RemoteTarget.Library.of(URL(fileURLWithPath: "/x/Film.mkv"),
+                                    kind: .movie), .movies)
+    }
 }

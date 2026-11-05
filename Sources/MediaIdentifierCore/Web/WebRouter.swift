@@ -1084,7 +1084,16 @@ public struct WebRouter: Sendable {
             \(field("remoteUser", label: Text.s("Benutzer", "User"), value: current.remote.user))
             \(field("remoteBasePath", label: Text.s("Zielpfad auf dem Server", "Target path on the server"),
                     value: current.remote.basePath,
-                    hint: Text.s("Absolut. Die sortierten Ordner entstehen darunter.", "Absolute. The sorted folders are created under it.")))
+                    hint: Text.s("Absolut. Gilt für alles, wofür darunter kein eigener Pfad steht.", "Absolute. Used for anything that has no path of its own below.")))
+            \(field("remoteMoviesPath", label: Text.s("Nur Filme", "Films only"),
+                    value: current.remote.moviesPath,
+                    hint: Text.s("Leer lassen, um den Zielpfad zu benutzen.", "Leave empty to use the target path.")))
+            \(field("remoteSeriesPath", label: Text.s("Nur Serien", "Series only"),
+                    value: current.remote.seriesPath,
+                    hint: Text.s("Leer lassen, um den Zielpfad zu benutzen.", "Leave empty to use the target path.")))
+            \(field("remoteMusicPath", label: Text.s("Nur Musik", "Music only"),
+                    value: current.remote.musicPath,
+                    hint: Text.s("Leer lassen, um den Zielpfad zu benutzen.", "Leave empty to use the target path.")))
             <label for="remoteTransport">\(Text.s("Übertragen mit", "Transfer with"))</label>
             <select id="remoteTransport" name="remoteTransport">\(transportOptions)</select>
             <label for="remoteAuthentication">\(Text.s("Anmelden mit", "Sign in with"))</label>
@@ -1092,6 +1101,10 @@ public struct WebRouter: Sendable {
             \(field("remoteIdentityFile", label: Text.s("Schlüsseldatei", "Key file"), value: current.remote.identityFile,
                     hint: Text.s("Leer lassen, um die bestehende ssh-Konfiguration zu benutzen.", "Leave empty to use whatever your ssh configuration already does.")))
             \(secretField(.remotePassword))
+            <input type="hidden" name="remoteTrustOnFirstUsePresent" value="1">
+            <label class="inline"><input type="checkbox" name="remoteTrustOnFirstUse" value="1"\
+        \(current.remote.trustOnFirstUse ? " checked" : "")> \(Text.s("Dem Server beim ersten Mal vertrauen", "Trust this server the first time"))</label>
+            <p class="hint">\(Text.s("Nimmt den Schlüssel eines unbekannten Servers an, statt zu verlangen, dass man sich einmal von Hand verbindet. Ein Schlüssel, der sich später ändert, wird weiterhin abgelehnt — das ist der Fall, der zählt.", "Accepts the key of a server it has not met, instead of requiring you to connect once by hand. A key that changes later is still refused — that is the case that matters."))</p>
             <input type="hidden" name="remoteRemoveLocalPresent" value="1">
             <label class="inline"><input type="checkbox" name="remoteRemoveLocal" value="1"\
         \(current.remote.removeLocalAfterSend ? " checked" : "")> \(Text.s("Die lokale Datei löschen, sobald der Server sie hat", "Delete the local file once the server has it"))</label>

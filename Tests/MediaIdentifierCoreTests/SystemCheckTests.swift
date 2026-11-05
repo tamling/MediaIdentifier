@@ -162,6 +162,57 @@ final class SystemCheckTests: XCTestCase {
                        .warning, "with a password stored it is merely untested")
     }
 
+    // MARK: The login trap
+
+    /// This is the bug, as a lamp.
+    ///
+    /// Key login puts ssh in batch mode, where it may not ask for anything.
+    /// So a key file that is not there fails in a tenth of a second with
+    /// "Permission denied" while a perfectly good password sits unused in the
+    /// store, and nothing anywhere said that it would not be tried. It cost
+    /// a real evening.
+    func testAKeyFileThatIsNotThereIsRedAndSaysWhatToDo() {
+        var settings = WebSettings(sourceFolder: root.path)
+        settings.remote = RemoteTarget(isEnabled: true, host: "nas.local", user: "media",
+                                       basePath: "/srv/media",
+                                       identityFile: root.appendingPathComponent("no-key").path)
+        let login = lamp(checks(settings, secrets: [.remotePassword]), "remote-login")
+        XCTAssertEqual(login?.state, .failed)
+        XCTAssertTrue(login?.detail.contains("Passwort") ?? false, login?.detail ?? "")
+    }
+
+    /// A stored password that the login method will never reach is amber: the
+    /// setup may well work by key, but the password is doing nothing and the
+    /// user who typed it believes otherwise.
+    func testAStoredPasswordThatKeyLoginWillNeverUseIsAmber() {
+        var settings = WebSettings(sourceFolder: root.path)
+        settings.remote = RemoteTarget(isEnabled: true, host: "nas.local", user: "media",
+                                       basePath: "/srv/media")
+        XCTAssertEqual(lamp(checks(settings, secrets: [.remotePassword]),
+                            "remote-login")?.state, .warning)
+    }
+
+    /// Key login with a key that exists, and no password lying about, has
+    /// nothing to report — a lamp for every working setup is noise.
+    func testAWorkingKeySetupGetsNoLoginLamp() throws {
+        let key = root.appendingPathComponent("id_ed25519")
+        try Data("not really a key".utf8).write(to: key)
+        var settings = WebSettings(sourceFolder: root.path)
+        settings.remote = RemoteTarget(isEnabled: true, host: "nas.local", user: "media",
+                                       basePath: "/srv/media", identityFile: key.path)
+        XCTAssertNil(lamp(checks(settings), "remote-login"))
+    }
+
+    /// Password login is not this lamp's business: it has its own, above.
+    func testPasswordLoginGetsNoKeyFileComplaint() {
+        var settings = WebSettings(sourceFolder: root.path)
+        settings.remote = RemoteTarget(isEnabled: true, host: "nas.local", user: "media",
+                                       basePath: "/srv/media",
+                                       authentication: .password,
+                                       identityFile: "/nowhere/at/all")
+        XCTAssertNil(lamp(checks(settings, secrets: [.remotePassword]), "remote-login"))
+    }
+
     func testAnIncompleteServerSaysWhichFieldIsMissing() {
         var settings = WebSettings(sourceFolder: root.path)
         settings.remote = RemoteTarget(isEnabled: true, host: "nas.local", user: "",

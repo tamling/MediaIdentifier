@@ -217,6 +217,32 @@ final class WebConvertPageTests: XCTestCase {
         XCTAssertEqual(response.headers["Location"], "/settings?saved=1")
     }
 
+    /// The three server paths and the trust tick exist on the web form too,
+    /// and reach the engine. Three front-ends on one engine only stays
+    /// honest if a setting added to one is reachable from the others.
+    func testTheServerPathsAndTheTrustTickAreOnTheWebFormAndSave() {
+        let router = makeRouter()
+        let html = String(decoding: router.respond(to: HTTPRequest(
+            method: "GET", path: "/settings",
+            headers: ["authorization": "Bearer \(token)"])).body, as: UTF8.self)
+        for name in ["remoteMoviesPath", "remoteSeriesPath", "remoteMusicPath",
+                     "remoteTrustOnFirstUse", "remoteTrustOnFirstUsePresent"] {
+            XCTAssertTrue(html.contains("name=\"\(name)\""), "no \(name) on the form")
+        }
+
+        _ = post(router, "/settings",
+                 body: "remoteMoviesPath=%2Fv1%2FFilme&remoteSeriesPath=%2Fv2%2FSerien"
+                     + "&remoteMusicPath=%2Fv1%2FMusik"
+                     + "&remoteTrustOnFirstUsePresent=1&remoteTrustOnFirstUse=1")
+        guard case .saveSettings(let saved)? = sink.commands.first else {
+            return XCTFail("expected a saveSettings command, got \(sink.commands)")
+        }
+        XCTAssertEqual(saved.remote.path(for: .movies), "/v1/Filme")
+        XCTAssertEqual(saved.remote.path(for: .series), "/v2/Serien")
+        XCTAssertEqual(saved.remote.path(for: .music), "/v1/Musik")
+        XCTAssertTrue(saved.remote.trustOnFirstUse)
+    }
+
     func testABadConversionValueComesBackOnTheConvertPage() {
         let router = makeRouter()
         let response = post(router, "/settings",

@@ -96,18 +96,25 @@ public enum RemoteCommand {
 
     /// Options handed to ssh, whichever tool is driving it.
     ///
-    /// `StrictHostKeyChecking` is deliberately **not** turned off. Accepting
-    /// any key that turns up is how a transfer ends up at whatever machine
-    /// answered, and it is the one setting that makes every other precaution
-    /// here pointless. An unknown host fails with a message telling the user
-    /// to connect once by hand, which is a minute of work and leaves the
-    /// decision with the person who can actually verify the fingerprint.
+    /// `StrictHostKeyChecking` is never `no`. `no` accepts a key that has
+    /// *changed*, which is what a machine in the middle looks like, and it is
+    /// the one setting that would make every other precaution here pointless.
+    /// The two settings used are:
+    ///
+    /// - `yes`, the default: an unknown server fails with a message telling
+    ///   the user to connect once by hand, which leaves the decision with the
+    ///   person who can actually check the fingerprint.
+    /// - `accept-new`, when the user has ticked "trust this server the first
+    ///   time": an unknown server is remembered, a changed key is still
+    ///   refused. For a NAS on one's own network that is a fair trade, and it
+    ///   removes the one step of this setup that cannot be done from here.
     ///
     /// `BatchMode` is only safe with a key: with a password, ssh has to be
     /// allowed to ask, and sshpass answers.
     static func sshOptions(_ target: RemoteTarget) -> [String] {
         var options = [
-            "-o", "StrictHostKeyChecking=yes",
+            "-o", target.trustOnFirstUse
+                ? "StrictHostKeyChecking=accept-new" : "StrictHostKeyChecking=yes",
             "-o", "ConnectTimeout=15",
             // Nothing interactive can work here: there is no terminal to
             // type into, so a prompt would simply hang the transfer.
@@ -147,6 +154,11 @@ public enum RemoteCommand {
         return "\(trimmedBase)/\(trimmedPath)"
     }
 
+    /// What the probe's remote script exits with when a path is missing or
+    /// read-only. Outside sshpass's own 1–9, outside the shell's 126/127, and
+    /// below the 128+signal range.
+    static let pathFailureStatus = 61
+
     /// `user@host` goes into ssh's argument list as one bare word.
     ///
     /// A user name beginning with a dash is therefore read as an option,
@@ -174,10 +186,11 @@ public enum RemoteCommand {
     /// honour "skip the file" over sftp is to ask first.
     public static func exists(_ target: RemoteTarget,
                               relativePath: String,
+                              library: RemoteTarget.Library,
                               sshPath: String,
                               password: String?) throws -> Invocation {
         try checkDestination(target)
-        let remote = remotePath(relativePath, under: target.basePath)
+        let remote = remotePath(relativePath, under: target.path(for: library))
         _ = try rejectingControlCharacters(remote, what: "Der Zielpfad")
         let quoted = "'" + remote.replacingOccurrences(of: "'", with: "'\\''") + "'"
         var arguments = ["-p", String(target.port)] + sshOptions(target)
@@ -208,21 +221,41 @@ public enum RemoteCommand {
     /// Writability is checked with `test -w` rather than by writing a file,
     /// because a check that leaves litter in a media library is a check
     /// people turn off.
+    ///
+    /// Every configured path is checked, not just one. With a path per kind
+    /// it became possible for films to work and music to fail, and a test
+    /// that looked at one of the three would be a green lamp over a setup
+    /// that loses albums. The first path that fails is echoed back, so the
+    /// message can name it — one connection, three answers.
     public static func probe(_ target: RemoteTarget,
                              sshPath: String,
                              password: String?) throws -> Invocation {
-        guard !target.host.isEmpty, !target.basePath.isEmpty else {
+        let paths = target.targetPaths()
+        guard !target.host.isEmpty, !paths.isEmpty else {
             throw Failure.notConfigured("Adresse oder Zielpfad fehlt")
         }
         // Single-quoted for the remote shell, with embedded quotes escaped
-        // the only way POSIX sh allows. The base path comes from a settings
-        // field, so it is not trusted to be shell-safe.
+        // the only way POSIX sh allows. The paths come from settings fields,
+        // so they are not trusted to be shell-safe.
         try checkDestination(target)
-        _ = try rejectingControlCharacters(target.basePath, what: "Der Zielpfad")
-        let quoted = "'" + target.basePath.replacingOccurrences(of: "'", with: "'\\''") + "'"
+        var tests: [String] = []
+        for (path, _) in paths {
+            _ = try rejectingControlCharacters(path, what: "Der Zielpfad")
+            let quoted = "'" + path.replacingOccurrences(of: "'", with: "'\\''") + "'"
+            // The failing path on stderr and a status `check()` recognises:
+            // "it is one of the three" is not an answer anyone can act on.
+            // 61 and not something small: sshpass claims exit codes 1 to 9
+            // for its own failures — 3 is its "general runtime error" and 5
+            // its "wrong password" — and with password login sshpass is the
+            // process whose status we read. A path complaint that arrived as
+            // "sshpass had a problem" would send the user looking in exactly
+            // the wrong place.
+            tests.append("{ test -d \(quoted) && test -w \(quoted); } "
+                + "|| { echo \(quoted) >&2; exit \(Self.pathFailureStatus); }")
+        }
         var arguments = ["-p", String(target.port)] + sshOptions(target)
         arguments.append(target.destination)
-        arguments.append("test -d \(quoted) && test -w \(quoted)")
+        arguments.append(tests.joined(separator: "; "))
 
         if target.authentication == .password {
             guard let password, !password.isEmpty else {
@@ -241,16 +274,18 @@ public enum RemoteCommand {
     public static func rsync(_ target: RemoteTarget,
                              localFile: URL,
                              relativePath: String,
+                             library: RemoteTarget.Library,
                              rsyncPath: String,
                              sshPath: String,
                              sshpassPath: String = "sshpass",
                              password: String?,
                              keepExisting: Bool = false) throws -> Invocation {
-        guard !target.host.isEmpty, !target.basePath.isEmpty else {
+        let base = target.path(for: library)
+        guard !target.host.isEmpty, !base.isEmpty else {
             throw Failure.notConfigured("Adresse oder Zielpfad fehlt")
         }
         try checkDestination(target)
-        let destination = remotePath(relativePath, under: target.basePath)
+        let destination = remotePath(relativePath, under: base)
 
         // The ssh command rsync should use. rsync splits this on spaces, so
         // it must not contain a path with one — an identity file in a folder
@@ -335,13 +370,15 @@ public enum RemoteCommand {
     public static func sftp(_ target: RemoteTarget,
                             localFile: URL,
                             relativePath: String,
+                            library: RemoteTarget.Library,
                             sftpPath: String,
                             password: String?) throws -> Invocation {
-        guard !target.host.isEmpty, !target.basePath.isEmpty else {
+        let base = target.path(for: library)
+        guard !target.host.isEmpty, !base.isEmpty else {
             throw Failure.notConfigured("Adresse oder Zielpfad fehlt")
         }
         try checkDestination(target)
-        let destination = remotePath(relativePath, under: target.basePath)
+        let destination = remotePath(relativePath, under: base)
         _ = try rejectingControlCharacters(localFile.path, what: "Der Dateiname")
         _ = try rejectingControlCharacters(destination, what: "Der Zielpfad")
         let directory = (destination as NSString).deletingLastPathComponent

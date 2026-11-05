@@ -136,7 +136,8 @@ public enum SystemChecks {
         checks.append(jellyfin(settings: settings, secrets: secrets,
                                probes: probes, now: now))
         checks.append(contentsOf: remote(settings: settings, tools: tools,
-                                         secrets: secrets, probes: probes, now: now))
+                                         secrets: secrets, probes: probes,
+                                         fileManager: fileManager, now: now))
         checks.append(schedule(settings.schedule, nextRun: nextScheduledRun, now: now))
         return checks
     }
@@ -284,6 +285,7 @@ public enum SystemChecks {
     private static func remote(settings: WebSettings, tools: RemoteTools,
                                secrets: Set<SecretKey>,
                                probes: [ProbeSubject: ProbeResult],
+                               fileManager: FileManager = .default,
                                now: Date) -> [SystemCheck] {
         let target = settings.remote
         guard target.isEnabled else {
@@ -319,9 +321,59 @@ public enum SystemChecks {
                                         "Password login is selected but none is stored.")))
             return checks
         }
+        if let lamp = login(target, secrets: secrets, fileManager: fileManager) {
+            checks.append(lamp)
+        }
         checks.append(probed(id: "remote", name: "Server", probe: probes[.remote],
                              untested: Self.untested, now: now))
         return checks
+    }
+
+    /// The login trap, made visible.
+    ///
+    /// Key login puts ssh in batch mode: it may not ask for anything. So a
+    /// key file that is not there fails in a tenth of a second with
+    /// "Permission denied", and a password sitting in the store is never
+    /// offered — nothing anywhere said that it would not be. This is the
+    /// lamp for exactly that, because it is what happened.
+    static func login(_ target: RemoteTarget, secrets: Set<SecretKey>,
+                      fileManager: FileManager) -> SystemCheck? {
+        guard target.authentication == .key else { return nil }
+        let name = Text.s("Anmeldung", "Login")
+        let key = (target.identityFile as NSString).expandingTildeInPath
+
+        if !target.identityFile.isEmpty, !fileManager.fileExists(atPath: key) {
+            return SystemCheck(
+                id: "remote-login", name: name, state: .failed,
+                detail: Text.s(
+                    "Die Schlüsseldatei \(target.identityFile) ist nicht da, und bei "
+                        + "Anmeldung per Schlüssel darf ssh nicht nach einem Passwort "
+                        + "fragen — die Anmeldung scheitert also sofort."
+                        + (secrets.contains(.remotePassword)
+                            ? " Ein Passwort ist hinterlegt: bei „Anmeldung“ mit ←→ auf "
+                                + "„Passwort“ stellen, dann wird es benutzt."
+                            : " Entweder den Pfad berichtigen, das Feld leeren, oder bei "
+                                + "„Anmeldung“ auf „Passwort“ stellen."),
+                    "The key file \(target.identityFile) is not there, and with key login "
+                        + "ssh is not allowed to ask for a password — so the login fails "
+                        + "at once."
+                        + (secrets.contains(.remotePassword)
+                            ? " A password is stored: set “Login” to “Password” with ←→ "
+                                + "and it will be used."
+                            : " Either correct the path, empty the field, or set “Login” "
+                                + "to “Password”.")))
+        }
+        if secrets.contains(.remotePassword) {
+            return SystemCheck(
+                id: "remote-login", name: name, state: .warning,
+                detail: Text.s(
+                    "Ein Passwort ist hinterlegt, aber die Anmeldung steht auf Schlüssel "
+                        + "— das Passwort wird nicht benutzt. Bei „Anmeldung“ mit ←→ auf "
+                        + "„Passwort“ stellen, wenn es benutzt werden soll.",
+                    "A password is stored but the login is set to key, so the password is "
+                        + "not used. Set “Login” to “Password” with ←→ if it should be."))
+        }
+        return nil
     }
 
     /// A lamp whose colour comes from an actual connection attempt.

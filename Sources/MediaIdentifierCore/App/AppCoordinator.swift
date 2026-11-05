@@ -1404,14 +1404,25 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         return Int64(size)
     }
 
-    static func remoteTransfers(for item: RenameItem) -> [(local: URL, relative: String)] {
-        var sends: [(local: URL, relative: String)] = [
-            (item.mediaFile.url, item.proposedRelativePath)
+    /// Which of the server's three paths this item belongs under.
+    ///
+    /// The primary decides for its companions too: a subtitle belongs beside
+    /// its film, whatever the subtitle file itself looks like.
+    static func remoteLibrary(for item: RenameItem) -> RemoteTarget.Library {
+        RemoteTarget.Library.of(item.mediaFile.url, kind: item.mediaFile.parsed.kind)
+    }
+
+    static func remoteTransfers(for item: RenameItem)
+        -> [(local: URL, relative: String, library: RemoteTarget.Library)] {
+        let library = remoteLibrary(for: item)
+        var sends: [(local: URL, relative: String, library: RemoteTarget.Library)] = [
+            (item.mediaFile.url, item.proposedRelativePath, library)
         ]
         let folder = (item.proposedRelativePath as NSString).deletingLastPathComponent
         for move in item.companionMoves {
             let name = move.destination.lastPathComponent
-            sends.append((move.source, folder.isEmpty ? name : folder + "/" + name))
+            sends.append((move.source, folder.isEmpty ? name : folder + "/" + name,
+                          library))
         }
         return sends
     }
@@ -1495,7 +1506,14 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         var collided = false
         var byDestination: [String: [RenameItem]] = [:]
         for item in pending {
-            byDestination[item.proposedRelativePath, default: []].append(item)
+            // Keyed by the path a transfer would actually write, not by the
+            // relative path: with a path per kind, two files can share a
+            // relative path and land in different libraries without
+            // colliding at all.
+            let key = RemoteCommand.remotePath(
+                item.proposedRelativePath,
+                under: target.path(for: Self.remoteLibrary(for: item)))
+            byDestination[key, default: []].append(item)
         }
         let collisions = byDestination.filter { $0.value.count > 1 }
         if !collisions.isEmpty {
@@ -1540,7 +1558,7 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
             // what happened rather than by what was planned.
             var arrived: [URL] = []
 
-            for (offset, (local, relative)) in sends.enumerated() {
+            for (offset, (local, relative, library)) in sends.enumerated() {
                 lock.lock()
                 let stopNow = _cancelTransfers
                 lock.unlock()
@@ -1583,7 +1601,8 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
                 }
                 do {
                     try transfer.send(
-                        local, relativePath: relative, to: target, password: password,
+                        local, relativePath: relative, library: library,
+                        to: target, password: password,
                         // "Skip the file" is a promise about the server's
                         // copy too, not only about a local rename.
                         keepExisting: settings.conflictPolicy == .skip,

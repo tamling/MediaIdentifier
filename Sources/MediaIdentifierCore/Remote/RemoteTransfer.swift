@@ -70,6 +70,7 @@ public final class RemoteTransfer {
     public func send(
         _ localFile: URL,
         relativePath: String,
+        library: RemoteTarget.Library,
         to target: RemoteTarget,
         password: String?,
         keepExisting: Bool = false,
@@ -85,9 +86,10 @@ public final class RemoteTransfer {
         // comment on the rsync side described protecting exactly the case
         // sftp was overwriting.
         if keepExisting, target.transport == .sftp,
-           remoteFileExists(target, relativePath: relativePath, password: password) {
+           remoteFileExists(target, relativePath: relativePath, library: library,
+                            password: password) {
             throw Failure.alreadyThere(
-                RemoteCommand.remotePath(relativePath, under: target.basePath))
+                RemoteCommand.remotePath(relativePath, under: target.path(for: library)))
         }
 
         let invocation: RemoteCommand.Invocation
@@ -95,12 +97,14 @@ public final class RemoteTransfer {
         case .rsync:
             invocation = try RemoteCommand.rsync(
                 target, localFile: localFile, relativePath: relativePath,
+                library: library,
                 rsyncPath: tools.rsync ?? "rsync", sshPath: tools.ssh ?? "ssh",
                 sshpassPath: tools.sshpass ?? "sshpass",
                 password: password, keepExisting: keepExisting)
         case .sftp:
             invocation = try RemoteCommand.sftp(
                 target, localFile: localFile, relativePath: relativePath,
+                library: library,
                 sftpPath: tools.sftp ?? "sftp", password: password)
         }
 
@@ -168,9 +172,10 @@ public final class RemoteTransfer {
     /// not be read as "it is there" and quietly skip a file the user asked
     /// to send.
     func remoteFileExists(_ target: RemoteTarget, relativePath: String,
+                          library: RemoteTarget.Library,
                           password: String?) -> Bool {
         guard let invocation = try? RemoteCommand.exists(
-            target, relativePath: relativePath,
+            target, relativePath: relativePath, library: library,
             sshPath: tools.ssh ?? "ssh", password: password) else { return false }
         var executable = invocation.executable
         if executable == "sshpass" { executable = tools.sshpass ?? "sshpass" }
@@ -266,28 +271,66 @@ public final class RemoteTransfer {
             if process.isRunning { kill(process.processIdentifier, SIGKILL) }
             return (false, Text.s(
                 "Keine Antwort innerhalb von \(Int(Self.probeTimeout)) Sekunden. Der "
-                    + "Server ist erreichbar, aber \(target.basePath) antwortet nicht — "
-                    + "ein hängender Netzlaufwerks-Mount oder eine Festplatte im Standby "
-                    + "sehen genau so aus.",
+                    + "Server ist erreichbar, aber \(Self.describe(target)) antwortet "
+                    + "nicht — ein hängender Netzlaufwerks-Mount oder eine Festplatte im "
+                    + "Standby sehen genau so aus.",
                 "No answer within \(Int(Self.probeTimeout)) seconds. The server is "
-                    + "reachable, but \(target.basePath) does not answer — a hung network "
-                    + "mount or a spun-down disk look exactly like this."))
+                    + "reachable, but \(Self.describe(target)) does not answer — a hung "
+                    + "network mount or a spun-down disk look exactly like this."))
         }
         let errorData = errPipe.fileHandleForReading.readDataToEndOfFile()
 
         guard process.terminationStatus == 0 else {
             let text = String(data: errorData, encoding: .utf8) ?? ""
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            // The probe script's own status: the login worked and one of the
+            // paths is missing or read-only. It echoed which, because "one of
+            // the three is wrong" is not something anyone can act on.
+            if process.terminationStatus == Int32(RemoteCommand.pathFailureStatus) {
+                let named = trimmed.split(separator: "\n").last.map {
+                    $0.trimmingCharacters(in: CharacterSet(charactersIn: "'"))
+                } ?? ""
+                let which = named.isEmpty ? "" : " " + Self.kindsAt(named, in: target)
+                return (false, Text.s(
+                    "Angemeldet, aber \(named.isEmpty ? "der Zielpfad" : named)\(which) "
+                        + "fehlt oder ist nicht beschreibbar.",
+                    "Signed in, but \(named.isEmpty ? "the target path" : named)\(which) "
+                        + "is missing or cannot be written to."))
+            }
             // ssh exits 1 when the remote command failed but the login
             // worked, which here means the path is the problem and not the
             // connection — worth saying, because the remedies differ.
-            if process.terminationStatus == 1, text.trimmingCharacters(
-                in: .whitespacesAndNewlines).isEmpty {
-                return (false, "Angemeldet, aber \(target.basePath) fehlt oder ist "
-                            + "nicht beschreibbar.")
+            if process.terminationStatus == 1, trimmed.isEmpty {
+                return (false, Text.s(
+                    "Angemeldet, aber \(Self.describe(target)) fehlt oder ist nicht "
+                        + "beschreibbar.",
+                    "Signed in, but \(Self.describe(target)) is missing or cannot be "
+                        + "written to."))
             }
             return (false, Self.explain(text))
         }
-        return (true, "Angemeldet, \(target.basePath) ist beschreibbar.")
+        return (true, Text.s("Angemeldet, \(Self.describe(target)) ist beschreibbar.",
+                             "Signed in, \(Self.describe(target)) can be written to."))
+    }
+
+    /// The configured paths, named by what lands in each.
+    ///
+    /// With one path for everything this is just the path, as it always was.
+    /// With a path per kind it has to say which is which, or a green lamp
+    /// says nothing about the two paths it also checked.
+    static func describe(_ target: RemoteTarget) -> String {
+        let paths = target.targetPaths()
+        guard paths.count > 1 else { return paths.first?.path ?? "" }
+        return paths.map { entry in
+            entry.path + " (" + entry.libraries.map(\.label).joined(separator: ", ") + ")"
+        }.joined(separator: ", ")
+    }
+
+    /// `(Filme, Serien)` for a path, so a complaint says what it affects.
+    static func kindsAt(_ path: String, in target: RemoteTarget) -> String {
+        let kinds = RemoteTarget.Library.allCases.filter { target.path(for: $0) == path }
+        guard !kinds.isEmpty, target.targetPaths().count > 1 else { return "" }
+        return "(" + kinds.map(\.label).joined(separator: ", ") + ")"
     }
 
     /// How long the traffic light waits for a server before calling it
@@ -396,12 +439,30 @@ public final class RemoteTransfer {
         let lowered = text.lowercased()
         if lowered.contains("host key verification failed") {
             return Text.s(
-                "Der Server ist unbekannt oder sein Schlüssel hat sich geändert. Einmal "
-                    + "von Hand verbinden und den Fingerabdruck prüfen: "
-                    + "ssh BENUTZER@SERVER — danach geht es hier automatisch. ",
-                "The server is unknown or its key has changed. Connect once by hand and "
-                    + "check the fingerprint: ssh USER@SERVER — after that this works "
-                    + "on its own. ") + text
+                "Der Server ist unbekannt oder sein Schlüssel hat sich geändert. Wenn er "
+                    + "unbekannt ist: in den Einstellungen „Beim ersten Mal vertrauen“ "
+                    + "einschalten, oder einmal von Hand verbinden und den Fingerabdruck "
+                    + "prüfen: ssh BENUTZER@SERVER. Wenn der Schlüssel sich geändert hat, "
+                    + "ist das nichts zum Wegklicken — dann steht möglicherweise ein "
+                    + "anderer Rechner an der Adresse. ",
+                "The server is unknown or its key has changed. If it is unknown: switch on "
+                    + "“Trust this server the first time” in the settings, or connect once "
+                    + "by hand and check the fingerprint: ssh USER@SERVER. If the key has "
+                    + "changed, that is not something to click away — another machine may "
+                    + "be answering at that address. ") + text
+        }
+        // Batch mode is only set with key login, so this message can only
+        // appear there — and it is what the user's own setup did: login by
+        // key, a key file that was not there, a password in the store that
+        // ssh was never allowed to be asked for.
+        if lowered.contains("permission denied")
+            && (lowered.contains("publickey") || lowered.contains("batch mode")) {
+            return Text.s(
+                "Anmeldung abgelehnt, und es wurde nur per Schlüssel versucht. Wenn das "
+                    + "Passwort benutzt werden soll: in den Einstellungen bei „Anmeldung“ "
+                    + "mit ←→ auf „Passwort“ stellen. ",
+                "Login refused, and only the key was tried. To use the password instead: "
+                    + "in the settings, set “Login” to “Password” with ←→. ") + text
         }
         if lowered.contains("unknown option") && lowered.contains("mkpath") {
             return Text.s(

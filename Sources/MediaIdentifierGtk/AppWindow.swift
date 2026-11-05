@@ -39,10 +39,14 @@ final class AppWindow {
     private let remotePortEntry: UnsafeMutablePointer<GtkWidget>
     private let remoteUserEntry: UnsafeMutablePointer<GtkWidget>
     private let remoteBaseEntry: UnsafeMutablePointer<GtkWidget>
+    private let remoteMoviesPathEntry: UnsafeMutablePointer<GtkWidget>
+    private let remoteSeriesPathEntry: UnsafeMutablePointer<GtkWidget>
+    private let remoteMusicPathEntry: UnsafeMutablePointer<GtkWidget>
     private let remoteIdentityEntry: UnsafeMutablePointer<GtkWidget>
     private let remotePasswordEntry: UnsafeMutablePointer<GtkWidget>
     private let remoteTransportCombo: UnsafeMutablePointer<GtkWidget>
     private let remoteAuthCombo: UnsafeMutablePointer<GtkWidget>
+    private let remoteTrustCheck: UnsafeMutablePointer<GtkWidget>
     private let remoteRemoveLocalCheck: UnsafeMutablePointer<GtkWidget>
     private let remoteProgress: UnsafeMutablePointer<GtkWidget>
     private let sendButton: UnsafeMutablePointer<GtkWidget>
@@ -302,6 +306,14 @@ final class AppWindow {
         remotePortEntry = Self.entry(placeholder: "22")
         remoteUserEntry = Self.entry(placeholder: Text.s("benutzer", "user"))
         remoteBaseEntry = Self.entry(placeholder: "/volume1/Medien")
+        // One path per kind: a server rarely keeps films, series and music
+        // under one parent, and the single path above cannot say so.
+        remoteMoviesPathEntry = Self.entry(
+            placeholder: Text.s("leer = Zielpfad", "empty = target path"))
+        remoteSeriesPathEntry = Self.entry(
+            placeholder: Text.s("leer = Zielpfad", "empty = target path"))
+        remoteMusicPathEntry = Self.entry(
+            placeholder: Text.s("leer = Zielpfad", "empty = target path"))
         remoteIdentityEntry = Self.entry(placeholder: Text.s("~/.ssh/id_ed25519 (leer = Standard)",
                                        "~/.ssh/id_ed25519 (empty = default)"))
         // Write-only, like the model server's key: never filled in from
@@ -317,6 +329,9 @@ final class AppWindow {
         for auth in RemoteTarget.Authentication.allCases {
             gtk_combo_box_text_append_text(Gtk.comboBoxText(remoteAuthCombo), auth.label)
         }
+        remoteTrustCheck = gtk_check_button_new_with_label(
+            Text.s("Dem Server beim ersten Mal vertrauen (geänderter Schlüssel bleibt abgelehnt)",
+                   "Trust this server the first time (a changed key is still refused)"))!
         remoteRemoveLocalCheck = gtk_check_button_new_with_label(
             Text.s("Lokale Datei nach erfolgreicher Übertragung löschen",
                    "Delete the local file after a successful transfer"))!
@@ -327,10 +342,17 @@ final class AppWindow {
         Self.add(Self.row(Text.s("Port", "Port"), remotePortEntry), to: remote)
         Self.add(Self.row(Text.s("Benutzer", "User"), remoteUserEntry), to: remote)
         Self.add(Self.row(Text.s("Zielpfad", "Target path"), remoteBaseEntry), to: remote)
+        Self.add(Self.row(Text.s("Nur Filme", "Films only"), remoteMoviesPathEntry),
+                 to: remote)
+        Self.add(Self.row(Text.s("Nur Serien", "Series only"), remoteSeriesPathEntry),
+                 to: remote)
+        Self.add(Self.row(Text.s("Nur Musik", "Music only"), remoteMusicPathEntry),
+                 to: remote)
         Self.add(Self.row(Text.s("Übertragung", "Transfer"), remoteTransportCombo), to: remote)
         Self.add(Self.row(Text.s("Anmeldung", "Login"), remoteAuthCombo), to: remote)
         Self.add(Self.row(Text.s("Schlüsseldatei", "Key file"), remoteIdentityEntry), to: remote)
         Self.add(Self.row(Text.s("Passwort", "Password"), remotePasswordEntry), to: remote)
+        Self.add(remoteTrustCheck, to: remote)
         Self.add(remoteRemoveLocalCheck, to: remote)
 
         remoteProgress = gtk_progress_bar_new()!
@@ -669,12 +691,20 @@ final class AppWindow {
         merge(Gtk.isChecked(remoteEnabledCheck), loaded.isEnabled, into: &target.isEnabled)
         merge(Gtk.isChecked(remoteRemoveLocalCheck), loaded.removeLocalAfterSend,
               into: &target.removeLocalAfterSend)
+        merge(Gtk.isChecked(remoteTrustCheck), loaded.trustOnFirstUse,
+              into: &target.trustOnFirstUse)
         merge(Gtk.text(of: remoteHostEntry).trimmingCharacters(in: .whitespaces),
               loaded.host, into: &target.host)
         merge(Gtk.text(of: remoteUserEntry).trimmingCharacters(in: .whitespaces),
               loaded.user, into: &target.user)
         merge(Gtk.text(of: remoteBaseEntry).trimmingCharacters(in: .whitespaces),
               loaded.basePath, into: &target.basePath)
+        merge(Gtk.text(of: remoteMoviesPathEntry).trimmingCharacters(in: .whitespaces),
+              loaded.moviesPath, into: &target.moviesPath)
+        merge(Gtk.text(of: remoteSeriesPathEntry).trimmingCharacters(in: .whitespaces),
+              loaded.seriesPath, into: &target.seriesPath)
+        merge(Gtk.text(of: remoteMusicPathEntry).trimmingCharacters(in: .whitespaces),
+              loaded.musicPath, into: &target.musicPath)
         merge(Gtk.text(of: remoteIdentityEntry).trimmingCharacters(in: .whitespaces),
               loaded.identityFile, into: &target.identityFile)
 
@@ -814,9 +844,13 @@ final class AppWindow {
         let remote = settings.remote
         Gtk.setChecked(remoteEnabledCheck, remote.isEnabled)
         Gtk.setChecked(remoteRemoveLocalCheck, remote.removeLocalAfterSend)
+        Gtk.setChecked(remoteTrustCheck, remote.trustOnFirstUse)
         Gtk.setText(of: remoteHostEntry, remote.host)
         Gtk.setText(of: remoteUserEntry, remote.user)
         Gtk.setText(of: remoteBaseEntry, remote.basePath)
+        Gtk.setText(of: remoteMoviesPathEntry, remote.moviesPath)
+        Gtk.setText(of: remoteSeriesPathEntry, remote.seriesPath)
+        Gtk.setText(of: remoteMusicPathEntry, remote.musicPath)
         Gtk.setText(of: remoteIdentityEntry, remote.identityFile)
         Gtk.setText(of: remotePortEntry, String(remote.port))
         if let index = RemoteTarget.Transport.allCases.firstIndex(of: remote.transport) {
