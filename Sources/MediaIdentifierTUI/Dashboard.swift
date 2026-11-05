@@ -245,37 +245,43 @@ public enum Dashboard {
 
     /// The menu, always on the last row, always fitting.
     ///
-    /// Fitting is the part that needed thinking about. Adding two keys made
-    /// the full row longer than eighty columns, and what fell off the end
-    /// was `q` — the way out. So the row is built to the width it has: the
-    /// labels go first, then the least important keys, and `q` is never one
-    /// of them. A terminal that cannot show the way out is a trap.
+    /// Two orders, which is the thing the first version got wrong by
+    /// trying to use one. The order they are *drawn* in is the order a hand
+    /// learns — scan first, quit last. The order they are *dropped* in is
+    /// by how much each would be missed. Reversing the drop order to draw
+    /// it put `q` at the front of the line, which is tidy and wrong.
     static func menu(_ state: State, columns: Int) -> Line {
         let snapshot = state.snapshot
         let busy = snapshot.isWorking
         let hasItems = !state.items.isEmpty
-        // Ordered by what you would miss most, least-missed first, because
-        // that is the end they are dropped from.
-        let entries: [(key: String, label: String, enabled: Bool)] = [
-            ("e", Text.s("einstellungen", "settings"), !busy),
-            ("i", Text.s("status", "status"), true),
-            ("a/n", Text.s("alle/keine", "all/none"), hasItems),
-            ("u", Text.s("zurück", "undo"), !busy),
-            ("t", Text.s("senden", "send"),
-             snapshot.remoteConfigured && hasItems && !busy),
-            ("c", Text.s("stopp", "stop"), busy),
-            ("␣", Text.s("an/aus", "tick"), hasItems),
-            ("r", Text.s("umbenennen", "rename"), hasItems && !busy),
-            ("s", Text.s("suchen", "scan"), !busy),
-            ("q", Text.s("ende", "quit"), true),
+        struct Entry {
+            let key: String
+            let label: String
+            let enabled: Bool
+            /// Higher survives longer. `q` is the highest because a
+            /// terminal interface that cannot show the way out is a trap.
+            let keep: Int
+        }
+        let entries = [
+            Entry(key: "s", label: Text.s("suchen", "scan"), enabled: !busy, keep: 9),
+            Entry(key: "␣", label: Text.s("an/aus", "tick"), enabled: hasItems, keep: 7),
+            Entry(key: "a/n", label: Text.s("alle/keine", "all/none"),
+                  enabled: hasItems, keep: 4),
+            Entry(key: "r", label: Text.s("umbenennen", "rename"),
+                  enabled: hasItems && !busy, keep: 8),
+            Entry(key: "u", label: Text.s("zurück", "undo"), enabled: !busy, keep: 5),
+            Entry(key: "t", label: Text.s("senden", "send"),
+                  enabled: snapshot.remoteConfigured && hasItems && !busy, keep: 6),
+            Entry(key: "c", label: Text.s("stopp", "stop"), enabled: busy, keep: 7),
+            Entry(key: "e", label: Text.s("einstellungen", "settings"),
+                  enabled: !busy, keep: 3),
+            Entry(key: "i", label: Text.s("status", "status"), enabled: true, keep: 2),
+            Entry(key: "q", label: Text.s("ende", "quit"), enabled: true, keep: 10),
         ]
 
-        func build(_ chosen: [(key: String, label: String, enabled: Bool)],
-                   labels: Bool) -> Line {
+        func build(_ chosen: [Entry], labels: Bool) -> Line {
             var segments: [Segment] = []
-            // Drawn in the order a hand expects, which is the reverse of the
-            // order they are dropped in.
-            for entry in chosen.reversed() {
+            for entry in chosen {
                 if !segments.isEmpty { segments.append(Segment("  ", .dim)) }
                 segments.append(Segment(entry.key, entry.enabled ? .accent : .dim))
                 if labels {
@@ -294,11 +300,12 @@ public enum Dashboard {
         let bare = build(entries, labels: false)
         if bare.width <= columns { return bare }
 
-        // Still too narrow: drop from the front of the list, which is the
-        // least-missed end, but never the last entry.
+        // Still too narrow: drop the least-missed, keeping the drawing
+        // order of whatever is left.
         var kept = entries
         while kept.count > 1, build(kept, labels: false).width > columns {
-            kept.removeFirst()
+            let weakest = kept.enumerated().min { $0.element.keep < $1.element.keep }!
+            kept.remove(at: weakest.offset)
         }
         return build(kept, labels: false)
     }

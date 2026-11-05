@@ -108,6 +108,21 @@ final class DashboardTests: XCTestCase {
         XCTAssertTrue(narrow.plain.contains("s"), narrow.plain)
     }
 
+    /// Scan first and quit last, at every width that keeps them both.
+    ///
+    /// The drawing order and the dropping order are two different things,
+    /// and the first version used one list for both: reversing it to draw
+    /// put `q` at the head of the row.
+    func testTheMenuIsDrawnInTheOrderAHandLearns() {
+        for columns in [30, 50, 80, 200] {
+            let line = Dashboard.menu(state(items: [item("A.mkv")]), columns: columns)
+            XCTAssertTrue(line.plain.hasPrefix("s"),
+                          "\(columns): \"\(line.plain)\"")
+            XCTAssertTrue(line.plain.hasSuffix("q") || line.plain.hasSuffix("quit"),
+                          "\(columns): \"\(line.plain)\"")
+        }
+    }
+
     // MARK: The header
 
     func testTheHeaderSaysWhatTheEngineIsDoing() {
