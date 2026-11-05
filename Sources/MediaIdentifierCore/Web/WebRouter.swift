@@ -1098,8 +1098,9 @@ public struct WebRouter: Sendable {
             <select id="remoteTransport" name="remoteTransport">\(transportOptions)</select>
             <label for="remoteAuthentication">\(Text.s("Anmelden mit", "Sign in with"))</label>
             <select id="remoteAuthentication" name="remoteAuthentication">\(authOptions)</select>
+            <p class="hint">\(Text.s("Bei „SSH-Schlüssel“ darf ssh nicht nach einem Passwort fragen — ein unten hinterlegtes Passwort wird dann nicht benutzt, auch wenn die Schlüsseldatei fehlt.", "With “SSH key” ssh is not allowed to ask for a password — a password stored below is then not used, even when the key file is missing."))</p>
             \(field("remoteIdentityFile", label: Text.s("Schlüsseldatei", "Key file"), value: current.remote.identityFile,
-                    hint: Text.s("Leer lassen, um die bestehende ssh-Konfiguration zu benutzen.", "Leave empty to use whatever your ssh configuration already does.")))
+                    hint: Text.s("Nur bei Anmeldung per Schlüssel. Leer lassen, um die bestehende ssh-Konfiguration zu benutzen.", "Only for key login. Leave empty to use whatever your ssh configuration already does.")))
             \(secretField(.remotePassword))
             <input type="hidden" name="remoteTrustOnFirstUsePresent" value="1">
             <label class="inline"><input type="checkbox" name="remoteTrustOnFirstUse" value="1"\

@@ -459,10 +459,10 @@ public final class RemoteTransfer {
             && (lowered.contains("publickey") || lowered.contains("batch mode")) {
             return Text.s(
                 "Anmeldung abgelehnt, und es wurde nur per Schlüssel versucht. Wenn das "
-                    + "Passwort benutzt werden soll: in den Einstellungen bei „Anmeldung“ "
-                    + "mit ←→ auf „Passwort“ stellen. ",
+                    + "Passwort benutzt werden soll: in den Einstellungen „Anmeldung“ "
+                    + "auf „Passwort“ stellen. ",
                 "Login refused, and only the key was tried. To use the password instead: "
-                    + "in the settings, set “Login” to “Password” with ←→. ") + text
+                    + "in the settings, set “Login” to “Password”. ") + text
         }
         if lowered.contains("unknown option") && lowered.contains("mkpath") {
             return Text.s(

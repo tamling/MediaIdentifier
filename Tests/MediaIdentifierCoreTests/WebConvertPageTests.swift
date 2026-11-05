@@ -222,9 +222,11 @@ final class WebConvertPageTests: XCTestCase {
     /// honest if a setting added to one is reachable from the others.
     func testTheServerPathsAndTheTrustTickAreOnTheWebFormAndSave() {
         let router = makeRouter()
-        let html = String(decoding: router.respond(to: HTTPRequest(
+        let response = router.respond(to: HTTPRequest(
             method: "GET", path: "/settings",
-            headers: ["authorization": "Bearer \(token)"])).body, as: UTF8.self)
+            headers: ["authorization": "Bearer \(token)"]))
+        XCTAssertEqual(response.status, 200, "the settings page was not served")
+        let html = String(decoding: response.body, as: UTF8.self)
         for name in ["remoteMoviesPath", "remoteSeriesPath", "remoteMusicPath",
                      "remoteTrustOnFirstUse", "remoteTrustOnFirstUsePresent"] {
             XCTAssertTrue(html.contains("name=\"\(name)\""), "no \(name) on the form")
@@ -241,6 +243,18 @@ final class WebConvertPageTests: XCTestCase {
         XCTAssertEqual(saved.remote.path(for: .series), "/v2/Serien")
         XCTAssertEqual(saved.remote.path(for: .music), "/v1/Musik")
         XCTAssertTrue(saved.remote.trustOnFirstUse)
+    }
+
+    /// The web page says what key login costs, as the terminal's row does.
+    /// Being told afterwards by a red lamp is worse than being told here.
+    func testTheWebFormWarnsThatKeyLoginIgnoresAStoredPassword() {
+        let response = makeRouter().respond(to: HTTPRequest(
+            method: "GET", path: "/settings",
+            headers: ["authorization": "Bearer \(token)"]))
+        XCTAssertEqual(response.status, 200, "the settings page was not served")
+        let html = String(decoding: response.body, as: UTF8.self)
+        XCTAssertTrue(html.contains("is then not used"), html)
+        XCTAssertTrue(html.contains("Only for key login"), html)
     }
 
     func testABadConversionValueComesBackOnTheConvertPage() {

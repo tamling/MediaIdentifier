@@ -350,16 +350,16 @@ public enum SystemChecks {
                         + "Anmeldung per Schlüssel darf ssh nicht nach einem Passwort "
                         + "fragen — die Anmeldung scheitert also sofort."
                         + (secrets.contains(.remotePassword)
-                            ? " Ein Passwort ist hinterlegt: bei „Anmeldung“ mit ←→ auf "
-                                + "„Passwort“ stellen, dann wird es benutzt."
+                            ? " Ein Passwort ist hinterlegt: „Anmeldung“ auf „Passwort“ "
+                                + "stellen, dann wird es benutzt."
                             : " Entweder den Pfad berichtigen, das Feld leeren, oder bei "
                                 + "„Anmeldung“ auf „Passwort“ stellen."),
                     "The key file \(target.identityFile) is not there, and with key login "
                         + "ssh is not allowed to ask for a password — so the login fails "
                         + "at once."
                         + (secrets.contains(.remotePassword)
-                            ? " A password is stored: set “Login” to “Password” with ←→ "
-                                + "and it will be used."
+                            ? " A password is stored: set “Login” to “Password” and it "
+                                + "will be used."
                             : " Either correct the path, empty the field, or set “Login” "
                                 + "to “Password”.")))
         }
@@ -368,10 +368,10 @@ public enum SystemChecks {
                 id: "remote-login", name: name, state: .warning,
                 detail: Text.s(
                     "Ein Passwort ist hinterlegt, aber die Anmeldung steht auf Schlüssel "
-                        + "— das Passwort wird nicht benutzt. Bei „Anmeldung“ mit ←→ auf "
-                        + "„Passwort“ stellen, wenn es benutzt werden soll.",
+                        + "— das Passwort wird nicht benutzt. „Anmeldung“ auf „Passwort“ "
+                        + "stellen, wenn es benutzt werden soll.",
                     "A password is stored but the login is set to key, so the password is "
-                        + "not used. Set “Login” to “Password” with ←→ if it should be."))
+                        + "not used. Set “Login” to “Password” if it should be."))
         }
         return nil
     }

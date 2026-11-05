@@ -431,6 +431,34 @@ final class SettingsTestingTests: XCTestCase {
         }
     }
 
+    /// Every server field the terminal offers is on the web form too.
+    ///
+    /// Checked by machine rather than by eye, because by eye is how the
+    /// three paths nearly went in without the web form hearing about them.
+    /// One engine behind three front-ends is only honest if a setting added
+    /// to one is reachable from the others.
+    func testEveryServerFieldOfTheTerminalIsOnTheWebFormToo() {
+        let token = String(repeating: "d00d", count: 16)
+        let router = WebRouter(policy: WebSecurityPolicy(token: token, isTLS: true),
+                               settings: { WebSettings() },
+                               snapshot: { StatusSnapshot() })
+        let response = router.respond(to: HTTPRequest(
+            method: "GET", path: "/settings",
+            headers: ["authorization": "Bearer \(token)"]))
+        // Said explicitly: a login redirect would otherwise fail every
+        // assertion below and read like twelve missing fields.
+        XCTAssertEqual(response.status, 200, "the settings page was not served")
+        let html = String(decoding: response.body, as: UTF8.self)
+
+        let ids = SettingsForm.fields(for: WebSettings(), secrets: [])
+            .map(\.id).filter { $0.hasPrefix("remote") }
+        XCTAssertFalse(ids.isEmpty, "the terminal form lost its server section")
+        for id in ids {
+            XCTAssertTrue(html.contains("name=\"\(id)\""),
+                          "the web form has no \(id)")
+        }
+    }
+
     func testTheRowStillFitsEveryWidth() {
         for id in ["sourceFolder", "libraryMode", "remoteHost", "watchSourceFolder",
                    "remoteMusicPath", "remoteAuthentication"] {

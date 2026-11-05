@@ -203,6 +203,22 @@ final class SystemCheckTests: XCTestCase {
         XCTAssertNil(lamp(checks(settings), "remote-login"))
     }
 
+    /// The panel is shared by the terminal, the window and the web page, so
+    /// a lamp may not tell the reader which key to press. It said "mit ←→
+    /// umstellen" — true in the terminal, nonsense beside a web dropdown.
+    func testNoLampTellsTheReaderToPressATerminalKey() {
+        var settings = WebSettings(sourceFolder: root.path)
+        settings.remote = RemoteTarget(isEnabled: true, host: "nas.local", user: "media",
+                                       basePath: "/srv/media",
+                                       identityFile: "/nowhere/at/all")
+        for check in checks(settings, secrets: [.remotePassword]) {
+            for key in ["←→", "⏎", "␣", "[t]", "[p]"] {
+                XCTAssertFalse(check.detail.contains(key),
+                               "\(check.id) names a key: \(check.detail)")
+            }
+        }
+    }
+
     /// Password login is not this lamp's business: it has its own, above.
     func testPasswordLoginGetsNoKeyFileComplaint() {
         var settings = WebSettings(sourceFolder: root.path)
