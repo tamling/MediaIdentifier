@@ -264,7 +264,8 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
     /// scanning, renaming, sending and the connection probes do not.
     static func isWork(_ command: WebCommand) -> Bool {
         switch command {
-        case .saveSettings, .setSecret, .setAllAccepted, .clearHistory,
+        case .saveSettings, .setSecret, .setAllAccepted, .setAccepted,
+             .clearHistory,
              .cancelConversions, .cancelTransfers, .cancelDownload:
             return false
         case .scanSourceFolder, .applyProposedRenames, .undoLastRename,
@@ -333,6 +334,8 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
             break
         case .setAllAccepted(let accepted):
             setAllAccepted(accepted)
+        case let .setAccepted(id, accepted):
+            setAccepted(id, accepted)
         case .transferFiles(let accepting):
             transferFiles(accepting: accepting)
         case .cancelTransfers:
@@ -879,6 +882,20 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
                 }
             }
         }
+    }
+
+    /// Ticks or unticks one proposal, by id.
+    ///
+    /// Silent: this runs on every press of the space bar, and a message
+    /// saying "ticked" each time would push whatever the user was reading
+    /// off the screen.
+    private func setAccepted(_ id: UUID, _ accepted: Bool) {
+        lock.lock()
+        if let index = _items.firstIndex(where: { $0.id == id }) {
+            _items[index].isAccepted = accepted
+        }
+        lock.unlock()
+        refreshSnapshotCounts()
     }
 
     /// Ticks or unticks every proposal at once.

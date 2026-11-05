@@ -31,6 +31,13 @@ public enum WebCommand: Sendable, Equatable {
     /// its own Content-Security-Policy, so "select all" cannot be a script.
     /// Keeping the state in the engine also means a reload does not lose it.
     case setAllAccepted(Bool)
+    /// Ticks or unticks one proposal.
+    ///
+    /// The web page has no need of this — its checkboxes carry the whole
+    /// selection in the form that applies it — but a terminal has no form,
+    /// and the counts in its header come from the engine, so the engine has
+    /// to be where a tick is recorded.
+    case setAccepted(UUID, Bool)
     case transferFiles(accepting: Set<UUID>)
     case cancelTransfers
     /// Fetches one URL into the import folder with yt-dlp, then scans, so

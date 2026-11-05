@@ -361,6 +361,27 @@ jobs:
             fonts-dejavu-core fonts-cantarell adwaita-icon-theme
       - name: Build
         run: swift build -c release --product mediafin-gtk
+      - name: The terminal interface starts and leaves the terminal alone
+        shell: bash
+        run: |
+          set -euo pipefail
+          swift build -c release --product mediafin
+          # There is no terminal in CI, so this is the path that must refuse
+          # rather than the one that draws: a program that puts a pipe into
+          # raw mode and then exits leaves the shell that started it unusable.
+          code=0
+          .build/release/mediafin --tui < /dev/null > tui.log 2>&1 || code=$?
+          cat tui.log
+          test "$code" = 2 || {
+            echo "FAIL: expected exit 2 with no terminal, got $code"
+            exit 1
+          }
+          grep -q "not an interactive terminal" tui.log || {
+            echo "FAIL: it did not say why"
+            exit 1
+          }
+          # And the other direction: options still mean the server.
+          .build/release/mediafin --help | grep -q -- "--tui"
       - name: Render the window headless
         shell: bash
         env:

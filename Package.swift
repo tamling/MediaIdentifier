@@ -7,6 +7,7 @@ import PackageDescription
 var products: [Product] = [
     .library(name: "MediaIdentifierCore", targets: ["MediaIdentifierCore"]),
     .library(name: "MediaIdentifierWeb", targets: ["MediaIdentifierWeb"]),
+    .library(name: "MediaIdentifierTUI", targets: ["MediaIdentifierTUI"]),
     // How Mediafin runs on Linux: a binary that serves the web interface.
     .executable(name: "mediafin", targets: ["mediafin"]),
 ]
@@ -36,9 +37,26 @@ var targets: [Target] = [
         ],
         path: "Sources/MediaIdentifierWeb"
     ),
+    .target(
+        name: "CMediafinTerm",
+        path: "Sources/CMediafinTerm"
+    ),
+    // The terminal interface. A third front-end over the same engine, kept
+    // in its own target so its rendering can be tested without a screen.
+    .target(
+        name: "MediaIdentifierTUI",
+        dependencies: ["MediaIdentifierCore", "CMediafinTerm"],
+        path: "Sources/MediaIdentifierTUI"
+    ),
+    .testTarget(
+        name: "MediaIdentifierTUITests",
+        dependencies: ["MediaIdentifierTUI", "MediaIdentifierCore"],
+        path: "Tests/MediaIdentifierTUITests"
+    ),
     .executableTarget(
         name: "mediafin",
-        dependencies: ["MediaIdentifierCore", "MediaIdentifierWeb"],
+        dependencies: ["MediaIdentifierCore", "MediaIdentifierWeb",
+                       "MediaIdentifierTUI"],
         path: "Sources/mediafin"
     ),
     .testTarget(

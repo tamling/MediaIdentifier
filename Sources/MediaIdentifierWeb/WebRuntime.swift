@@ -109,6 +109,13 @@ public struct MediafinOptions: Sendable, Equatable {
     public var printTokenOnly: Bool = false
     public var allowPlainHTTPOnNetwork: Bool = false
     public var showHelp: Bool = false
+    /// Start the terminal interface rather than the web server.
+    ///
+    /// Three states and not two: nil means "nothing was asked for", which
+    /// `mediafin` resolves by looking at whether it has a terminal. A plain
+    /// `false` would make a bare `mediafin` always serve, which is the thing
+    /// being changed.
+    public var terminalInterface: Bool?
 
     public init() {}
 
@@ -149,6 +156,10 @@ public struct MediafinOptions: Sendable, Equatable {
         while index < arguments.endIndex {
             let argument = arguments[index]
             switch argument {
+            case "--tui":
+                options.terminalInterface = true
+            case "--serve":
+                options.terminalInterface = false
             case "--help", "-h":
                 options.showHelp = true
             case "--port", "-p":
@@ -205,7 +216,12 @@ public struct MediafinOptions: Sendable, Equatable {
 
     Usage: mediafin [options]
 
+    With no options at all, and a terminal to draw on, it starts the terminal
+    interface. Any option below starts the web server, as before.
+
     Options:
+          --tui                Terminal interface, even with other options.
+          --serve              Web server, even with no other options.
       -p, --port <number>      Port to listen on (default 8720).
           --bind local|all     Reachable from this machine only (default), or
                                from the network. A network bind requires TLS.

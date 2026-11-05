@@ -7,6 +7,7 @@ import Darwin
 #endif
 import MediaIdentifierCore
 import MediaIdentifierWeb
+import MediaIdentifierTUI
 
 /// The `mediafin` binary: starts the local web interface and keeps it running.
 ///
@@ -93,8 +94,22 @@ if case .pemFiles(let chain, _)? = tlsSource {
 
 // MARK: Server
 
-let server = WebServer()
 let coordinator = AppCoordinator(configDirectory: configDirectory)
+
+// MARK: The terminal interface
+//
+// A bare `mediafin` with a terminal to draw on starts the terminal
+// interface; anything with options starts the server, which is what the
+// systemd unit and every existing script pass. So the default changes for a
+// person typing the name and for nobody else.
+let wantsTerminal = options.terminalInterface
+    ?? (CommandLine.arguments.count == 1 && Terminal.isInteractive)
+
+if wantsTerminal {
+    exit(TUIApp(coordinator: coordinator).run())
+}
+
+let server = WebServer()
 
 if let problem = coordinator.settingsProblem {
     report("""
