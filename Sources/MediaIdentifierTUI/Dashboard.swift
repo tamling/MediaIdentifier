@@ -339,6 +339,8 @@ public enum Dashboard {
             Entry(key: "e", label: Text.s("einstellungen", "settings"),
                   enabled: !busy, keep: 3),
             Entry(key: "h", label: Text.s("verlauf", "history"), enabled: true, keep: 4),
+            Entry(key: "v", label: Text.s("konvertieren", "convert"),
+                  enabled: !busy, keep: 1),
             Entry(key: "i", label: Text.s("status", "status"), enabled: true, keep: 2),
             Entry(key: "q", label: Text.s("ende", "quit"), enabled: true, keep: 10),
         ]

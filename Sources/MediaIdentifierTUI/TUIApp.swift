@@ -29,6 +29,7 @@ public final class TUIApp {
         case openSettings
         case fetch
         case openHistory
+        case openConvert
         case nothing
     }
 
@@ -60,6 +61,7 @@ public final class TUIApp {
         // Looking at what happened is never refused: when something has
         // just gone wrong is exactly when you want it.
         case .character("h"): return .openHistory
+        case .character("v"): return busy ? .nothing : .openConvert
         case .up, .character("k"): return .move(-1)
         case .down, .character("j"): return .move(1)
         case .pageUp: return .move(-10)
@@ -191,6 +193,8 @@ public final class TUIApp {
             prompt = Prompt(caption: Text.s("Adresse:", "Address:"))
         case .openHistory:
             runHistory()
+        case .openConvert:
+            runConvert()
         case .nothing:
             break
         }
@@ -221,6 +225,48 @@ public final class TUIApp {
                 // and a screen that empties its own copy would show a clear
                 // that had not happened if the write failed.
                 screen = HistoryScreen(entries: coordinator.logEntries)
+            }
+        }
+    }
+
+    /// Converting, as its own loop.
+    private func runConvert() {
+        var screen = ConvertScreen(candidates: coordinator.convertible,
+                                   options: coordinator.settings.conversion,
+                                   snapshot: coordinator.snapshot,
+                                   haveFFmpeg: coordinator.ffmpegAvailable)
+        var size = Terminal.size()
+        terminal.invalidate()
+        while true {
+            // Re-read every frame: a conversion runs for minutes, and the
+            // screen is the only place its progress is visible.
+            screen.refresh(candidates: coordinator.convertible,
+                           snapshot: coordinator.snapshot)
+            terminal.draw(screen.render(size: size), size: size)
+
+            let key = terminal.read()
+            if key == .resized {
+                size = Terminal.size()
+                terminal.invalidate()
+                continue
+            }
+            if key == .timeout { continue }
+
+            switch screen.handle(key) {
+            case .none: break
+            case .leave:
+                terminal.invalidate()
+                return
+            case .look: coordinator.submit(.findConvertible)
+            case .start(let ids): coordinator.submit(.convertFiles(accepting: ids))
+            case .cancel: coordinator.submit(.cancelConversions)
+            case .save(let options):
+                // Saved as they are changed rather than on leaving: a
+                // conversion started from here must use what the screen
+                // says, and the engine reads the stored settings.
+                var settings = coordinator.settings
+                settings.conversion = options
+                coordinator.submit(.saveSettings(settings))
             }
         }
     }
