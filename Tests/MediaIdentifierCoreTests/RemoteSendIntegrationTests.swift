@@ -27,7 +27,6 @@ final class RemoteSendIntegrationTests: XCTestCase {
 
     override func setUpWithError() throws {
         try super.setUpWithError()
-        Text.language = .english
         let environment = ProcessInfo.processInfo.environment
         guard let host = environment["MEDIAFIN_SSH_TEST_HOST"], !host.isEmpty else {
             throw XCTSkip("no SSH server configured; set MEDIAFIN_SSH_TEST_HOST")
@@ -60,6 +59,10 @@ final class RemoteSendIntegrationTests: XCTestCase {
             identityFile: environment["MEDIAFIN_SSH_TEST_KEY"] ?? ""
         )
         coordinator.executeForTesting(.saveSettings(settings))
+        // Last, after the coordinator exists: its init calls
+        // Text.start from the settings it loads, which would
+        // otherwise undo this.
+        Text.language = .english
     }
 
     override func tearDownWithError() throws {

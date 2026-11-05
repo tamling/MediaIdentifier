@@ -466,19 +466,19 @@ final class WebSettingsRouteTests: XCTestCase {
         let page = pageWithSchedule(
             Schedule(isEnabled: true, hour: 3),
             state: StatusSnapshot(nextScheduledRun: Date().addingTimeInterval(7200)))
-        XCTAssertTrue(page.contains("N\u{00E4}chster Lauf"), page)
+        XCTAssertTrue(page.contains("Next run"), page)
     }
 
     /// The one state the user has to be able to see: set, but not running.
     func testThePageSaysWhenAScheduleIsSetButNotRunning() {
         let page = pageWithSchedule(Schedule(isEnabled: true, hour: 3),
                                     state: StatusSnapshot())
-        XCTAssertTrue(page.contains("L\u{00E4}uft gerade nicht"), page)
+        XCTAssertTrue(page.contains("Not running"), page)
     }
 
     func testThePageSaysNothingExtraWhenTheScheduleIsOff() {
         let page = pageWithSchedule(Schedule(isEnabled: false), state: StatusSnapshot())
-        XCTAssertFalse(page.contains("N\u{00E4}chster Lauf"))
-        XCTAssertFalse(page.contains("L\u{00E4}uft gerade nicht"))
+        XCTAssertFalse(page.contains("Next run"))
+        XCTAssertFalse(page.contains("Not running"))
     }
 }

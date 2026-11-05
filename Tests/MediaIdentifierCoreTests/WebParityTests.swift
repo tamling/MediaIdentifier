@@ -200,7 +200,7 @@ final class WebParityTests: XCTestCase {
         XCTAssertTrue(html.contains("Importordner"))
         XCTAssertTrue(html.contains("Nicht gefunden."))
         // The word as well as the colour.
-        XCTAssertTrue(html.contains("prüfen"))
+        XCTAssertTrue(html.contains("check"))
     }
 
     /// Closed when all is well, open when something is red — because then it

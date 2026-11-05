@@ -25,7 +25,6 @@ final class VideoDownloadIntegrationTests: XCTestCase {
 
     override func setUpWithError() throws {
         try super.setUpWithError()
-        Text.language = .english
         let environment = ProcessInfo.processInfo.environment
         guard let url = environment["MEDIAFIN_HTTP_TEST_URL"], !url.isEmpty else {
             throw XCTSkip("no local HTTP server; set MEDIAFIN_HTTP_TEST_URL")
@@ -38,6 +37,10 @@ final class VideoDownloadIntegrationTests: XCTestCase {
         importFolder = root.appendingPathComponent("import")
         try FileManager.default.createDirectory(at: importFolder,
                                                 withIntermediateDirectories: true)
+        // Last, after the coordinator exists: its init calls
+        // Text.start from the settings it loads, which would
+        // otherwise undo this.
+        Text.language = .english
     }
 
     override func tearDownWithError() throws {

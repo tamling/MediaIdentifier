@@ -15,12 +15,15 @@ final class RemoteSendTests: XCTestCase {
 
     override func setUpWithError() throws {
         try super.setUpWithError()
-        Text.language = .english
         root = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("mediafin-send-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root.appendingPathComponent("config"),
                                                 withIntermediateDirectories: true)
         coordinator = AppCoordinator(configDirectory: root.appendingPathComponent("config"))
+        // Last, after the coordinator exists: its init calls
+        // Text.start from the settings it loads, which would
+        // otherwise undo this.
+        Text.language = .english
     }
 
     override func tearDownWithError() throws {
@@ -32,6 +35,10 @@ final class RemoteSendTests: XCTestCase {
 
     private func enableRemote(_ change: (inout RemoteTarget) -> Void = { _ in }) {
         var settings = coordinator.settings
+        // Through the settings, not a global assignment in setUp:
+        // AppCoordinator.init calls Text.start from the settings it loads,
+        // so an assignment would be undone by the next coordinator built.
+        settings.language = .english
         var target = RemoteTarget(isEnabled: true, host: "nas.local", port: 22,
                                   user: "media", basePath: "/srv/media")
         change(&target)

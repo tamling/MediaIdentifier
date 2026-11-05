@@ -31,7 +31,6 @@ final class RemoteTransferIntegrationTests: XCTestCase {
 
     override func setUpWithError() throws {
         try super.setUpWithError()
-        Text.language = .english
         let environment = ProcessInfo.processInfo.environment
         guard let host = environment["MEDIAFIN_SSH_TEST_HOST"], !host.isEmpty else {
             throw XCTSkip("no SSH server configured; set MEDIAFIN_SSH_TEST_HOST")
@@ -54,6 +53,10 @@ final class RemoteTransferIntegrationTests: XCTestCase {
         // transfers in one chunk may never report a percentage, and the
         // progress assertions below would then be testing nothing.
         try Data(repeating: 0x5A, count: 6_000_000).write(to: sourceFile)
+        // Last, after the coordinator exists: its init calls
+        // Text.start from the settings it loads, which would
+        // otherwise undo this.
+        Text.language = .english
     }
 
     override func tearDownWithError() throws {

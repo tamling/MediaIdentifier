@@ -15,7 +15,6 @@ final class AppCoordinatorTests: XCTestCase {
 
     override func setUpWithError() throws {
         try super.setUpWithError()
-        Text.language = .english
         root = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("mediafin-coordinator-\(UUID().uuidString)")
         config = root.appendingPathComponent("config")
@@ -27,6 +26,10 @@ final class AppCoordinatorTests: XCTestCase {
                                                     withIntermediateDirectories: true)
         }
         coordinator = AppCoordinator(configDirectory: config)
+        // Last, after the coordinator exists: its init calls
+        // Text.start from the settings it loads, which would
+        // otherwise undo this.
+        Text.language = .english
     }
 
     override func tearDownWithError() throws {
@@ -48,8 +51,15 @@ final class AppCoordinatorTests: XCTestCase {
         WebSettings(sourceFolder: source.path,
                     moviesFolder: movies.path,
                     seriesFolder: series.path,
+                    // The language comes through the settings, not through a
+                    // global assignment in setUp: AppCoordinator.init calls
+                    // Text.start from the settings it loads, so every
+                    // coordinator built afterwards would undo such an
+                    // assignment. This is also the path the program really
+                    // uses, which makes it worth asserting through.
                     identification: .offline,
-                    conflictPolicy: .rename)
+                    conflictPolicy: .rename,
+                    language: .english)
     }
 
     private func run(_ command: WebCommand) {
@@ -307,7 +317,6 @@ final class WatchFolderTests: XCTestCase {
 
     override func setUpWithError() throws {
         try super.setUpWithError()
-        Text.language = .english
         root = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("mediafin-watch-\(UUID().uuidString)")
         config = root.appendingPathComponent("config")
@@ -318,6 +327,10 @@ final class WatchFolderTests: XCTestCase {
                                                     withIntermediateDirectories: true)
         }
         coordinator = AppCoordinator(configDirectory: config, watchInterval: 1)
+        // Last, after the coordinator exists: its init calls
+        // Text.start from the settings it loads, which would
+        // otherwise undo this.
+        Text.language = .english
     }
 
     override func tearDownWithError() throws {
@@ -329,7 +342,8 @@ final class WatchFolderTests: XCTestCase {
 
     private func settings(watching: Bool) -> WebSettings {
         WebSettings(sourceFolder: source.path, moviesFolder: movies.path,
-                    identification: .offline, watchSourceFolder: watching)
+                    identification: .offline, watchSourceFolder: watching,
+                    language: .english)
     }
 
     private func makeFile(_ name: String) throws -> URL {

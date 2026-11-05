@@ -18,7 +18,6 @@ final class UnattendedRunTests: XCTestCase {
 
     override func setUpWithError() throws {
         try super.setUpWithError()
-        Text.language = .english
         root = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("mediafin-schedule-\(UUID().uuidString)")
         config = root.appendingPathComponent("config")
@@ -28,6 +27,10 @@ final class UnattendedRunTests: XCTestCase {
             try FileManager.default.createDirectory(at: directory,
                                                     withIntermediateDirectories: true)
         }
+        // Last, after the coordinator exists: its init calls
+        // Text.start from the settings it loads, which would
+        // otherwise undo this.
+        Text.language = .english
     }
 
     override func tearDownWithError() throws {
@@ -48,7 +51,8 @@ final class UnattendedRunTests: XCTestCase {
                     moviesFolder: moviesFolder ?? movies.path,
                     identification: .offline,
                     conflictPolicy: .rename,
-                    schedule: schedule)
+                    schedule: schedule,
+                    language: .english)
     }
 
     /// A day in the past, so a daily schedule is overdue.
@@ -309,14 +313,23 @@ final class UnattendedRunTests: XCTestCase {
         formatter.dateFormat = "yyyy-MM-dd HH:mm"
         let now = formatter.date(from: "2026-06-10 22:00")!
 
+        // Both languages: "heute" and "today" are separate strings and
+        // either could be the one left behind.
+        Text.language = .german
         XCTAssertEqual(Schedule.describe(formatter.date(from: "2026-06-10 23:30")!,
                                          now: now, calendar: calendar),
                        "heute 23:30")
         XCTAssertEqual(Schedule.describe(formatter.date(from: "2026-06-11 03:00")!,
                                          now: now, calendar: calendar),
                        "morgen 03:00")
-        // Day first, because the interface is German and a server with no
-        // locale set would otherwise produce an American date.
+        XCTAssertEqual(Schedule.describe(formatter.date(from: "2026-06-10 23:30")!,
+                                         now: now, calendar: calendar),
+                       "today 23:30")
+        XCTAssertEqual(Schedule.describe(formatter.date(from: "2026-06-11 03:00")!,
+                                         now: now, calendar: calendar),
+                       "tomorrow 03:00")
+        // Day first in both, because a formatter on a server with no locale
+        // set would otherwise produce an American date.
         XCTAssertEqual(Schedule.describe(formatter.date(from: "2026-06-14 03:00")!,
                                          now: now, calendar: calendar),
                        "14.06. 03:00")

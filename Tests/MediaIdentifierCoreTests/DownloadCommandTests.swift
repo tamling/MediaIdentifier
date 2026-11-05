@@ -19,11 +19,14 @@ final class DownloadCommandTests: XCTestCase {
 
     override func setUpWithError() throws {
         try super.setUpWithError()
-        Text.language = .english
         importFolder = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("mediafin-dl-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: importFolder,
                                                 withIntermediateDirectories: true)
+        // Last, after the coordinator exists: its init calls
+        // Text.start from the settings it loads, which would
+        // otherwise undo this.
+        Text.language = .english
     }
 
     override func tearDownWithError() throws {
