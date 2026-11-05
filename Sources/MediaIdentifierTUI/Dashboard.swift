@@ -222,6 +222,8 @@ public enum Dashboard {
             ("r", Text.s("umbenennen", "rename"), hasItems && !busy),
             ("u", Text.s("zurück", "undo"), !busy),
             ("t", Text.s("senden", "send"), snapshot.remoteConfigured && hasItems && !busy),
+            ("c", Text.s("stopp", "stop"), busy),
+            ("e", Text.s("einstellungen", "settings"), !busy),
             ("i", Text.s("status", "status"), true),
             ("q", Text.s("ende", "quit"), true),
         ]

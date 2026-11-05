@@ -25,6 +25,8 @@ public final class TUIApp {
         case send
         case toggleChecks
         case move(Int)
+        case cancel
+        case openSettings
         case nothing
     }
 
@@ -47,6 +49,11 @@ public final class TUIApp {
         case .character("u"): return busy ? .nothing : .undo
         case .character("t"): return hasItems && !busy ? .send : .nothing
         case .character("i"): return .toggleChecks
+        // Stopping is never refused while something is running — it is the
+        // one key that exists for exactly that moment. Giving `t` without
+        // it was a gap worth closing straight away.
+        case .character("c"): return busy ? .cancel : .nothing
+        case .character("e"): return busy ? .nothing : .openSettings
         case .up, .character("k"): return .move(-1)
         case .down, .character("j"): return .move(1)
         case .pageUp: return .move(-10)
@@ -146,8 +153,73 @@ public final class TUIApp {
         case .send:
             let ticked = Set(items.filter(\.isAccepted).map(\.id))
             coordinator.submit(.transferFiles(accepting: ticked))
+        case .cancel:
+            // Whichever is running. The engine refuses the ones that are
+            // not, quietly, and the user pressed one key for "stop".
+            let snapshot = coordinator.snapshot
+            if snapshot.transferring { coordinator.submit(.cancelTransfers) }
+            else if snapshot.downloading { coordinator.submit(.cancelDownload) }
+            else if snapshot.converting { coordinator.submit(.cancelConversions) }
+        case .openSettings:
+            runSettings()
         case .nothing:
             break
         }
+    }
+
+    /// The settings screen, as its own loop. A screen that edits a draft
+    /// cannot share the dashboard's loop without the dashboard having to
+    /// know about drafts.
+    private func runSettings() {
+        var screen = SettingsScreen(settings: coordinator.settings,
+                                    secrets: coordinator.configuredSecrets)
+        var size = Terminal.size()
+        terminal.invalidate()
+        var leaving = false
+        var confirming = false
+
+        while !leaving {
+            var lines = screen.render(size: size)
+            if confirming, lines.count >= 2 {
+                lines[lines.count - 2] = Line(Text.s(
+                    "Ungespeicherte Änderungen. Noch einmal q zum Verwerfen, "
+                        + "S zum Speichern.",
+                    "Unsaved changes. q again to discard, S to save."), .warning)
+            }
+            terminal.draw(lines, size: size)
+
+            let key = terminal.read()
+            if key == .resized {
+                size = Terminal.size()
+                terminal.invalidate()
+                continue
+            }
+            if key == .timeout { continue }
+
+            // The second q, answering the question asked above.
+            if confirming, key == .character("q") || key == .escape {
+                leaving = true
+                continue
+            }
+            confirming = false
+
+            switch screen.handle(key) {
+            case .none:
+                break
+            case .save:
+                coordinator.submit(.saveSettings(screen.draft))
+                // Read back rather than assumed: the engine normalises what
+                // it is given, so what was saved is not always what was sent.
+                screen.markSaved(coordinator.settings,
+                                 secrets: coordinator.configuredSecrets)
+            case .setSecret(let key, let value):
+                coordinator.submit(.setSecret(key, value))
+                screen.markSaved(screen.draft,
+                                 secrets: coordinator.configuredSecrets)
+            case .leave(let unsaved):
+                if unsaved { confirming = true } else { leaving = true }
+            }
+        }
+        terminal.invalidate()
     }
 }
