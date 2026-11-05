@@ -18,8 +18,17 @@ final class WebConvertPageTests: XCTestCase {
 
     private var sink: RecordingSink!
 
+    override func tearDown() {
+        Text.language = .german
+        super.tearDown()
+    }
+
     override func setUp() {
         super.setUp()
+        // These assert the page's English wording, and German is
+        // the default. Said out loud: the language is global, so without
+        // this the suite would pass or fail on the machine's LANG.
+        Text.language = .english
         sink = RecordingSink()
     }
 

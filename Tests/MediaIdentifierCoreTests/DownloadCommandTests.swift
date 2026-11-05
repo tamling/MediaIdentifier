@@ -19,6 +19,7 @@ final class DownloadCommandTests: XCTestCase {
 
     override func setUpWithError() throws {
         try super.setUpWithError()
+        Text.language = .english
         importFolder = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("mediafin-dl-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: importFolder,
@@ -26,6 +27,7 @@ final class DownloadCommandTests: XCTestCase {
     }
 
     override func tearDownWithError() throws {
+        Text.language = .german
         if let importFolder { try? FileManager.default.removeItem(at: importFolder) }
         try super.tearDownWithError()
     }

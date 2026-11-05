@@ -169,13 +169,13 @@ public struct WebRouter: Sendable {
             response.headers["WWW-Authenticate"] = #"Bearer realm="Mediafin""#
             return response
         }
-        return loginPage(status: 401, message: "Please sign in.")
+        return loginPage(status: 401, message: Text.s("Bitte anmelden.", "Please sign in."))
     }
 
     private func performLogin(_ fields: [String: String]) -> HTTPResponse {
         if throttle.isBlocked() {
             var response = loginPage(status: 429,
-                                     message: "Too many attempts. Please wait and try again.")
+                                     message: Text.s("Zu viele Versuche. Bitte warten und erneut versuchen.", "Too many attempts. Please wait and try again."))
             response.headers["Retry-After"] = String(throttle.retryAfterSeconds())
             return response
         }
@@ -183,7 +183,7 @@ public struct WebRouter: Sendable {
             throttle.recordFailure()
             // No hint about why: not whether the token was close, nor whether
             // one is configured at all.
-            return loginPage(status: 401, message: "Wrong access token.")
+            return loginPage(status: 401, message: Text.s("Falscher Zugangs-Token.", "Wrong access token."))
         }
         throttle.recordSuccess()
         // The cookie carries the token itself rather than a separate session
@@ -398,15 +398,16 @@ public struct WebRouter: Sendable {
         let stateLabel: String
         let stateClass: String
         if state.hasError {
-            stateLabel = "Finished with errors"
+            stateLabel = Text.s("Mit Fehlern beendet", "Finished with errors")
             stateClass = "bad"
         } else if state.isWorking {
             stateLabel = state.busy
-                ? "\(state.convertStatus ?? "Working") \(state.activePercent) %"
-                : "Working…"
+                ? "\(state.convertStatus ?? Text.s("Arbeitet", "Working")) "
+                    + "\(state.activePercent) %"
+                : Text.s("Arbeitet …", "Working…")
             stateClass = "busy"
         } else {
-            stateLabel = "Ready"
+            stateLabel = Text.s("Bereit", "Ready")
             stateClass = "ok"
         }
 
@@ -416,8 +417,10 @@ public struct WebRouter: Sendable {
 
         let needsSetup = settings.sourceFolder.isEmpty
         let setupHint = needsSetup ? """
-        <p class="hint">No import folder is set yet. \
-        <a href="/settings">Open the settings</a> to choose one.</p>
+        <p class="hint">\(Text.s("Es ist noch kein Importordner gesetzt.",
+                                 "No import folder is set yet.")) \
+        <a href="/settings">\(Text.s("Einstellungen öffnen", "Open the settings"))</a>\
+        \(Text.s(", um einen zu wählen.", " to choose one."))</p>
         """ : ""
 
         var rows = ""
@@ -446,21 +449,23 @@ public struct WebRouter: Sendable {
         """ : ""
 
         let list = proposals.isEmpty ? """
-        <p class="hint">Nothing proposed yet.\(needsSetup ? "" : " Use “Look for new files”.")</p>
+        <p class="hint">\(Text.s("Noch nichts vorgeschlagen.", "Nothing proposed yet."))\(needsSetup ? "" : " " + Text.s("„Nach neuen Dateien sehen“ benutzen.", "Use “Look for new files”."))</p>
         """ : """
         <form method="post" action="/library/apply">
           \(csrf.hiddenField)
           <input type="hidden" name="\(Self.selectionPresentField)" value="1">
           <table>\(rows)</table>
-          <button type="submit"\(state.isWorking ? " disabled" : "")>Rename the ticked \
-        files</button>
+          <button type="submit"\(state.isWorking ? " disabled" : "")>\
+        \(Text.s("Angehakte umbenennen", "Rename the ticked files"))</button>
           \(sendButton)
         </form>
         <form method="post" action="/library/select-all" class="inline-form bare">
-          \(csrf.hiddenField)<button type="submit" class="link">Tick all</button>
+          \(csrf.hiddenField)<button type="submit" class="link">\
+        \(Text.s("Alle anhaken", "Tick all"))</button>
         </form>
         <form method="post" action="/library/select-none" class="inline-form bare">
-          \(csrf.hiddenField)<button type="submit" class="link">Tick none</button>
+          \(csrf.hiddenField)<button type="submit" class="link">\
+        \(Text.s("Alle abhaken", "Tick none"))</button>
         </form>
         """
 
@@ -470,12 +475,13 @@ public struct WebRouter: Sendable {
         // which is what transferSummary says in words.
         let transfer = state.remoteConfigured ? """
         <div class="card">
-          <h2>Sending to the server</h2>
+          <h2>\(Text.s("Zum Server senden", "Sending to the server"))</h2>
           <progress max="100" value="\(state.transferring ? state.activePercent : 0)"></progress>
           <p class="sub">\(Self.escape(state.transferSummary))</p>
           <form method="post" action="/library/send-cancel">
             \(csrf.hiddenField)
-            <button type="submit"\(state.transferring ? "" : " disabled")>Stop sending</button>
+            <button type="submit"\(state.transferring ? "" : " disabled")>\
+        \(Text.s("Senden stoppen", "Stop sending"))</button>
           </form>
         </div>
         """ : ""
@@ -488,13 +494,17 @@ public struct WebRouter: Sendable {
         <progress max="100" \(state.downloadProgress.map {
             "value=\"\(Int(($0 * 100).rounded()))\""
         } ?? "")></progress>
-        <p class="sub">\(Self.escape(state.downloadDetail ?? "Wird geladen …"))</p>
+        <p class="sub">\(Self.escape(state.downloadDetail
+            ?? Text.s("Wird geladen …", "Fetching…")))</p>
         <form method="post" action="/library/download-cancel" class="bare inline-form">
-          \(csrf.hiddenField)<button type="submit" class="link">Stop fetching</button>
+          \(csrf.hiddenField)<button type="submit" class="link">\
+        \(Text.s("Laden stoppen", "Stop fetching"))</button>
         </form>
         """ : ""
 
-        let counts = "\(state.totalItems) proposed · \(state.done) renamed so far"
+        let counts = Text.s(
+            "\(state.totalItems) vorgeschlagen · \(state.done) bisher umbenannt",
+            "\(state.totalItems) proposed · \(state.done) renamed so far")
 
         // The traffic light. A dot carries the colour and a word carries the
         // same thing again, because colour alone is unreadable to about one
@@ -517,11 +527,12 @@ public struct WebRouter: Sendable {
         let worst = SystemChecks.worst(checks)
         let panel = checks.isEmpty ? "" : """
         <details class="card"\(worst == .failed ? " open" : "")>
-          <summary><strong>Status</strong> — \(Self.escape(SystemChecks.summary(checks)))</summary>
+          <summary><strong>\(Text.s("Status", "Status"))</strong> — \
+        \(Self.escape(SystemChecks.summary(checks)))</summary>
           <table>\(lamps)</table>
           <form method="post" action="/system/check">
             \(csrf.hiddenField)
-            <button type="submit">Check everything</button>
+            <button type="submit">\(Text.s("Alles prüfen", "Check everything"))</button>
           </form>
         </details>
         """
@@ -530,7 +541,7 @@ public struct WebRouter: Sendable {
 
         return .html("""
         <!DOCTYPE html>
-        <html lang="en"><head>
+        <html lang="\(Text.language.rawValue)"><head>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
         \(state.isWorking ? "<meta http-equiv=\"refresh\" content=\"2\">" : "")
@@ -553,22 +564,26 @@ public struct WebRouter: Sendable {
               \(panel)
 
               <div class="card">
-                <h2>Fetch from a link</h2>
+                <h2>\(Text.s("Aus dem Netz laden", "Fetch from a link"))</h2>
                 <form method="post" action="/library/download">
                   \(csrf.hiddenField)
-                  <label for="url">Address of the video</label>
+                  <label for="url">\(Text.s("Adresse des Videos",
+                                             "Address of the video"))</label>
                   <input id="url" name="url" type="text" placeholder="https://…"\
         \(state.isWorking ? " disabled" : "")>
-                  <p class="hint">It lands in the import folder and is then proposed \
-        like anything else found there. Only http and https.</p>
+                  <p class="hint">\(Text.s(
+                    "Landet im Importordner und wird dann wie jede andere gefundene "
+                        + "Datei vorgeschlagen. Nur http und https.",
+                    "It lands in the import folder and is then proposed like anything "
+                        + "else found there. Only http and https."))</p>
                   <button type="submit"\(needsSetup || state.isWorking ? " disabled" : "")>\
-        Fetch</button>
+        \(Text.s("Laden", "Fetch"))</button>
                 </form>
                 \(download)
               </div>
 
               <div class="card">
-                <h2>Proposed renames</h2>
+                <h2>\(Text.s("Vorgeschlagene Namen", "Proposed renames"))</h2>
                 \(list)
               </div>
 
@@ -578,17 +593,17 @@ public struct WebRouter: Sendable {
                 <form method="post" action="/library/scan">
                   \(csrf.hiddenField)
                   <button type="submit"\(needsSetup || state.isWorking ? " disabled" : "")>\
-        Look for new files</button>
+        \(Text.s("Nach neuen Dateien sehen", "Look for new files"))</button>
                 </form>
                 <form method="post" action="/library/undo">
                   \(csrf.hiddenField)
                   <button type="submit"\(state.done == 0 || state.isWorking ? " disabled" : "")>\
-        Undo the last run</button>
+        \(Text.s("Letzten Lauf rückgängig", "Undo the last run"))</button>
                 </form>
                 <form method="post" action="/history/clear">
                   \(csrf.hiddenField)
                   <button type="submit"\(state.done == 0 || state.isWorking ? " disabled" : "")>\
-        Clear the history</button>
+        \(Text.s("Verlauf leeren", "Clear the history"))</button>
                 </form>
               </div>
 
@@ -639,13 +654,12 @@ public struct WebRouter: Sendable {
             (\(state.pendingConversions) still queued)</p>
             <form method="post" action="/convert/cancel">
               \(csrf.hiddenField)
-              <button type="submit">Stop after this file</button>
+              <button type="submit">\(Text.s("Nach dieser Datei stoppen", "Stop after this file"))</button>
             </form>
             """
         } else if candidates.isEmpty {
             list = """
-            <p class="hint">Nothing found yet. “Look for files” searches your \
-            library folders for videos that are not already converted.</p>
+            <p class="hint">\(Text.s("Noch nichts gefunden. „Nach Dateien sehen“ durchsucht die Bibliotheksordner nach Videos, die noch nicht konvertiert sind.", "Nothing found yet. “Look for files” searches your library folders for videos that are not already converted."))</p>
             """
         } else {
             list = """
@@ -654,7 +668,7 @@ public struct WebRouter: Sendable {
               <input type="hidden" name="\(Self.selectionPresentField)" value="1">
               <table>\(rows)</table>
               <button type="submit"\(haveFFmpeg ? "" : " disabled")>\
-            Convert the ticked files</button>
+            \(Text.s("Angehakte konvertieren", "Convert the ticked files"))</button>
               <p class="hint">The result is written beside the original, as \
             <code>…\(Self.escape(".\(ConversionOutput.marker(for: settings.options))"))\
             .mkv</code>. Nothing is deleted — remove the originals yourself once \
@@ -693,16 +707,16 @@ public struct WebRouter: Sendable {
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
         \(state.converting ? "<meta http-equiv=\"refresh\" content=\"3\">" : "")
-        <title>Mediafin – Convert</title>
+        <title>Mediafin – \(Text.s("Konvertieren", "Convert"))</title>
         \(Self.styles)
         </head>
         <body>
         <div class="page">
           \(Self.navigation(current: "/convert"))
           <div class="card">
-            <h1>Convert</h1>
-            <p class="sub">Re-encode to save space. Expect about \
-        \(settings.estimatedSizePercent) % of the original size with these settings.</p>
+            <h1>\(Text.s("Konvertieren", "Convert"))</h1>
+            <p class="sub">\(Text.s("Neu kodieren, um Platz zu sparen. Mit diesen Einstellungen etwa", "Re-encode to save space. Expect about")) \
+        \(settings.estimatedSizePercent) % \(Text.s("der ursprünglichen Größe.", "of the original size with these settings."))</p>
             \(missingFFmpeg)
             \(list)
           </div>
@@ -710,7 +724,7 @@ public struct WebRouter: Sendable {
           <div class="card actions">
             <form method="post" action="/convert/scan">
               \(csrf.hiddenField)
-              <button type="submit"\(state.converting ? " disabled" : "")>Look for files</button>
+              <button type="submit"\(state.converting ? " disabled" : "")>\(Text.s("Nach Dateien sehen", "Look for files"))</button>
             </form>
           </div>
 
@@ -718,26 +732,26 @@ public struct WebRouter: Sendable {
             \(csrf.hiddenField)
             <input type="hidden" name="conversionFormPresent" value="1">
             <input type="hidden" name="after" value="/convert">
-            <h2>Settings</h2>
+            <h2>\(Text.s("Einstellungen", "Settings"))</h2>
             \(problems.isEmpty ? "" : problems.map {
                 "<p class=\"note\">\(Self.escape($0.message))</p>"
             }.joined())
-            <label for="videoCodec">Video codec</label>
+            <label for="videoCodec">\(Text.s("Video-Codec", "Video codec"))</label>
             <select id="videoCodec" name="videoCodec">\(codecOptions)</select>
-            <label for="quality">Quality (lower is better and larger, 0–51)</label>
+            <label for="quality">\(Text.s("Qualität (kleiner ist besser und größer, 0–51)", "Quality (lower is better and larger, 0–51)"))</label>
             <input id="quality" name="quality" type="text" value="\(settings.quality)">
-            <label for="preset">Encoder effort</label>
+            <label for="preset">\(Text.s("Kodierer-Aufwand", "Encoder effort"))</label>
             <select id="preset" name="preset">\(presetOptions)</select>
-            <label for="targetHeight">Resolution</label>
+            <label for="targetHeight">\(Text.s("Auflösung", "Resolution"))</label>
             <select id="targetHeight" name="targetHeight">\(heightOptions)</select>
-            <label for="audioMode">Audio</label>
+            <label for="audioMode">\(Text.s("Ton", "Audio"))</label>
             <select id="audioMode" name="audioMode">\(audioOptions)</select>
             <label class="inline"><input type="checkbox" name="stripSubtitles" value="1"\
-        \(settings.stripSubtitles ? " checked" : "")> Drop subtitle tracks</label>
-            <label for="ffmpegPath">FFmpeg path (only if it is somewhere unusual)</label>
+        \(settings.stripSubtitles ? " checked" : "")> \(Text.s("Untertitelspuren weglassen", "Drop subtitle tracks"))</label>
+            <label for="ffmpegPath">\(Text.s("FFmpeg-Pfad (nur wenn er irgendwo Ungewöhnlichem liegt)", "FFmpeg path (only if it is somewhere unusual)"))</label>
             <input id="ffmpegPath" name="ffmpegPath" type="text" \
         value="\(Self.escape(settings.ffmpegPath))">
-            <button type="submit">Save</button>
+            <button type="submit">\(Text.s("Speichern", "Save"))</button>
           </form>
         </div>
         </body></html>
@@ -746,27 +760,27 @@ public struct WebRouter: Sendable {
 
     static func codecLabel(_ codec: ConversionOptions.VideoCodec) -> String {
         switch codec {
-        case .h265: return "H.265 / HEVC — best balance, plays nearly everywhere"
-        case .h264: return "H.264 — largest files, plays everywhere"
-        case .av1: return "AV1 — smallest files, slowest, needs a recent player"
-        case .copy: return "Keep the video as it is (only repackage)"
+        case .h265: return Text.s("H.265 / HEVC — bestes Verhältnis, läuft fast überall", "H.265 / HEVC — best balance, plays nearly everywhere")
+        case .h264: return Text.s("H.264 — größte Dateien, läuft überall", "H.264 — largest files, plays everywhere")
+        case .av1: return Text.s("AV1 — kleinste Dateien, am langsamsten, braucht einen neueren Player", "AV1 — smallest files, slowest, needs a recent player")
+        case .copy: return Text.s("Das Video so lassen (nur neu verpacken)", "Keep the video as it is (only repackage)")
         }
     }
 
     static func presetHint(_ preset: ConversionOptions.Preset) -> String {
         switch preset {
-        case .veryslow, .slower: return "smallest files, very slow"
-        case .slow: return "recommended"
-        case .medium: return "faster, slightly larger"
-        case .fast, .faster, .veryfast: return "quick, noticeably larger"
+        case .veryslow, .slower: return Text.s("kleinste Dateien, sehr langsam", "smallest files, very slow")
+        case .slow: return Text.s("empfohlen", "recommended")
+        case .medium: return Text.s("schneller, etwas größer", "faster, slightly larger")
+        case .fast, .faster, .veryfast: return Text.s("schnell, merklich größer", "quick, noticeably larger")
         }
     }
 
     static func audioLabel(_ mode: ConversionOptions.AudioMode) -> String {
         switch mode {
-        case .passthrough: return "Keep the original audio (recommended)"
-        case .opus: return "Re-encode to Opus — smallest"
-        case .aac: return "Re-encode to AAC — most compatible"
+        case .passthrough: return Text.s("Originalton behalten (empfohlen)", "Keep the original audio (recommended)")
+        case .opus: return Text.s("Neu nach Opus — am kleinsten", "Re-encode to Opus — smallest")
+        case .aac: return Text.s("Neu nach AAC — am verträglichsten", "Re-encode to AAC — most compatible")
         }
     }
 
@@ -805,7 +819,7 @@ public struct WebRouter: Sendable {
         }
 
         let body = entries.isEmpty
-            ? "<p class=\"hint\">Nothing has been renamed yet.</p>"
+            ? "<p class=\"hint\">" + Text.s("Es wurde noch nichts umbenannt.", "Nothing has been renamed yet.") + "</p>"
             : "<table>\(rows)</table>"
 
         return .html("""
@@ -813,22 +827,23 @@ public struct WebRouter: Sendable {
         <html lang="en"><head>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
-        <title>Mediafin – History</title>
+        <title>Mediafin – \(Text.s("Verlauf", "History"))</title>
         \(Self.styles)
         </head>
         <body>
         <div class="page">
           \(Self.navigation(current: "/history"))
           <div class="card">
-            <h1>History</h1>
+            <h1>\(Text.s("Verlauf", "History"))</h1>
             <p class="sub">\(entries.count) entr\(entries.count == 1 ? "y" : "ies")</p>
             \(body)
           </div>
           <div class="card actions">
-            <a class="button" href="/history/export">Download as text</a>
+            <a class="button" href="/history/export">\(Text.s("Als Text herunterladen", "Download as text"))</a>
             <form method="post" action="/history/clear">
               \(csrf.hiddenField)
-              <button type="submit"\(entries.isEmpty ? " disabled" : "")>Clear the history</button>
+              <button type="submit"\(entries.isEmpty ? " disabled" : "")>\
+        \(Text.s("Verlauf leeren", "Clear the history"))</button>
             </form>
           </div>
         </div>
@@ -865,17 +880,17 @@ public struct WebRouter: Sendable {
         <html lang="en"><head>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
-        <title>Mediafin – Sign in</title>
+        <title>Mediafin – \(Text.s("Anmelden", "Sign in"))</title>
         \(Self.styles)
         </head>
         <body class="centred"><form method="post" action="/login">
           \(csrf.hiddenField)
           <h1>Mediafin</h1>
-          <p class="sub">Enter the access token shown in the app.</p>
+          <p class="sub">\(Text.s("Den Zugangs-Token eingeben, den das Programm anzeigt.", "Enter the access token shown in the app."))</p>
           \(note)
-          <label for="token">Access token</label>
+          <label for="token">\(Text.s("Zugangs-Token", "Access token"))</label>
           <input id="token" name="token" type="password" autocomplete="off" autofocus>
-          <button type="submit">Sign in</button>
+          <button type="submit">\(Text.s("Anmelden", "Sign in"))</button>
           \(warning)
         </form></body></html>
         """, status: status)
@@ -907,10 +922,10 @@ public struct WebRouter: Sendable {
             return """
             <label for="\(key.formField)">\(Self.escape(key.label))</label>
             <input id="\(key.formField)" name="\(key.formField)" type="password"
-                   autocomplete="off" placeholder="\(isStored ? "stored — leave blank to keep" : "not set")">
+                   autocomplete="off" placeholder="\(isStored ? Text.s("gespeichert — zum Behalten leer lassen", "stored — leave blank to keep") : Text.s("nicht gesetzt", "not set"))">
             \(isStored ? """
             <label class="inline"><input type="checkbox" name="clear-\(key.formField)" value="1"> \
-            Remove the stored key</label>
+            \(Text.s("Gespeicherten Schlüssel entfernen", "Remove the stored key"))</label>
             """ : "")
             """
         }
@@ -986,7 +1001,7 @@ public struct WebRouter: Sendable {
         <html lang="en"><head>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
-        <title>Mediafin – Settings</title>
+        <title>Mediafin – \(Text.s("Einstellungen", "Settings"))</title>
         \(Self.styles)
         </head>
         <body>
@@ -994,103 +1009,101 @@ public struct WebRouter: Sendable {
           \(Self.navigation(current: "/settings"))
           <form method="post" action="/settings" class="card">
             \(csrf.hiddenField)
-            <h1>Settings</h1>
-            \(problems.isEmpty ? banner : "<p class=\"note\">Nothing was saved — please correct the fields marked below.</p>")
+            <h1>\(Text.s("Einstellungen", "Settings"))</h1>
+            \(problems.isEmpty ? banner : "<p class=\"note\">" + Text.s("Nichts gespeichert — bitte die unten markierten Felder berichtigen.", "Nothing was saved — please correct the fields marked below.") + "</p>")
 
             <h2>\(Text.s("Sprache", "Language"))</h2>
             <label for="language">\(Text.s("Sprache der Oberfl\u{00E4}che", "Interface language"))</label>
             <select id="language" name="language">\(languageOptions)</select>
 
             <h2>\(Text.s("Was diese Bibliothek enth\u{00E4}lt", "What this library holds"))</h2>
-            <label for="libraryMode">Sorting</label>
+            <label for="libraryMode">\(Text.s("Sortierung", "Sorting"))</label>
             <select id="libraryMode" name="libraryMode">\(modeOptions)</select>
             <p class="hint">Video and music are sorted differently — different folders, \
         different names, and music is identified from its own tags rather than from the \
         file name.</p>
 
-            <h2>Folders</h2>
-            \(field("sourceFolder", label: "Import from", value: current.sourceFolder,
-                    hint: "The folder new downloads land in. Absolute path."))
-            \(field("moviesFolder", label: "Movies library", value: current.moviesFolder))
-            \(field("seriesFolder", label: "Series library", value: current.seriesFolder))
-            \(field("musicFolder", label: "Music library", value: current.musicFolder,
-                    hint: "Used in music mode: /Artist/Album (Year)/01 - Title.flac"))
-            <label for="conflictPolicy">If a file already exists</label>
+            <h2>\(Text.s("Ordner", "Folders"))</h2>
+            \(field("sourceFolder", label: Text.s("Importieren aus", "Import from"), value: current.sourceFolder,
+                    hint: Text.s("Der Ordner, in dem neue Downloads landen. Absoluter Pfad.", "The folder new downloads land in. Absolute path.")))
+            \(field("moviesFolder", label: Text.s("Filmbibliothek", "Movies library"), value: current.moviesFolder))
+            \(field("seriesFolder", label: Text.s("Serienbibliothek", "Series library"), value: current.seriesFolder))
+            \(field("musicFolder", label: Text.s("Musikbibliothek", "Music library"), value: current.musicFolder,
+                    hint: Text.s("Im Musikmodus: /Künstler/Album (Jahr)/01 - Titel.flac", "Used in music mode: /Artist/Album (Year)/01 - Title.flac")))
+            <label for="conflictPolicy">\(Text.s("Wenn schon eine Datei da ist", "If a file already exists"))</label>
             <select id="conflictPolicy" name="conflictPolicy">\(conflictOptions)</select>
             <input type="hidden" name="watchSourceFolderPresent" value="1">
             <label class="inline"><input type="checkbox" name="watchSourceFolder" value="1"\
-        \(current.watchSourceFolder ? " checked" : "")> Watch the import folder and offer new files automatically</label>
+        \(current.watchSourceFolder ? " checked" : "")> \(Text.s("Importordner beobachten und neue Dateien von selbst vorschlagen", "Watch the import folder and offer new files automatically"))</label>
 
-            <h2>Identification</h2>
-            <label for="identification">How titles are identified</label>
+            <h2>\(Text.s("Erkennung", "Identification"))</h2>
+            <label for="identification">\(Text.s("Wie Titel erkannt werden", "How titles are identified"))</label>
             <select id="identification" name="identification">\(identificationOptions)</select>
 
-            <h2>My own model</h2>
-            \(field("localLLMBaseURL", label: "Server address", value: current.localLLMBaseURL,
-                    hint: "For LM Studio this is usually http://<host>:1234"))
-            \(field("localLLMModel", label: "Model", value: current.localLLMModel,
-                    hint: "Exactly as the server reports it."))
+            <h2>\(Text.s("Eigener Modellserver", "My own model"))</h2>
+            \(field("localLLMBaseURL", label: Text.s("Serveradresse", "Server address"), value: current.localLLMBaseURL,
+                    hint: Text.s("Bei LM Studio meist http://<host>:1234", "For LM Studio this is usually http://<host>:1234")))
+            \(field("localLLMModel", label: Text.s("Modell", "Model"), value: current.localLLMModel,
+                    hint: Text.s("Genau so, wie der Server ihn meldet.", "Exactly as the server reports it.")))
             \(secretField(.localLLMAPIKey))
 
             <h2>Jellyfin</h2>
-            \(field("jellyfinBaseURL", label: "Server address", value: current.jellyfinBaseURL,
-                    hint: "Mediafin refreshes the library here after renaming."))
+            \(field("jellyfinBaseURL", label: Text.s("Serveradresse", "Server address"), value: current.jellyfinBaseURL,
+                    hint: Text.s("Mediafin lässt die Bibliothek hier nach dem Umbenennen neu einlesen.", "Mediafin refreshes the library here after renaming.")))
             \(secretField(.jellyfinToken))
 
             <h2>TMDb</h2>
-            <p class="hint">Only the title and year are ever sent — never a file.</p>
+            <p class="hint">\(Text.s("Es werden nur Titel und Jahr gesendet — nie eine Datei.", "Only the title and year are ever sent — never a file."))</p>
             \(secretField(.tmdbAPIKey))
 
-            <h2>Looking by itself</h2>
+            <h2>\(Text.s("Von selbst nachsehen", "Looking by itself"))</h2>
             <input type="hidden" name="schedulePresent" value="1">
             <label class="inline"><input type="checkbox" name="scheduleEnabled" value="1"\
-        \(current.schedule.isEnabled ? " checked" : "")> Check without being asked</label>
-            <label for="scheduleCadence">How often</label>
+        \(current.schedule.isEnabled ? " checked" : "")> \(Text.s("Ungefragt nachsehen", "Check without being asked"))</label>
+            <label for="scheduleCadence">\(Text.s("Wie oft", "How often"))</label>
             <select id="scheduleCadence" name="scheduleCadence">\(cadenceOptions)</select>
-            \(field("scheduleTime", label: "At (24-hour clock)",
+            \(field("scheduleTime", label: Text.s("Um (24-Stunden-Uhr)", "At (24-hour clock)"),
                     value: String(format: "%02d:%02d", current.schedule.hour,
                                   current.schedule.minute)))
-            \(field("scheduleEveryHours", label: "Or every N hours",
+            \(field("scheduleEveryHours", label: Text.s("Oder alle N Stunden", "Or every N hours"),
                     value: String(current.schedule.everyHours)))
             <label class="inline"><input type="checkbox" name="scheduleRename" value="1"\
-        \(current.schedule.alsoRename ? " checked" : "")> Also rename what it finds</label>
+        \(current.schedule.alsoRename ? " checked" : "")> \(Text.s("Gefundenes auch umbenennen", "Also rename what it finds"))</label>
             <label class="inline"><input type="checkbox" name="scheduleSend" value="1"\
-        \(current.schedule.alsoSend ? " checked" : "")> Also send it to the server</label>
+        \(current.schedule.alsoSend ? " checked" : "")> \(Text.s("Es auch zum Server senden", "Also send it to the server"))</label>
             <p class="hint">\(Self.escape(current.schedule.summary))</p>
             \(scheduleState)
 
-            <h2>The library on another machine</h2>
+            <h2>\(Text.s("Die Bibliothek auf einem anderen Rechner", "The library on another machine"))</h2>
             <input type="hidden" name="remoteEnabledPresent" value="1">
             <label class="inline"><input type="checkbox" name="remoteEnabled" value="1"\
-        \(current.remote.isEnabled ? " checked" : "")> Send the sorted files to a server</label>
-            \(field("remoteHost", label: "Server address", value: current.remote.host,
-                    hint: "A host name or address — no path, no scheme."))
-            \(field("remotePort", label: "Port", value: String(current.remote.port)))
-            \(field("remoteUser", label: "User", value: current.remote.user))
-            \(field("remoteBasePath", label: "Target path on the server",
+        \(current.remote.isEnabled ? " checked" : "")> \(Text.s("Die sortierten Dateien zu einem Server senden", "Send the sorted files to a server"))</label>
+            \(field("remoteHost", label: Text.s("Serveradresse", "Server address"), value: current.remote.host,
+                    hint: Text.s("Ein Rechnername oder eine Adresse — kein Pfad, kein Schema.", "A host name or address — no path, no scheme.")))
+            \(field("remotePort", label: Text.s("Port", "Port"), value: String(current.remote.port)))
+            \(field("remoteUser", label: Text.s("Benutzer", "User"), value: current.remote.user))
+            \(field("remoteBasePath", label: Text.s("Zielpfad auf dem Server", "Target path on the server"),
                     value: current.remote.basePath,
-                    hint: "Absolute. The sorted folders are created under it."))
-            <label for="remoteTransport">Transfer with</label>
+                    hint: Text.s("Absolut. Die sortierten Ordner entstehen darunter.", "Absolute. The sorted folders are created under it.")))
+            <label for="remoteTransport">\(Text.s("Übertragen mit", "Transfer with"))</label>
             <select id="remoteTransport" name="remoteTransport">\(transportOptions)</select>
-            <label for="remoteAuthentication">Sign in with</label>
+            <label for="remoteAuthentication">\(Text.s("Anmelden mit", "Sign in with"))</label>
             <select id="remoteAuthentication" name="remoteAuthentication">\(authOptions)</select>
-            \(field("remoteIdentityFile", label: "Key file", value: current.remote.identityFile,
-                    hint: "Leave empty to use whatever your ssh configuration already does."))
+            \(field("remoteIdentityFile", label: Text.s("Schlüsseldatei", "Key file"), value: current.remote.identityFile,
+                    hint: Text.s("Leer lassen, um die bestehende ssh-Konfiguration zu benutzen.", "Leave empty to use whatever your ssh configuration already does.")))
             \(secretField(.remotePassword))
             <input type="hidden" name="remoteRemoveLocalPresent" value="1">
             <label class="inline"><input type="checkbox" name="remoteRemoveLocal" value="1"\
-        \(current.remote.removeLocalAfterSend ? " checked" : "")> Delete the local file once \
-        the server has it</label>
-            <p class="hint">Off by default. Sending is a copy, which can be undone by deleting \
-        what arrived; deleting the local file cannot.</p>
+        \(current.remote.removeLocalAfterSend ? " checked" : "")> \(Text.s("Die lokale Datei löschen, sobald der Server sie hat", "Delete the local file once the server has it"))</label>
+            <p class="hint">\(Text.s("Standardmäßig aus. Senden ist eine Kopie und lässt sich rückgängig machen, indem man das Angekommene löscht; das Löschen der lokalen Datei nicht.", "Off by default. Sending is a copy, which can be undone by deleting what arrived; deleting the local file cannot."))</p>
 
-            <button type="submit">Save</button>
-            <button type="submit" formaction="/settings/test-llm">Save and test the \
-        model server</button>
-            <button type="submit" formaction="/settings/test-jellyfin">Save and test \
-        Jellyfin</button>
-            <button type="submit" formaction="/settings/test-remote">Save and test the \
-        server</button>
+            <button type="submit">\(Text.s("Speichern", "Save"))</button>
+            <button type="submit" formaction="/settings/test-llm">\
+        \(Text.s("Speichern und Modellserver testen", "Save and test the model server"))</button>
+            <button type="submit" formaction="/settings/test-jellyfin">\
+        \(Text.s("Speichern und Jellyfin testen", "Save and test Jellyfin"))</button>
+            <button type="submit" formaction="/settings/test-remote">\
+        \(Text.s("Speichern und Server testen", "Save and test the server"))</button>
           </form>
         </div>
         </body></html>
@@ -1099,10 +1112,14 @@ public struct WebRouter: Sendable {
 
     /// Turns the redirect's query marker into something to tell the user.
     static func notice(for query: [String: String]) -> String? {
-        if query["saved"] != nil { return "Settings saved." }
+        if query["saved"] != nil {
+            return Text.s("Einstellungen gespeichert.", "Settings saved.")
+        }
         switch query["tested"] {
-        case "llm": return "Testing the model server — the result appears on the overview."
-        case "jellyfin": return "Testing Jellyfin — the result appears on the overview."
+        case "llm":
+            return Text.s("Modellserver wird geprüft — das Ergebnis erscheint in der Übersicht.", "Testing the model server — the result appears on the overview.")
+        case "jellyfin":
+            return Text.s("Jellyfin wird geprüft — das Ergebnis erscheint in der Übersicht.", "Testing Jellyfin — the result appears on the overview.")
         default: return nil
         }
     }
@@ -1169,19 +1186,20 @@ public struct WebRouter: Sendable {
 
         return """
         <aside class="logside">
-          <h2>History</h2>
-          <p class="sub">\(entries.count) \(entries.count == 1 ? "entry" : "entries")\(failed > 0
-            ? " · <span class=\"bad-text\">\(failed) failed</span>" : "")</p>
+          <h2>\(Text.s("Verlauf", "History"))</h2>
+          <p class="sub">\(entries.count) \(entries.count == 1
+            ? Text.s("Eintrag", "entry") : Text.s("Einträge", "entries"))\(failed > 0
+            ? " · <span class=\"bad-text\">\(failed) " + Text.s("fehlgeschlagen", "failed") + "</span>" : "")</p>
           \(entries.isEmpty
-            ? "<p class=\"hint\">Nothing has happened yet.</p>"
+            ? "<p class=\"hint\">" + Text.s("Noch nichts passiert.", "Nothing has happened yet.") + "</p>"
             : "<ul class=\"log\">\(rows)</ul>\(more)")
         </aside>
         """
     }
 
     static func navigation(current: String) -> String {
-        let items = [("/", "Overview"), ("/convert", "Convert"),
-                     ("/history", "History"), ("/settings", "Settings")]
+        let items = [("/", Text.s("Übersicht", "Overview")), ("/convert", Text.s("Konvertieren", "Convert")),
+                     ("/history", Text.s("Verlauf", "History")), ("/settings", Text.s("Einstellungen", "Settings"))]
         let links = items.map { path, title in
             path == current
                 ? "<span class=\"here\">\(title)</span>"
@@ -1189,7 +1207,7 @@ public struct WebRouter: Sendable {
         }.joined(separator: "")
         return """
         <nav>\(links)<form method="post" action="/logout" class="right">\
-        <button type="submit" class="link">Sign out</button></form></nav>
+        <button type="submit" class="link">\(Text.s("Abmelden", "Sign out"))</button></form></nav>
         """
     }
 

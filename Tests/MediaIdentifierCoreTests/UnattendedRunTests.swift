@@ -18,6 +18,7 @@ final class UnattendedRunTests: XCTestCase {
 
     override func setUpWithError() throws {
         try super.setUpWithError()
+        Text.language = .english
         root = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("mediafin-schedule-\(UUID().uuidString)")
         config = root.appendingPathComponent("config")
@@ -30,6 +31,7 @@ final class UnattendedRunTests: XCTestCase {
     }
 
     override func tearDownWithError() throws {
+        Text.language = .german
         if let root { try? FileManager.default.removeItem(at: root) }
         try super.tearDownWithError()
     }
@@ -211,7 +213,7 @@ final class UnattendedRunTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: file.path),
                       "the file was moved into a folder beside itself")
         let result = coordinator.snapshot.lastResult ?? ""
-        XCTAssertTrue(result.contains("Zielordner"), result)
+        XCTAssertTrue(result.contains("target folder"), result)
         XCTAssertTrue(coordinator.snapshot.hasError)
     }
 
@@ -269,7 +271,7 @@ final class UnattendedRunTests: XCTestCase {
 
         coordinator.runIfDueForTesting()
         let result = coordinator.snapshot.lastResult ?? ""
-        XCTAssertTrue(result.contains("Server"), result)
+        XCTAssertTrue(result.contains("server"), result)
         XCTAssertTrue(coordinator.snapshot.hasError,
                       "a planned send that could not happen was reported as fine")
     }
@@ -288,11 +290,11 @@ final class UnattendedRunTests: XCTestCase {
     func testTheSentenceSaysBothWhatWasAskedForAndWhatWillHappen() {
         let schedule = Schedule(isEnabled: true, hour: 3)
         let armed = StatusSnapshot(nextScheduledRun: Date().addingTimeInterval(3600))
-        XCTAssertTrue(ScheduleLine.describe(schedule, armed).contains("Nächster Lauf"))
+        XCTAssertTrue(ScheduleLine.describe(schedule, armed).contains("Next run"))
 
         // Set but not running: the one state the user has to be able to see.
         let idle = StatusSnapshot()
-        XCTAssertTrue(ScheduleLine.describe(schedule, idle).contains("Läuft gerade nicht"),
+        XCTAssertTrue(ScheduleLine.describe(schedule, idle).contains("Not running"),
                       ScheduleLine.describe(schedule, idle))
     }
 

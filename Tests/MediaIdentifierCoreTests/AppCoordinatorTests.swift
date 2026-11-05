@@ -15,6 +15,7 @@ final class AppCoordinatorTests: XCTestCase {
 
     override func setUpWithError() throws {
         try super.setUpWithError()
+        Text.language = .english
         root = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("mediafin-coordinator-\(UUID().uuidString)")
         config = root.appendingPathComponent("config")
@@ -29,6 +30,7 @@ final class AppCoordinatorTests: XCTestCase {
     }
 
     override func tearDownWithError() throws {
+        Text.language = .german
         coordinator = nil
         if let root { try? FileManager.default.removeItem(at: root) }
         try super.tearDownWithError()
@@ -305,6 +307,7 @@ final class WatchFolderTests: XCTestCase {
 
     override func setUpWithError() throws {
         try super.setUpWithError()
+        Text.language = .english
         root = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("mediafin-watch-\(UUID().uuidString)")
         config = root.appendingPathComponent("config")
@@ -318,6 +321,7 @@ final class WatchFolderTests: XCTestCase {
     }
 
     override func tearDownWithError() throws {
+        Text.language = .german
         coordinator = nil
         if let root { try? FileManager.default.removeItem(at: root) }
         try super.tearDownWithError()

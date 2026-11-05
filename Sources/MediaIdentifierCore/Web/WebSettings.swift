@@ -13,9 +13,9 @@ public enum IdentificationMode: String, Codable, Sendable, CaseIterable {
 
     public var label: String {
         switch self {
-        case .offline: return "File names only (nothing leaves this machine)"
-        case .localLLM: return "My own local model"
-        case .tmdb: return "TMDb (sends title and year to themoviedb.org)"
+        case .offline: return Text.s("Nur Dateinamen (nichts verlässt diesen Rechner)", "File names only (nothing leaves this machine)")
+        case .localLLM: return Text.s("Mein eigenes lokales Modell", "My own local model")
+        case .tmdb: return Text.s("TMDb (sendet Titel und Jahr an themoviedb.org)", "TMDb (sends title and year to themoviedb.org)")
         }
     }
 }
@@ -33,8 +33,8 @@ public enum LibraryMode: String, Codable, Sendable, CaseIterable {
 
     public var label: String {
         switch self {
-        case .video: return "Filme und Serien"
-        case .music: return "Musik"
+        case .video: return Text.s("Filme und Serien", "Films and series")
+        case .music: return Text.s("Musik", "Music")
         }
     }
 }
@@ -79,9 +79,9 @@ public struct WebSettings: Codable, Sendable, Equatable {
 
         public var label: String {
             switch self {
-            case .skip: return "Skip the file"
-            case .rename: return "Keep both, add a number"
-            case .replace: return "Replace (the old file goes to the trash)"
+            case .skip: return Text.s("Die Datei überspringen", "Skip the file")
+            case .rename: return Text.s("Beide behalten, Nummer anhängen", "Keep both, add a number")
+            case .replace: return Text.s("Ersetzen (die alte Datei kommt in den Papierkorb)", "Replace (the old file goes to the trash)")
             }
         }
 
@@ -319,10 +319,10 @@ public enum SecretKey: String, Codable, Sendable, CaseIterable {
 
     public var label: String {
         switch self {
-        case .localLLMAPIKey: return "Model server API key"
-        case .jellyfinToken: return "Jellyfin API key"
-        case .tmdbAPIKey: return "TMDb API key"
-        case .remotePassword: return "Server password"
+        case .localLLMAPIKey: return Text.s("API-Key des Modellservers", "Model server API key")
+        case .jellyfinToken: return Text.s("Jellyfin-API-Key", "Jellyfin API key")
+        case .tmdbAPIKey: return Text.s("TMDb-API-Key", "TMDb API key")
+        case .remotePassword: return Text.s("Server-Passwort", "Server password")
         }
     }
 

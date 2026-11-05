@@ -15,6 +15,7 @@ final class RemoteSendTests: XCTestCase {
 
     override func setUpWithError() throws {
         try super.setUpWithError()
+        Text.language = .english
         root = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("mediafin-send-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root.appendingPathComponent("config"),
@@ -23,6 +24,7 @@ final class RemoteSendTests: XCTestCase {
     }
 
     override func tearDownWithError() throws {
+        Text.language = .german
         coordinator = nil
         if let root { try? FileManager.default.removeItem(at: root) }
         try super.tearDownWithError()
@@ -83,7 +85,7 @@ final class RemoteSendTests: XCTestCase {
     func testSendingWithTheServerSwitchedOffDoesNothing() {
         coordinator.executeForTesting(.transferFiles(accepting: [UUID()]))
         XCTAssertEqual(coordinator.snapshot.lastResult,
-                       "Der Server ist in den Einstellungen nicht aktiviert.")
+                       "The server is not switched on in the settings.")
         XCTAssertFalse(coordinator.snapshot.transferring)
     }
 
@@ -94,7 +96,7 @@ final class RemoteSendTests: XCTestCase {
                                          basePath: "relative/path") }
         coordinator.executeForTesting(.transferFiles(accepting: [UUID()]))
         let result = coordinator.snapshot.lastResult ?? ""
-        XCTAssertTrue(result.contains("unvollständig"), result)
+        XCTAssertTrue(result.contains("incomplete"), result)
         XCTAssertTrue(coordinator.snapshot.hasError)
     }
 
@@ -104,7 +106,7 @@ final class RemoteSendTests: XCTestCase {
         enableRemote { $0.authentication = .password }
         coordinator.executeForTesting(.transferFiles(accepting: [UUID()]))
         let result = coordinator.snapshot.lastResult ?? ""
-        XCTAssertTrue(result.contains("kein"), result)
+        XCTAssertTrue(result.contains("no password is stored"), result)
         XCTAssertTrue(coordinator.snapshot.hasError)
     }
 
@@ -121,7 +123,7 @@ final class RemoteSendTests: XCTestCase {
         ])
         coordinator.executeForTesting(.transferFiles(accepting: []))
         XCTAssertEqual(coordinator.snapshot.lastResult,
-                       "Es war nichts angehakt, also wurde nichts gesendet.")
+                       "No files were ticked, so nothing was sent.")
         XCTAssertEqual(coordinator.items.count, 2, "the proposals were consumed anyway")
         XCTAssertTrue(coordinator.logEntries.isEmpty, "something was sent")
     }
@@ -157,7 +159,7 @@ final class RemoteSendTests: XCTestCase {
 
         XCTAssertTrue(coordinator.transferCancelIsArmedForTesting,
                       "a cancel for a send that has not started yet must be remembered")
-        XCTAssertEqual(coordinator.snapshot.lastResult, "Stoppt vor der nächsten Datei.")
+        XCTAssertEqual(coordinator.snapshot.lastResult, "Stopping before the next file.")
 
         gate.signal()
         coordinator.drainForTesting()
@@ -166,7 +168,7 @@ final class RemoteSendTests: XCTestCase {
     func testACancelWhileNothingIsSendingIsNotRemembered() {
         coordinator.submit(.cancelTransfers)
         XCTAssertFalse(coordinator.transferCancelIsArmedForTesting)
-        XCTAssertEqual(coordinator.snapshot.lastResult, "Es läuft keine Übertragung.")
+        XCTAssertEqual(coordinator.snapshot.lastResult, "No transfer is running.")
     }
 
     /// Cancelling a send must not stop a conversion, and the other way round:
@@ -264,7 +266,7 @@ final class RemoteSendTests: XCTestCase {
         coordinator.executeForTesting(.transferFiles(accepting: [a.id, b.id]))
 
         let result = coordinator.snapshot.lastResult ?? ""
-        XCTAssertTrue(result.contains("dieselbe Stelle"), result)
+        XCTAssertTrue(result.contains("same place on the server"), result)
         XCTAssertTrue(result.contains("Dark.S01E01.1080p.mkv"), result)
         XCTAssertTrue(result.contains("Dark.S01E01.720p.mkv"), result)
         XCTAssertTrue(coordinator.snapshot.hasError)

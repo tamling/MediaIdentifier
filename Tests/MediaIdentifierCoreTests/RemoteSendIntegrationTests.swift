@@ -27,6 +27,7 @@ final class RemoteSendIntegrationTests: XCTestCase {
 
     override func setUpWithError() throws {
         try super.setUpWithError()
+        Text.language = .english
         let environment = ProcessInfo.processInfo.environment
         guard let host = environment["MEDIAFIN_SSH_TEST_HOST"], !host.isEmpty else {
             throw XCTSkip("no SSH server configured; set MEDIAFIN_SSH_TEST_HOST")
@@ -62,6 +63,7 @@ final class RemoteSendIntegrationTests: XCTestCase {
     }
 
     override func tearDownWithError() throws {
+        Text.language = .german
         coordinator = nil
         if let root { try? FileManager.default.removeItem(at: root) }
         if let basePath, let runFolder {

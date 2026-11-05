@@ -30,8 +30,17 @@ final class WebSettingsRouteTests: XCTestCase {
     private var box: SettingsBox!
     private var stored: Set<SecretKey> = []
 
+    override func tearDown() {
+        Text.language = .german
+        super.tearDown()
+    }
+
     override func setUp() {
         super.setUp()
+        // These assert the page's English wording, and German is
+        // the default. Said out loud: the language is global, so without
+        // this the suite would pass or fail on the machine's LANG.
+        Text.language = .english
         sink = RecordingSink()
         box = SettingsBox(WebSettings())
         stored = []

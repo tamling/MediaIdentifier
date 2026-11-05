@@ -4,6 +4,20 @@ import XCTest
 /// Tests the history page and the log download.
 final class WebHistoryPageTests: XCTestCase {
 
+    /// These assert the page's English wording, and the interface now has
+    /// two languages with German as the default. Said out loud rather than
+    /// relied on: the language is global, so without this the suite would
+    /// pass or fail on whatever LANG the machine happened to set.
+    override func setUp() {
+        super.setUp()
+        Text.language = .english
+    }
+
+    override func tearDown() {
+        Text.language = .german
+        super.tearDown()
+    }
+
     private let token = "cafecafecafecafecafecafecafecafecafecafecafecafecafecafecafecafe"
 
     private func entry(_ old: String, _ new: String,

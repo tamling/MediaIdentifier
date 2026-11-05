@@ -25,6 +25,7 @@ final class VideoDownloadIntegrationTests: XCTestCase {
 
     override func setUpWithError() throws {
         try super.setUpWithError()
+        Text.language = .english
         let environment = ProcessInfo.processInfo.environment
         guard let url = environment["MEDIAFIN_HTTP_TEST_URL"], !url.isEmpty else {
             throw XCTSkip("no local HTTP server; set MEDIAFIN_HTTP_TEST_URL")
@@ -40,6 +41,7 @@ final class VideoDownloadIntegrationTests: XCTestCase {
     }
 
     override func tearDownWithError() throws {
+        Text.language = .german
         if let root { try? FileManager.default.removeItem(at: root) }
         try super.tearDownWithError()
     }

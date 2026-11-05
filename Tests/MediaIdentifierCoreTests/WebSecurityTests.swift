@@ -5,6 +5,20 @@ import XCTest
 /// response-out, so they run identically on macOS and Linux.
 final class WebSecurityTests: XCTestCase {
 
+    /// These assert the page's English wording, and the interface now has
+    /// two languages with German as the default. Said out loud rather than
+    /// relied on: the language is global, so without this the suite would
+    /// pass or fail on whatever LANG the machine happened to set.
+    override func setUp() {
+        super.setUp()
+        Text.language = .english
+    }
+
+    override func tearDown() {
+        Text.language = .german
+        super.tearDown()
+    }
+
     private let token = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
     private func router(token tokenValue: String? = nil,

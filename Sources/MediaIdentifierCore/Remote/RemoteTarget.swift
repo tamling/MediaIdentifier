@@ -19,8 +19,8 @@ public struct RemoteTarget: Codable, Sendable, Equatable {
 
         public var label: String {
             switch self {
-            case .rsync: return "rsync über SSH (fortsetzbar, mit Fortschritt, empfohlen)"
-            case .sftp: return "SFTP (läuft überall, ohne Fortschrittsanzeige)"
+            case .rsync: return Text.s("rsync über SSH (fortsetzbar, mit Fortschritt, empfohlen)", "rsync over SSH (resumable, with progress, recommended)")
+            case .sftp: return Text.s("SFTP (läuft überall, ohne Fortschrittsanzeige)", "SFTP (works everywhere, no progress)")
             }
         }
 
@@ -50,8 +50,8 @@ public struct RemoteTarget: Codable, Sendable, Equatable {
 
         public var label: String {
             switch self {
-            case .key: return "SSH-Schlüssel (nichts zu speichern)"
-            case .password: return "Passwort"
+            case .key: return Text.s("SSH-Schlüssel (nichts zu speichern)", "SSH key (nothing to store)")
+            case .password: return Text.s("Passwort", "Password")
             }
         }
     }
@@ -176,26 +176,25 @@ public struct RemoteTarget: Codable, Sendable, Equatable {
         guard isEnabled else { return [] }
         var found: [WebSettings.Problem] = []
         if host.isEmpty {
-            found.append(.init(field: "remoteHost", message: "Die Serveradresse fehlt."))
+            found.append(.init(field: "remoteHost", message: Text.s("Die Serveradresse fehlt.", "The server address is missing.")))
         } else if host.contains(" ") || host.contains("/") {
             found.append(.init(field: "remoteHost",
-                               message: "Die Serveradresse darf keine Leerzeichen oder "
-                                   + "Schrägstriche enthalten."))
+                               message: Text.s("Die Serveradresse darf keine Leerzeichen oder Schrägstriche enthalten.", "The server address may not contain spaces or slashes.")))
         }
         if user.isEmpty {
-            found.append(.init(field: "remoteUser", message: "Der Benutzername fehlt."))
+            found.append(.init(field: "remoteUser", message: Text.s("Der Benutzername fehlt.", "The user name is missing.")))
         }
         if basePath.isEmpty {
             found.append(.init(field: "remoteBasePath",
-                               message: "Der Zielpfad auf dem Server fehlt."))
+                               message: Text.s("Der Zielpfad auf dem Server fehlt.", "The target path on the server is missing.")))
         } else if !basePath.hasPrefix("/") {
             // A relative path would land in the login directory, which is
             // rarely where a media library is and is hard to notice.
             found.append(.init(field: "remoteBasePath",
-                               message: "Der Zielpfad muss absolut sein, also mit / beginnen."))
+                               message: Text.s("Der Zielpfad muss absolut sein, also mit / beginnen.", "The target path must be absolute, so it has to start with /.")))
         }
         if !(1...65535).contains(port) {
-            found.append(.init(field: "remotePort", message: "Der Port muss 1–65535 sein."))
+            found.append(.init(field: "remotePort", message: Text.s("Der Port muss 1–65535 sein.", "The port must be between 1 and 65535.")))
         }
         return found
     }
