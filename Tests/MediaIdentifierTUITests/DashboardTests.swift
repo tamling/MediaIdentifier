@@ -160,13 +160,53 @@ final class DashboardTests: XCTestCase {
     /// The window follows the selection instead of the top of the list, or
     /// moving down past the last visible row would scroll nothing.
     func testTheWindowFollowsTheSelection() {
-        XCTAssertEqual(Dashboard.windowStart(selected: 0, count: 100, rows: 10), 0)
-        // Selected in the middle: the window centres on it.
-        XCTAssertEqual(Dashboard.windowStart(selected: 50, count: 100, rows: 10), 45)
-        // At the end it stops, rather than scrolling past into blank rows.
-        XCTAssertEqual(Dashboard.windowStart(selected: 99, count: 100, rows: 10), 90)
-        // A list shorter than the window never scrolls.
-        XCTAssertEqual(Dashboard.windowStart(selected: 2, count: 3, rows: 10), 0)
+        // A list shorter than the window never scrolls and hides nothing.
+        let short = Dashboard.layout(selected: 2, count: 3, rows: 10)
+        XCTAssertEqual(short.first, 0)
+        XCTAssertEqual(short.visible, 3)
+        XCTAssertEqual(short.hidden, 0)
+
+        // At the top, with more below: one row goes to the "… more" line.
+        let top = Dashboard.layout(selected: 0, count: 100, rows: 10)
+        XCTAssertEqual(top.first, 0)
+        XCTAssertEqual(top.visible, 9)
+        XCTAssertEqual(top.hidden, 91)
+    }
+
+    /// The bug this was written for: the "… N more" line took its row from
+    /// the list after the window had been worked out, so the last entry was
+    /// dropped — and at the bottom of the list that entry is the selected
+    /// one. Pressing End scrolled the cursor off the screen.
+    func testTheBottomOfTheListGivesTheIndicatorRowBackToIt() {
+        let bottom = Dashboard.layout(selected: 99, count: 100, rows: 10)
+        XCTAssertEqual(bottom.hidden, 0, "it claimed there was more below the end")
+        XCTAssertEqual(bottom.visible, 10, "a row was wasted on an empty indicator")
+        XCTAssertEqual(bottom.first + bottom.visible, 100)
+        XCTAssertTrue((bottom.first..<(bottom.first + bottom.visible)).contains(99))
+    }
+
+    /// The invariant behind all of it, over every size and position: the
+    /// selection is inside the window, the window is inside the list, and
+    /// the rows drawn plus the rows announced add up to the list.
+    func testTheWindowAlwaysHoldsTheSelection() {
+        for count in [1, 2, 9, 10, 11, 50, 1000] {
+            for rows in [1, 2, 3, 9, 10, 25] {
+                for selected in [0, count / 3, count / 2, count - 2, count - 1] {
+                    guard selected >= 0, selected < count else { continue }
+                    let window = Dashboard.layout(selected: selected, count: count,
+                                                  rows: rows)
+                    let where_ = "count \(count) rows \(rows) selected \(selected)"
+                    XCTAssertGreaterThanOrEqual(window.first, 0, where_)
+                    XCTAssertLessThanOrEqual(window.first + window.visible, count, where_)
+                    XCTAssertLessThanOrEqual(window.visible, rows, where_)
+                    XCTAssertTrue(
+                        (window.first..<(window.first + window.visible)).contains(selected),
+                        where_ + " — the selection was off the screen")
+                    XCTAssertEqual(window.first + window.visible + window.hidden,
+                                   count, where_)
+                }
+            }
+        }
     }
 
     func testTheSelectedRowIsAlwaysVisible() {

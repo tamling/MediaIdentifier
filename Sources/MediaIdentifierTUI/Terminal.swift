@@ -67,8 +67,10 @@ public final class Terminal {
         // Not cfmakeraw: that also clears OPOST, which turns "\n" into a
         // bare line feed and leaves every line starting where the last one
         // ended. The output stays cooked; only the input changes.
-        raw.c_lflag &= ~(UInt32(ECHO) | UInt32(ICANON) | UInt32(ISIG))
-        raw.c_iflag &= ~(UInt32(IXON) | UInt32(ICRNL))
+        // tcflag_t and not a spelled-out width: it is UInt32 on Linux and
+        // UInt on Darwin, and naming either one breaks the other.
+        raw.c_lflag &= ~(tcflag_t(ECHO) | tcflag_t(ICANON) | tcflag_t(ISIG))
+        raw.c_iflag &= ~(tcflag_t(IXON) | tcflag_t(ICRNL))
         withUnsafeMutablePointer(to: &raw.c_cc) { cc in
             cc.withMemoryRebound(to: cc_t.self, capacity: Int(NCCS)) { bytes in
                 bytes[Int(VMIN)] = 0     // read returns with whatever is there

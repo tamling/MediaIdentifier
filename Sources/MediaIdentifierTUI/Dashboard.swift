@@ -159,10 +159,10 @@ public enum Dashboard {
             return out
         }
 
-        let first = windowStart(selected: state.selected, count: state.items.count,
-                                rows: rows)
+        let window = layout(selected: state.selected, count: state.items.count,
+                            rows: rows)
         var out: [Line] = []
-        for index in first..<min(first + rows, state.items.count) {
+        for index in window.first..<(window.first + window.visible) {
             let item = state.items[index]
             let isSelected = index == state.selected
             let tick = item.isAccepted ? "[x]" : "[ ]"
@@ -184,21 +184,46 @@ public enum Dashboard {
             out.append(line)
         }
         // The rest of the list said in one line, so the screen never
-        // pretends the list ends where the window does.
-        if state.items.count > rows {
-            out.removeLast()
-            let hidden = state.items.count - (first + rows - 1)
-            out.append(Line("  … \(hidden) " + Text.s("weitere", "more"), .dim))
+        // pretends the list ends where the window does. `layout` has
+        // already kept a row free for it — the first version took the row
+        // back from the list instead, which ate the last entry, and that
+        // was exactly the entry the selection was on when you pressed End.
+        if window.hidden > 0 {
+            out.append(Line("  … \(window.hidden) " + Text.s("weitere", "more"), .dim))
         }
         while out.count < rows { out.append(Line("")) }
         return out
     }
 
-    /// Keeps the selection inside the window, scrolling only when it leaves.
+    /// Which slice of the list to draw, and how much is left below it.
+    ///
+    /// One function rather than two, because the three numbers constrain
+    /// each other: the "… N more" line needs a row, that row comes out of
+    /// the list, and taking it changes which entries fit — which is how the
+    /// first version managed to scroll the selected row off the bottom
+    /// while believing it had put it in view.
+    static func layout(selected: Int, count: Int,
+                       rows: Int) -> (first: Int, visible: Int, hidden: Int) {
+        guard rows > 0 else { return (0, 0, count) }
+        guard count > rows else { return (0, count, 0) }
+
+        // One row given to the indicator, and the window centred on the
+        // selection so moving down scrolls instead of stopping.
+        let visible = rows - 1
+        let first = min(max(0, selected - visible / 2), count - visible)
+        let hidden = count - (first + visible)
+        guard hidden > 0 else {
+            // At the bottom there is nothing below to announce, so the row
+            // the indicator would have taken goes back to the list.
+            return (count - rows, rows, 0)
+        }
+        return (first, visible, hidden)
+    }
+
+    /// Kept for the settings screen, which has no "more" line of its own.
     static func windowStart(selected: Int, count: Int, rows: Int) -> Int {
         guard count > rows else { return 0 }
-        let half = rows / 2
-        return min(max(0, selected - half), count - rows)
+        return min(max(0, selected - rows / 2), count - rows)
     }
 
     static func message(_ state: State, columns: Int) -> Line {

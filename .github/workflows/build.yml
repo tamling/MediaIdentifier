@@ -376,8 +376,11 @@ jobs:
             echo "FAIL: expected exit 2 with no terminal, got $code"
             exit 1
           }
-          grep -q "not an interactive terminal" tui.log || {
-            echo "FAIL: it did not say why"
+          # --serve rather than the sentence: the message is translated, and
+          # which language CI gets depends on its LANG. The flag it points
+          # at is in both.
+          grep -q -- "--serve" tui.log || {
+            echo "FAIL: it exited 2 without saying what to do instead"
             exit 1
           }
           # And the other direction: options still mean the server.
