@@ -91,7 +91,9 @@ public enum DownloadCommand {
         guard !trimmed.isEmpty else { throw Failure.notAWebAddress("") }
         guard !trimmed.unicodeScalars.contains(where: { $0.value < 0x20 || $0.value == 0x7F })
         else {
-            throw Failure.unsafeInput("Die Adresse enthält ein Steuerzeichen.")
+            throw Failure.unsafeInput(Text.s(
+                "Die Adresse enthält ein Steuerzeichen.",
+                "The address contains a control character."))
         }
         guard let components = URLComponents(string: trimmed),
               let scheme = components.scheme?.lowercased() else {

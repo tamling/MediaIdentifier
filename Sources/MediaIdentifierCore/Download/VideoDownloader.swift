@@ -148,8 +148,11 @@ public final class VideoDownloader {
             let reason = Self.explain(state.errorText)
             if process.terminationStatus == 0 {
                 throw Failure.nothingArrived(reason.isEmpty
-                    ? "yt-dlp lief ohne Fehler durch, hat aber keine Datei abgelegt — "
-                        + "meist heißt das, die Datei war zu groß oder zu lang."
+                    ? Text.s(
+                        "yt-dlp lief ohne Fehler durch, hat aber keine Datei abgelegt — "
+                            + "meist heißt das, die Datei war zu groß oder zu lang.",
+                        "yt-dlp finished without an error but left no file — usually "
+                            + "that means the file was too large or too long.")
                     : reason)
             }
             throw Failure.failed(code: process.terminationStatus, message: reason)
@@ -282,25 +285,32 @@ public final class VideoDownloader {
         let text = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
         let lowered = text.lowercased()
         if lowered.contains("unsupported url") || lowered.contains("is not a valid url") {
-            return "Mit dieser Adresse kann yt-dlp nichts anfangen. " + text
+            return Text.s("Mit dieser Adresse kann yt-dlp nichts anfangen. ",
+                          "yt-dlp cannot do anything with this address. ") + text
         }
         if lowered.contains("video unavailable") || lowered.contains("private video") {
-            return "Das Video ist nicht (mehr) öffentlich abrufbar. " + text
+            return Text.s("Das Video ist nicht (mehr) öffentlich abrufbar. ",
+                          "The video is not (or no longer) publicly available. ") + text
         }
         if lowered.contains("sign in") || lowered.contains("age") && lowered.contains("confirm") {
-            return "Die Seite verlangt eine Anmeldung. " + text
+            return Text.s("Die Seite verlangt eine Anmeldung. ",
+                          "The site demands a sign-in. ") + text
         }
         if lowered.contains("http error 404") {
-            return "Unter dieser Adresse liegt nichts (404). " + text
+            return Text.s("Unter dieser Adresse liegt nichts (404). ",
+                          "There is nothing at this address (404). ") + text
         }
         if lowered.contains("name or service not known")
             || lowered.contains("failed to resolve") {
-            return "Der Rechnername ließ sich nicht auflösen — Tippfehler oder kein "
-                + "Netz. " + text
+            return Text.s(
+                "Der Rechnername ließ sich nicht auflösen — Tippfehler oder kein Netz. ",
+                "The host name could not be resolved — a typo, or no network. ") + text
         }
         if lowered.contains("ffmpeg") && lowered.contains("not found") {
-            return "ffmpeg fehlt, deshalb konnten Bild und Ton nicht zusammengefügt "
-                + "werden: sudo apt install ffmpeg. " + text
+            return Text.s(
+                "ffmpeg fehlt, deshalb konnten Bild und Ton nicht zusammengefügt werden: ",
+                "ffmpeg is missing, so video and audio could not be merged: ")
+                + "sudo apt install ffmpeg. " + text
         }
         return text
     }

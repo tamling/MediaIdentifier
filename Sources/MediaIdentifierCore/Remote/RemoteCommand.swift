@@ -40,9 +40,11 @@ public enum RemoteCommand {
             case .toolMissing(let name):
                 return "\(name) wurde nicht gefunden. Bitte installieren: sudo apt install \(name)"
             case .notConfigured(let what):
-                return "Der Server ist nicht vollständig eingerichtet: \(what)"
+                return Text.s("Der Server ist nicht vollständig eingerichtet: \(what)",
+                              "The server is not fully set up: \(what)")
             case .unsafePath(let what):
-                return "Nicht übertragbar: \(what)"
+                return Text.s("Nicht übertragbar: \(what)",
+                              "Cannot be transferred: \(what)")
             }
         }
     }
@@ -65,8 +67,11 @@ public enum RemoteCommand {
         guard !value.unicodeScalars.contains(where: {
             $0.value < 0x20 || $0.value == 0x7F
         }) else {
-            throw Failure.unsafePath("\(what) enthält ein Steuerzeichen (z. B. einen "
-                + "Zeilenumbruch). Bitte umbenennen.")
+            throw Failure.unsafePath(Text.s(
+                "\(what) enthält ein Steuerzeichen (z. B. einen Zeilenumbruch). "
+                    + "Bitte umbenennen.",
+                "\(what) contains a control character (a newline, for example). "
+                    + "Please rename it."))
         }
         return value
     }
@@ -149,12 +154,16 @@ public enum RemoteCommand {
     /// checked anywhere: `problems()` looks at the host for spaces and
     /// slashes and at the user only for emptiness.
     static func checkDestination(_ target: RemoteTarget) throws {
-        for (value, what) in [(target.user, "Der Benutzername"),
-                              (target.host, "Die Serveradresse")] {
+        for (value, what) in [(target.user, Text.s("Der Benutzername", "The user name")),
+                              (target.host, Text.s("Die Serveradresse",
+                                                   "The server address"))] {
             _ = try rejectingSplittableCharacters(value, what: what)
             guard !value.hasPrefix("-") else {
-                throw Failure.unsafePath("\(what) darf nicht mit einem Bindestrich "
-                    + "beginnen: ssh würde das als Option lesen.")
+                throw Failure.unsafePath(Text.s(
+                    "\(what) darf nicht mit einem Bindestrich beginnen: ssh würde das "
+                        + "als Option lesen.",
+                    "\(what) may not start with a hyphen: ssh would read that as an "
+                        + "option."))
             }
         }
     }
@@ -248,13 +257,17 @@ public enum RemoteCommand {
         // with a space would break here and nowhere else.
         // Everything that goes into the -e string is split on spaces by
         // rsync, so each piece has to survive that intact.
-        _ = try rejectingSplittableCharacters(sshPath, what: "Der Pfad zu ssh")
+        _ = try rejectingSplittableCharacters(
+            sshPath, what: Text.s("Der Pfad zu ssh", "The path to ssh"))
         if target.authentication == .key, !target.identityFile.isEmpty {
-            _ = try rejectingSplittableCharacters(target.identityFile,
-                                                  what: "Die Schlüsseldatei")
+            _ = try rejectingSplittableCharacters(
+                target.identityFile,
+                what: Text.s("Die Schlüsseldatei", "The key file"))
         }
-        _ = try rejectingControlCharacters(localFile.path, what: "Der Dateiname")
-        _ = try rejectingControlCharacters(destination, what: "Der Zielpfad")
+        _ = try rejectingControlCharacters(
+            localFile.path, what: Text.s("Der Dateiname", "The file name"))
+        _ = try rejectingControlCharacters(
+            destination, what: Text.s("Der Zielpfad", "The target path"))
 
         var sshCommand = ([sshPath, "-p", String(target.port)] + sshOptions(target))
             .joined(separator: " ")

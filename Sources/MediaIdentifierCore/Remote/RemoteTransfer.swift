@@ -33,17 +33,25 @@ public final class RemoteTransfer {
         public var description: String {
             switch self {
             case .toolsMissing(let names):
-                return "Fehlende Programme: \(names.joined(separator: ", ")). "
-                    + "Installieren mit: sudo apt install \(names.joined(separator: " "))"
+                return Text.s("Fehlende Programme: \(names.joined(separator: ", ")). "
+                                  + "Installieren mit: ",
+                              "Missing programs: \(names.joined(separator: ", ")). "
+                                  + "Install with: ")
+                    + "sudo apt install \(names.joined(separator: " "))"
             case let .failed(code, message):
                 return message.isEmpty
-                    ? "Die Übertragung schlug fehl (Code \(code))."
-                    : "Die Übertragung schlug fehl (Code \(code)): \(message)"
+                    ? Text.s("Die Übertragung schlug fehl (Code \(code)).",
+                             "The transfer failed (code \(code)).")
+                    : Text.s("Die Übertragung schlug fehl (Code \(code)): \(message)",
+                             "The transfer failed (code \(code)): \(message)")
             case .cancelled:
-                return "Die Übertragung wurde abgebrochen."
+                return Text.s("Die Übertragung wurde abgebrochen.",
+                              "The transfer was cancelled.")
             case .alreadyThere(let path):
-                return "Auf dem Server liegt bereits \(path); laut Einstellung wird "
-                    + "übersprungen."
+                return Text.s(
+                    "Auf dem Server liegt bereits \(path); laut Einstellung wird "
+                        + "übersprungen.",
+                    "\(path) is already on the server; the setting says skip.")
             }
         }
     }
@@ -203,10 +211,14 @@ public final class RemoteTransfer {
         // a process each time.
         if target.transport == .rsync, let rsync = tools.rsync,
            let version = Self.rsyncVersion(at: rsync), version < (3, 2, 3) {
-            return (false, "rsync \(version.0).\(version.1).\(version.2) ist zu alt: "
-                        + "--mkpath gibt es erst ab 3.2.3, und ohne das können die "
-                        + "Zielordner nicht angelegt werden. Entweder rsync aktualisieren "
-                        + "oder als Übertragung SFTP wählen.")
+            return (false, Text.s(
+                "rsync \(version.0).\(version.1).\(version.2) ist zu alt: --mkpath gibt "
+                    + "es erst ab 3.2.3, und ohne das können die Zielordner nicht angelegt "
+                    + "werden. Entweder rsync aktualisieren oder als Übertragung SFTP "
+                    + "wählen.",
+                "rsync \(version.0).\(version.1).\(version.2) is too old: --mkpath only "
+                    + "exists from 3.2.3, and without it the target folders cannot be "
+                    + "created. Either update rsync or choose SFTP as the transport."))
         }
         let invocation: RemoteCommand.Invocation
         do {
@@ -239,7 +251,8 @@ public final class RemoteTransfer {
         do {
             try process.run()
         } catch {
-            return (false, "\(executable) ließ sich nicht starten: \(error)")
+            return (false, Text.s("\(executable) ließ sich nicht starten: \(error)",
+                                  "\(executable) could not be started: \(error)"))
         }
         // Bounded. ConnectTimeout only covers the TCP handshake: point this
         // at a NAS whose target path sits on a hung NFS mount or a
@@ -251,10 +264,14 @@ public final class RemoteTransfer {
             process.terminate()
             _ = Self.wait(for: process, upTo: 2)
             if process.isRunning { kill(process.processIdentifier, SIGKILL) }
-            return (false, "Keine Antwort innerhalb von \(Int(Self.probeTimeout)) Sekunden. "
-                        + "Der Server ist erreichbar, aber \(target.basePath) antwortet "
-                        + "nicht — ein hängender Netzlaufwerks-Mount oder eine Festplatte "
-                        + "im Standby sehen genau so aus.")
+            return (false, Text.s(
+                "Keine Antwort innerhalb von \(Int(Self.probeTimeout)) Sekunden. Der "
+                    + "Server ist erreichbar, aber \(target.basePath) antwortet nicht — "
+                    + "ein hängender Netzlaufwerks-Mount oder eine Festplatte im Standby "
+                    + "sehen genau so aus.",
+                "No answer within \(Int(Self.probeTimeout)) seconds. The server is "
+                    + "reachable, but \(target.basePath) does not answer — a hung network "
+                    + "mount or a spun-down disk look exactly like this."))
         }
         let errorData = errPipe.fileHandleForReading.readDataToEndOfFile()
 
@@ -378,21 +395,32 @@ public final class RemoteTransfer {
         let text = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
         let lowered = text.lowercased()
         if lowered.contains("host key verification failed") {
-            return "Der Server ist unbekannt oder sein Schlüssel hat sich geändert. "
-                + "Einmal von Hand verbinden und den Fingerabdruck prüfen: "
-                + "ssh BENUTZER@SERVER — danach geht es hier automatisch. " + text
+            return Text.s(
+                "Der Server ist unbekannt oder sein Schlüssel hat sich geändert. Einmal "
+                    + "von Hand verbinden und den Fingerabdruck prüfen: "
+                    + "ssh BENUTZER@SERVER — danach geht es hier automatisch. ",
+                "The server is unknown or its key has changed. Connect once by hand and "
+                    + "check the fingerprint: ssh USER@SERVER — after that this works "
+                    + "on its own. ") + text
         }
         if lowered.contains("unknown option") && lowered.contains("mkpath") {
-            return "Das installierte rsync ist zu alt: --mkpath gibt es erst ab Version "
-                + "3.2.3. Entweder rsync aktualisieren oder als Übertragung SFTP "
-                + "wählen. " + text
+            return Text.s(
+                "Das installierte rsync ist zu alt: --mkpath gibt es erst ab Version "
+                    + "3.2.3. Entweder rsync aktualisieren oder als Übertragung SFTP "
+                    + "wählen. ",
+                "The installed rsync is too old: --mkpath only exists from version 3.2.3. "
+                    + "Either update rsync or choose SFTP as the transport. ") + text
         }
         if lowered.contains("permission denied") {
-            return "Anmeldung abgelehnt — Benutzername, Schlüssel oder Passwort stimmen nicht. "
-                + text
+            return Text.s(
+                "Anmeldung abgelehnt — Benutzername, Schlüssel oder Passwort stimmen "
+                    + "nicht. ",
+                "Login refused — the user name, key or password is wrong. ") + text
         }
         if lowered.contains("no such file or directory") || lowered.contains("failure") {
-            return "Der Zielpfad existiert nicht oder darf nicht beschrieben werden. " + text
+            return Text.s(
+                "Der Zielpfad existiert nicht oder darf nicht beschrieben werden. ",
+                "The target path does not exist or cannot be written to. ") + text
         }
         return text
     }

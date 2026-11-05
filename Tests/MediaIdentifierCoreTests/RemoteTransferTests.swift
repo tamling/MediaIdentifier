@@ -12,6 +12,20 @@ import XCTest
 /// real sshd and asserts that progress was actually observed.
 final class RemoteTransferTests: XCTestCase {
 
+    /// These assert the German wording of `explain`. Nothing here builds a
+    /// coordinator, so without this the language would come from the
+    /// machine's LANG — German on a Mac with none set, English in the CI
+    /// container, which sets C.UTF-8.
+    override func setUp() {
+        super.setUp()
+        Text.language = .german
+    }
+
+    override func tearDown() {
+        Text.language = .german
+        super.tearDown()
+    }
+
     // MARK: Progress
 
     func testReadsAPercentageFromAnRsyncLine() {
