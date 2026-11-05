@@ -30,6 +30,7 @@ public final class TUIApp {
         case fetch
         case openHistory
         case openConvert
+        case checkEverything
         case nothing
     }
 
@@ -62,6 +63,10 @@ public final class TUIApp {
         // just gone wrong is exactly when you want it.
         case .character("h"): return .openHistory
         case .character("v"): return busy ? .nothing : .openConvert
+        // Checking is what turns an amber "set up, but not checked yet"
+        // into a real answer, so it has a key of its own rather than
+        // living only beside the field it is about.
+        case .character("p"): return busy ? .nothing : .checkEverything
         case .up, .character("k"): return .move(-1)
         case .down, .character("j"): return .move(1)
         case .pageUp: return .move(-10)
@@ -195,6 +200,8 @@ public final class TUIApp {
             runHistory()
         case .openConvert:
             runConvert()
+        case .checkEverything:
+            coordinator.submit(.checkEverything)
         case .nothing:
             break
         }
@@ -310,6 +317,17 @@ public final class TUIApp {
             switch screen.handle(key) {
             case .none:
                 break
+            case .test(let command):
+                // Saved first, always: testing an address the engine has
+                // not been given yet tests the old one and reports that it
+                // works, which is the most misleading answer available.
+                coordinator.submit(.saveSettings(screen.draft))
+                screen.markSaved(coordinator.settings,
+                                 secrets: coordinator.configuredSecrets)
+                coordinator.submit(command)
+                // The answer lands in the dashboard's message line and in
+                // the traffic light, so the screen steps aside for it.
+                leaving = true
             case .save:
                 coordinator.submit(.saveSettings(screen.draft))
                 // Read back rather than assumed: the engine normalises what

@@ -274,3 +274,134 @@ final class SettingsScreenTests: XCTestCase {
         XCTAssertTrue(state.render(size: size)[0].plain.contains("unsaved"))
     }
 }
+
+/// Testing a connection, and saying what a field does.
+///
+/// Both came out of the first five minutes of somebody using it: "what is
+/// h/l cycle?" and "how do I test the connection?". The first was a label
+/// that explained nothing, the second was missing outright.
+final class SettingsTestingTests: XCTestCase {
+
+    override func setUp() {
+        super.setUp()
+        Text.language = .english
+    }
+
+    override func tearDown() {
+        Text.language = .german
+        super.tearDown()
+    }
+
+    private let size = ScreenSize(columns: 100, rows: 30)
+
+    private func screen() -> SettingsScreen {
+        SettingsScreen(settings: WebSettings(), secrets: [])
+    }
+
+    private func moved(to id: String) -> SettingsScreen {
+        var state = screen()
+        for _ in 0..<(state.fields.count * 2) where state.fields[state.selected].id != id {
+            _ = state.handle(.down)
+        }
+        return state
+    }
+
+    // MARK: Which field tests what
+
+    func testEachSectionKnowsWhatItWouldTest() {
+        XCTAssertEqual(SettingsForm.test(for: "localLLMBaseURL"),
+                       .testLocalLLMConnection)
+        XCTAssertEqual(SettingsForm.test(for: "localLLMModel"),
+                       .testLocalLLMConnection)
+        XCTAssertEqual(SettingsForm.test(for: SettingsForm.secretField(.localLLMAPIKey)),
+                       .testLocalLLMConnection)
+        XCTAssertEqual(SettingsForm.test(for: "jellyfinBaseURL"),
+                       .testJellyfinConnection)
+        XCTAssertEqual(SettingsForm.test(for: "remoteHost"), .testRemoteConnection)
+        XCTAssertEqual(SettingsForm.test(for: SettingsForm.secretField(.remotePassword)),
+                       .testRemoteConnection)
+    }
+
+    /// A folder has nothing to connect to, so [t] offers nothing there
+    /// rather than testing whatever was last touched.
+    func testAFieldWithNothingToTestOffersNothing() {
+        XCTAssertNil(SettingsForm.test(for: "sourceFolder"))
+        XCTAssertNil(SettingsForm.test(for: "scheduleTime"))
+        XCTAssertNil(SettingsForm.testName(for: "moviesFolder"))
+    }
+
+    /// Saving has to happen first, or the test asks the engine about the
+    /// address it had before — and a passing test on the old address is the
+    /// most misleading answer available.
+    func testTestingAsksToSaveTheTypedAddressWithIt() {
+        var state = moved(to: "remoteHost")
+        _ = state.handle(.enter)
+        for character in "nas.local" { _ = state.handle(.character(character)) }
+        _ = state.handle(.enter)
+        XCTAssertEqual(state.draft.remote.host, "nas.local")
+        XCTAssertEqual(state.handle(.character("t")), .test(.testRemoteConnection))
+    }
+
+    func testTIsALetterWhileTyping() {
+        var state = moved(to: "remoteHost")
+        _ = state.handle(.enter)
+        XCTAssertEqual(state.handle(.character("t")), .none)
+        _ = state.handle(.enter)
+        XCTAssertEqual(state.draft.remote.host, "t")
+    }
+
+    // MARK: The arrows that were missing
+
+    func testArrowsStepAChoiceAndNotOnlyTheViKeys() {
+        var left = moved(to: "libraryMode")
+        let start = left.draft.libraryMode
+        _ = left.handle(.right)
+        XCTAssertNotEqual(left.draft.libraryMode, start, "→ did nothing")
+        _ = left.handle(.left)
+        XCTAssertEqual(left.draft.libraryMode, start, "← did not come back")
+    }
+
+    // MARK: The row that describes the field
+
+    /// It used to say "h/l cycle" on every field, which says neither what
+    /// is cycled nor that it only applies to a choice.
+    func testTheRowSaysWhatThisFieldDoes() {
+        let text = moved(to: "sourceFolder").render(size: size).last!.plain
+        XCTAssertTrue(text.contains("edit"), text)
+        XCTAssertFalse(text.contains("of "), text)
+
+        let toggle = moved(to: "watchSourceFolder").render(size: size).last!.plain
+        XCTAssertTrue(toggle.contains("on/off"), toggle)
+
+        // A choice says how many there are, so it is clear there is a list.
+        let choice = moved(to: "libraryMode").render(size: size).last!.plain
+        XCTAssertTrue(choice.contains("←→"), choice)
+        XCTAssertTrue(choice.contains("of \(LibraryMode.allCases.count)"), choice)
+
+        let secret = moved(to: SettingsForm.secretField(.remotePassword))
+            .render(size: size).last!.plain
+        XCTAssertTrue(secret.contains("enter"), secret)
+    }
+
+    /// And it offers the test only where there is one.
+    func testTheRowOffersTheTestOnlyWhereThereIsOne() {
+        let server = moved(to: "remoteHost").render(size: size).last!.plain
+        XCTAssertTrue(server.contains("test server"), server)
+
+        let folder = moved(to: "sourceFolder").render(size: size).last!.plain
+        XCTAssertFalse(folder.contains("test"), folder)
+    }
+
+    func testTheRowStillFitsEveryWidth() {
+        for id in ["sourceFolder", "libraryMode", "remoteHost", "watchSourceFolder"] {
+            let state = moved(to: id)
+            for columns in [40, 60, 80, 120] {
+                let size = ScreenSize(columns: columns, rows: 30)
+                for line in state.render(size: size) {
+                    XCTAssertLessThanOrEqual(line.width, columns,
+                                             "\(id) at \(columns): \"\(line.plain)\"")
+                }
+            }
+        }
+    }
+}

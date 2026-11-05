@@ -317,6 +317,36 @@ public enum SettingsForm {
         return out
     }
 
+    /// Which connection a field belongs to, so the cursor's position can
+    /// say what [t] would test.
+    ///
+    /// Testing lives here rather than on a screen of its own because the
+    /// moment you want it is the moment you have just typed the address —
+    /// and because without it the traffic light stays amber for ever:
+    /// "set up, but not checked yet" only goes away when something checks.
+    public static func test(for field: String) -> WebCommand? {
+        if field.hasPrefix("localLLM") || field == secretField(.localLLMAPIKey) {
+            return .testLocalLLMConnection
+        }
+        if field.hasPrefix("jellyfin") || field == secretField(.jellyfinToken) {
+            return .testJellyfinConnection
+        }
+        if field.hasPrefix("remote") || field == secretField(.remotePassword) {
+            return .testRemoteConnection
+        }
+        return nil
+    }
+
+    /// What [t] would test, named, for the menu row.
+    public static func testName(for field: String) -> String? {
+        switch test(for: field) {
+        case .testLocalLLMConnection: return Text.s("Modellserver", "model server")
+        case .testJellyfinConnection: return "Jellyfin"
+        case .testRemoteConnection: return Text.s("Server", "server")
+        default: return nil
+        }
+    }
+
     /// The field id a secret is listed under. Built from the raw value and
     /// not from the case name, because the two differ here —
     /// `.localLLMAPIKey` is "local-llm-api-key" — and a mismatch would make

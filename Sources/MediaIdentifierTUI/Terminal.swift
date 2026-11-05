@@ -20,7 +20,7 @@ public final class Terminal {
     /// What a key press was.
     public enum Key: Equatable {
         case character(Character)
-        case up, down, pageUp, pageDown, home, end
+        case up, down, left, right, pageUp, pageDown, home, end
         case enter, escape, backspace
         /// The terminal was resized; the caller should measure and redraw.
         case resized
@@ -191,6 +191,10 @@ public final class Terminal {
         switch third {
         case 0x41: return .up          // A
         case 0x42: return .down        // B
+        // C and D were missing, so the arrow keys anybody tries first on a
+        // list of choices did nothing at all.
+        case 0x43: return .right       // C
+        case 0x44: return .left        // D
         case 0x48: return .home        // H
         case 0x46: return .end         // F
         case 0x35, 0x36:               // 5~ / 6~, page up and page down

@@ -14,6 +14,10 @@ public struct SettingsScreen {
     public enum Effect: Equatable {
         case none
         case save
+        /// Save, then test the connection the cursor is standing in.
+        /// Saving first because testing an address the engine has not been
+        /// given yet would test the old one and say it worked.
+        case test(WebCommand)
         /// Leave without saving. True when there are unsaved changes, which
         /// the caller turns into a confirmation rather than losing them.
         case leave(unsaved: Bool)
@@ -128,10 +132,17 @@ public struct SettingsScreen {
             if field.kind == .toggle {
                 draft = SettingsForm.toggling(field.id, in: draft)
             }
-        case .character("h"):
+        // Arrows first, h/l as the vi alias. The arrows were missing
+        // entirely, so the keys anybody tries on a list of choices did
+        // nothing and the row said only "cycle", which explained neither.
+        case .left, .character("h"):
             draft = SettingsForm.cycling(all[selected].id, by: -1, in: draft)
-        case .character("l"):
+        case .right, .character("l"):
             draft = SettingsForm.cycling(all[selected].id, by: 1, in: draft)
+        case .character("t"):
+            if let command = SettingsForm.test(for: all[selected].id) {
+                return .test(command)
+            }
         default:
             break
         }
@@ -205,6 +216,12 @@ public struct SettingsScreen {
         return lines.map { $0.truncated(to: size.columns) }
     }
 
+    /// The menu row, describing the field the cursor is on.
+    ///
+    /// It used to list every key the screen has, including "h/l cycle",
+    /// which says neither what is cycled nor that it only applies to a
+    /// choice. A row that describes *this* field is shorter and answers the
+    /// question actually being asked.
     func menu() -> Line {
         if editing != nil {
             return Line([
@@ -213,13 +230,29 @@ public struct SettingsScreen {
                 Segment("esc", .accent), Segment(" " + Text.s("verwerfen", "discard")),
             ])
         }
-        let entries: [(String, String)] = [
-            ("↑↓", Text.s("wählen", "move")),
-            ("⏎", Text.s("ändern", "change")),
-            ("h/l", Text.s("umschalten", "cycle")),
-            ("S", Text.s("speichern", "save")),
-            ("q", Text.s("zurück", "back")),
-        ]
+        let all = fields
+        let field = all.indices.contains(selected) ? all[selected] : nil
+        var entries: [(String, String)] = [("↑↓", Text.s("wählen", "move"))]
+        switch field?.kind {
+        case .text:
+            entries.append(("⏎", Text.s("bearbeiten", "edit")))
+        case .secret:
+            entries.append(("⏎", Text.s("eingeben", "enter")))
+        case .toggle:
+            entries.append(("␣", Text.s("an/aus", "on/off")))
+        case .choice(let values):
+            // The number of values, so it is clear there is a list and how
+            // long it is, rather than the word "cycle".
+            entries.append(("←→", Text.s("von \(values.count) wählen",
+                                         "of \(values.count)")))
+        case .section, nil:
+            break
+        }
+        if let field, let what = SettingsForm.testName(for: field.id) {
+            entries.append(("t", Text.s("\(what) testen", "test \(what)")))
+        }
+        entries.append(("S", Text.s("speichern", "save")))
+        entries.append(("q", Text.s("zurück", "back")))
         var segments: [Segment] = []
         for (key, label) in entries {
             if !segments.isEmpty { segments.append(Segment("  ", .dim)) }
