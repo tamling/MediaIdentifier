@@ -188,7 +188,9 @@ public enum Dashboard {
         // already kept a row free for it — the first version took the row
         // back from the list instead, which ate the last entry, and that
         // was exactly the entry the selection was on when you pressed End.
-        if window.hidden > 0 {
+        // Only when a row was kept back for it. At one row there is none,
+        // and appending anyway would make the frame taller than the screen.
+        if window.hidden > 0, window.visible < rows {
             out.append(Line("  … \(window.hidden) " + Text.s("weitere", "more"), .dim))
         }
         while out.count < rows { out.append(Line("")) }
@@ -204,12 +206,20 @@ public enum Dashboard {
     /// while believing it had put it in view.
     static func layout(selected: Int, count: Int,
                        rows: Int) -> (first: Int, visible: Int, hidden: Int) {
-        guard rows > 0 else { return (0, 0, count) }
+        guard rows > 0, count > 0 else { return (0, 0, count) }
         guard count > rows else { return (0, count, 0) }
 
         // One row given to the indicator, and the window centred on the
         // selection so moving down scrolls instead of stopping.
-        let visible = rows - 1
+        //
+        // Except when there is only one row to give: then it goes to the
+        // list, because an entry is worth more than a count of the entries
+        // you cannot see. The first version subtracted unconditionally, so
+        // a one-row list had a window zero rows tall and the selection
+        // could never be inside it — which is what the invariant test
+        // reported, at every list length, before anybody had a terminal
+        // that short.
+        let visible = rows > 1 ? rows - 1 : 1
         let first = min(max(0, selected - visible / 2), count - visible)
         let hidden = count - (first + visible)
         guard hidden > 0 else {

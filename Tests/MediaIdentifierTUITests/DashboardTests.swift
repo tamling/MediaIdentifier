@@ -237,6 +237,10 @@ final class DashboardTests: XCTestCase {
                         where_ + " — the selection was off the screen")
                     XCTAssertEqual(window.first + window.visible + window.hidden,
                                    count, where_)
+                    // Never nothing: a window with no rows in it cannot
+                    // hold a selection, which is how the one-row case got
+                    // through the first time.
+                    XCTAssertGreaterThan(window.visible, 0, where_)
                 }
             }
         }
