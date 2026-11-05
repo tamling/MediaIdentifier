@@ -442,40 +442,70 @@ jobs:
           # edge. Resizing, maximising and fullscreen could none of them help,
           # because there was no shorter size for the window to take.
           #
-          # 1024x600 is a netbook: the smallest screen anybody runs a desktop
-          # on, and under Xvfb there are no panels, so the whole 600 is the
-          # work area.
-          timeout 90 xvfb-run -a --server-args="-screen 0 1024x600x24" \
-            .build/release/mediafin-gtk --demo --screenshot small.png | tee small.log
-          file small.png
-          dims="$(file small.png | sed -n 's/.*PNG image data, \([0-9]*\) x \([0-9]*\).*/\1 \2/p')"
-          test -n "$dims" || { echo "FAIL: could not read the PNG size"; exit 1; }
-          w="${dims% *}"
-          h="${dims#* }"
-          echo "the window on a 1024x600 screen: ${w}x${h}"
-          test "$h" -le 600 || {
-            echo "FAIL: ${h}px tall on a 600px screen - the bottom cannot be reached"
-            exit 1
-          }
-          test "$w" -le 1024 || {
-            echo "FAIL: ${w}px wide on a 1024px screen"
-            exit 1
-          }
-          # Fitting by collapsing to nothing is not fitting. A drawn window
-          # has never been under 12 kB.
-          bytes="$(stat -c %s small.png)"
-          test "$bytes" -gt 12000 || {
-            echo "FAIL: $bytes bytes - it fits because it rendered blank"
-            exit 1
-          }
-          echo "ok: ${w}x${h}, ${bytes} bytes drawn"
+          # Two screens, because they catch different faults:
+          #
+          #   1024x600 is a netbook, the smallest screen anybody runs a
+          #   desktop on. It checks the OPENING size: what the user is given
+          #   on launch has to fit. The first version of this fix passed
+          #   everything except this and came out 624 pixels tall, because
+          #   set_default_size sets the content size and the measurement
+          #   includes the header bar.
+          #
+          #   1024x420 is not a real screen. It checks the MINIMUM size: the
+          #   window can only be this short if the column really does scroll,
+          #   so this is the line that fails if anyone puts a tall floor back
+          #   under the list.
+          #
+          # Under Xvfb there are no panels, so the whole screen is the work
+          # area and the window may use all of it.
+          failed=0
+          for size in 1024x600 1024x420; do
+            sw="${size%x*}"
+            sh="${size#*x}"
+            out="window-${size}.png"
+            timeout 90 xvfb-run -a --server-args="-screen 0 ${sw}x${sh}x24" \
+              .build/release/mediafin-gtk --demo --screenshot "$out" > "shot-${size}.log" 2>&1 || {
+                echo "FAIL: $size - mediafin-gtk did not complete"
+                cat "shot-${size}.log"
+                failed=1
+                continue
+              }
+            dims="$(file "$out" | sed -n 's/.*PNG image data, \([0-9]*\) x \([0-9]*\).*/\1 \2/p')"
+            if [ -z "$dims" ]; then
+              echo "FAIL: $size - could not read the PNG size"
+              failed=1
+              continue
+            fi
+            w="${dims% *}"
+            h="${dims#* }"
+            bytes="$(stat -c %s "$out")"
+            echo "screen ${sw}x${sh} -> window ${w}x${h}, ${bytes} bytes"
+            [ "$h" -le "$sh" ] || {
+              echo "  FAIL: ${h}px tall on a ${sh}px screen - the bottom cannot be reached"
+              failed=1
+            }
+            [ "$w" -le "$sw" ] || {
+              echo "  FAIL: ${w}px wide on a ${sw}px screen"
+              failed=1
+            }
+            # Fitting by collapsing to nothing is not fitting. 8 kB rather
+            # than the 12 the full-size capture uses: a 420-pixel window
+            # draws a third of the area, while a blank one compresses to a
+            # couple of kB whatever its size. The real figure is printed
+            # above, so the floor can be raised once it is known.
+            [ "$bytes" -gt 8000 ] || {
+              echo "  FAIL: ${bytes} bytes - it fits because it rendered blank"
+              failed=1
+            }
+          done
+          exit $failed
       - name: Emit the small-screen window as base64
         shell: bash
         run: |
           set -euo pipefail
-          echo "--- BEGIN small.png base64 ---"
-          base64 -w 120 small.png
-          echo "--- END small.png base64 ---"
+          echo "--- BEGIN window-1024x600.png base64 ---"
+          base64 -w 120 window-1024x600.png
+          echo "--- END window-1024x600.png base64 ---"
       - name: Emit the screenshot as base64
         shell: bash
         run: |
@@ -490,7 +520,8 @@ jobs:
           name: gtk-window-screenshot
           path: |
             window.png
-            small.png
+            window-1024x600.png
+            window-1024x420.png
           if-no-files-found: warn
       - name: Refuse to hang without a display
         shell: bash

@@ -466,7 +466,21 @@ final class AppWindow {
     /// The monitor is asked for its *work* area, not its resolution: that is
     /// the part left over after the desktop's panels, which is what a window
     /// can actually occupy.
+    ///
+    /// The room left for the decoration is subtracted and not scaled, because
+    /// it does not scale: this sets the size of the window's *content*, while
+    /// the window on screen is that plus its header bar and borders. Measured
+    /// under Xvfb, that is a flat 60 pixels of height and 10 of width at both
+    /// 900 and 600 pixels of screen — so a percentage of the work area
+    /// overshoots by a constant, which is how the first attempt at this came
+    /// out 624 pixels tall on a 600-pixel screen.
     static func openingSize() -> (width: Int32, height: Int32) {
+        // What the header bar and the client-side borders add on top of the
+        // content size, with room to spare: being a little smaller than the
+        // screen costs nothing, being larger hides the bottom of the window.
+        let decorationWidth: Int32 = 24
+        let decorationHeight: Int32 = 88
+
         var width: Int32 = 1180
         var height: Int32 = 740
         if let display = gdk_display_get_default(),
@@ -475,13 +489,15 @@ final class AppWindow {
             var area = GdkRectangle()
             gdk_monitor_get_workarea(monitor, &area)
             if area.width > 0, area.height > 0 {
-                width = min(width, Int32(Double(area.width) * 0.94))
-                height = min(height, Int32(Double(area.height) * 0.94))
+                width = min(width, area.width - decorationWidth)
+                height = min(height, area.height - decorationHeight)
             }
         }
         // A floor as well as a ceiling: a misreported work area of a few
-        // pixels must not open a window nobody can use.
-        return (max(600, width), max(380, height))
+        // pixels must not open a window nobody can use. The window can be
+        // smaller than this if the screen is — the column scrolls, so there
+        // is no height it cannot be given.
+        return (max(480, width), max(320, height))
     }
 
     /// Fullscreen, and back again.
