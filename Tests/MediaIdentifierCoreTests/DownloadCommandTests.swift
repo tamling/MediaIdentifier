@@ -258,15 +258,26 @@ final class DownloadCommandTests: XCTestCase {
 
     // MARK: Error wording
 
+    /// Both languages, because each explanation is two separate strings and
+    /// either could be the one left behind.
     func testTheCommonFailuresSayWhatToDo() {
+        Text.language = .english
         XCTAssertTrue(VideoDownloader.explain("ERROR: Unsupported URL: http://x/y")
-            .contains("nichts anfangen"))
+            .contains("cannot do anything with this address"))
         XCTAssertTrue(VideoDownloader.explain("ERROR: unable to download: HTTP Error 404")
             .contains("404"))
         XCTAssertTrue(VideoDownloader.explain(
+            "ERROR: [Errno -2] Name or service not known").contains("could not be resolved"))
+
+        Text.language = .german
+        XCTAssertTrue(VideoDownloader.explain("ERROR: Unsupported URL: http://x/y")
+            .contains("nichts anfangen"))
+        XCTAssertTrue(VideoDownloader.explain(
             "ERROR: [Errno -2] Name or service not known").contains("auflösen"))
-        // Anything unrecognised comes through unchanged.
+
+        // Anything unrecognised comes through unchanged, in either language.
         XCTAssertEqual(VideoDownloader.explain("  something else  "), "something else")
+        Text.language = .english
     }
 
     // MARK: Clearing the staging folder
