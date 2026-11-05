@@ -28,6 +28,7 @@ public final class TUIApp {
         case cancel
         case openSettings
         case fetch
+        case openHistory
         case nothing
     }
 
@@ -56,6 +57,9 @@ public final class TUIApp {
         case .character("c"): return busy ? .cancel : .nothing
         case .character("e"): return busy ? .nothing : .openSettings
         case .character("d"): return busy ? .nothing : .fetch
+        // Looking at what happened is never refused: when something has
+        // just gone wrong is exactly when you want it.
+        case .character("h"): return .openHistory
         case .up, .character("k"): return .move(-1)
         case .down, .character("j"): return .move(1)
         case .pageUp: return .move(-10)
@@ -185,8 +189,39 @@ public final class TUIApp {
             runSettings()
         case .fetch:
             prompt = Prompt(caption: Text.s("Adresse:", "Address:"))
+        case .openHistory:
+            runHistory()
         case .nothing:
             break
+        }
+    }
+
+    /// The history, as its own loop.
+    private func runHistory() {
+        var screen = HistoryScreen(entries: coordinator.logEntries)
+        var size = Terminal.size()
+        terminal.invalidate()
+        while true {
+            terminal.draw(screen.render(size: size), size: size)
+            let key = terminal.read()
+            if key == .resized {
+                size = Terminal.size()
+                terminal.invalidate()
+                continue
+            }
+            if key == .timeout { continue }
+            switch screen.handle(key) {
+            case .none: break
+            case .leave:
+                terminal.invalidate()
+                return
+            case .clear:
+                coordinator.submit(.clearHistory)
+                // Re-read rather than emptied here: the engine owns the log,
+                // and a screen that empties its own copy would show a clear
+                // that had not happened if the write failed.
+                screen = HistoryScreen(entries: coordinator.logEntries)
+            }
         }
     }
 
