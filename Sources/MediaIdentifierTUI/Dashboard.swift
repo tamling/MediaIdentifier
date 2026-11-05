@@ -20,10 +20,13 @@ public enum Dashboard {
         public var log: [RenameLogEntry]
         public var selected: Int
         public var checksOpen: Bool
+        /// Set while something is being typed into the bottom row.
+        public var prompt: Prompt?
         public var version: String
 
         public init(snapshot: StatusSnapshot, checks: [SystemCheck], items: [RenameItem],
                     log: [RenameLogEntry], selected: Int = 0, checksOpen: Bool = false,
+                    prompt: Prompt? = nil,
                     version: String = MediafinVersion.display) {
             self.snapshot = snapshot
             self.checks = checks
@@ -31,6 +34,7 @@ public enum Dashboard {
             self.log = log
             self.selected = selected
             self.checksOpen = checksOpen
+            self.prompt = prompt
             self.version = version
         }
     }
@@ -64,13 +68,19 @@ public enum Dashboard {
         // The list gets whatever is left after the fixed parts. Worked out
         // rather than guessed, so an eight-row terminal still shows a row of
         // the list instead of scrolling the menu off the bottom.
-        let fixed = lines.count + 3   // rule + message + menu
+        let running = progress(state, columns: size.columns)
+        let showProgress = !running.plain.isEmpty
+        let fixed = lines.count + 3 + (showProgress ? 1 : 0)
         let room = max(1, size.rows - fixed)
         lines.append(contentsOf: proposals(state, columns: size.columns, rows: room))
 
         lines.append(rule(size.columns))
+        if showProgress { lines.append(running) }
         lines.append(message(state, columns: size.columns))
-        lines.append(menu(state, columns: size.columns))
+        // The prompt takes the menu's row while it is open: the menu's keys
+        // are all letters, and every letter is text while you are typing.
+        lines.append(state.prompt?.render(columns: size.columns)
+            ?? menu(state, columns: size.columns))
         return lines.map { $0.truncated(to: size.columns) }
     }
 
@@ -236,6 +246,58 @@ public enum Dashboard {
         return min(max(0, selected - rows / 2), count - rows)
     }
 
+    /// What the running job is doing, as a bar and a number.
+    ///
+    /// Empty when nothing is running: a bar at zero reads as a job stuck at
+    /// the start, which is the complaint the web interface had about
+    /// exactly this. A job whose size is unknown — a stream with no
+    /// Content-Length, or sftp, which reports nothing at all — gets its
+    /// words and no bar, rather than a bar that would have to be invented.
+    static func progress(_ state: State, columns: Int) -> Line {
+        let snapshot = state.snapshot
+        let fraction: Double?
+        let detail: String?
+        let what: String
+
+        if snapshot.downloading {
+            fraction = snapshot.downloadProgress
+            detail = snapshot.downloadDetail
+            what = Text.s("Laden", "Fetching")
+        } else if snapshot.transferring {
+            fraction = snapshot.transferProgress
+            detail = snapshot.transferDetail
+            what = Text.s("Senden", "Sending")
+        } else if snapshot.converting {
+            fraction = snapshot.convertProgress
+            detail = snapshot.convertDetail
+            what = Text.s("Konvertieren", "Converting")
+        } else if snapshot.renaming {
+            fraction = snapshot.renameProgress
+            detail = nil
+            what = Text.s("Umbenennen", "Renaming")
+        } else {
+            return Line("")
+        }
+
+        var segments = [Segment(what + " ", .strong)]
+        if let fraction {
+            let width = max(8, min(24, columns / 3))
+            let filled = max(0, min(width, Int((fraction * Double(width)).rounded())))
+            segments.append(Segment(String(repeating: "█", count: filled), .accent))
+            segments.append(Segment(String(repeating: "░", count: width - filled), .dim))
+            segments.append(Segment(" \(Int((fraction * 100).rounded())) %"))
+        } else {
+            segments.append(Segment(Text.s("läuft", "running"), .accent))
+        }
+        if let detail, !detail.isEmpty {
+            segments.append(Segment(" · " + detail, .dim))
+        }
+        if let file = snapshot.currentFile, !file.isEmpty {
+            segments.append(Segment(" · " + file, .dim))
+        }
+        return Line(segments)
+    }
+
     static func message(_ state: State, columns: Int) -> Line {
         guard let text = state.snapshot.lastResult, !text.isEmpty else {
             return Line("")
@@ -273,6 +335,7 @@ public enum Dashboard {
             Entry(key: "t", label: Text.s("senden", "send"),
                   enabled: snapshot.remoteConfigured && hasItems && !busy, keep: 6),
             Entry(key: "c", label: Text.s("stopp", "stop"), enabled: busy, keep: 7),
+            Entry(key: "d", label: Text.s("laden", "fetch"), enabled: !busy, keep: 6),
             Entry(key: "e", label: Text.s("einstellungen", "settings"),
                   enabled: !busy, keep: 3),
             Entry(key: "i", label: Text.s("status", "status"), enabled: true, keep: 2),
@@ -308,5 +371,56 @@ public enum Dashboard {
             kept.remove(at: weakest.offset)
         }
         return build(kept, labels: false)
+    }
+}
+
+/// A line of text somebody is typing into.
+///
+/// Its own type because three places want one — the URL prompt, the
+/// settings fields, and whatever comes next — and because the editing
+/// rules are small enough to be worth having exactly once.
+public struct Prompt: Equatable {
+    public let caption: String
+    public private(set) var text: String
+
+    public init(caption: String, text: String = "") {
+        self.caption = caption
+        self.text = text
+    }
+
+    /// What a key did to it.
+    public enum Outcome: Equatable {
+        case editing
+        case submitted(String)
+        case cancelled
+    }
+
+    public mutating func handle(_ key: Terminal.Key) -> Outcome {
+        switch key {
+        case .enter:
+            let trimmed = text.trimmingCharacters(in: .whitespaces)
+            // Enter on an empty prompt means "I changed my mind", not
+            // "fetch nothing": submitting it would make the engine answer
+            // with a complaint the user did not ask for.
+            return trimmed.isEmpty ? .cancelled : .submitted(trimmed)
+        case .escape:
+            return .cancelled
+        case .backspace:
+            if !text.isEmpty { text.removeLast() }
+            return .editing
+        case .character(let character):
+            text.append(character)
+            return .editing
+        default:
+            return .editing
+        }
+    }
+
+    public func render(columns: Int) -> Line {
+        Line([
+            Segment(caption + " ", .strong),
+            Segment(text, .accent),
+            Segment("█", .accent),
+        ]).truncated(to: columns)
     }
 }

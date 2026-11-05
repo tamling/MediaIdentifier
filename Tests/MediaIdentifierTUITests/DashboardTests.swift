@@ -306,3 +306,126 @@ extension SystemCheck.State {
     /// declare: adding a case should break this list loudly.
     static var allStates: [SystemCheck.State] { [.ok, .warning, .failed, .off] }
 }
+
+/// Fetching by URL, and what a running job looks like.
+final class FetchAndProgressTests: XCTestCase {
+
+    override func setUp() {
+        super.setUp()
+        Text.language = .english
+    }
+
+    override func tearDown() {
+        Text.language = .german
+        super.tearDown()
+    }
+
+    private let size = ScreenSize(columns: 80, rows: 24)
+
+    private func state(_ snapshot: StatusSnapshot = StatusSnapshot(),
+                       prompt: Prompt? = nil) -> Dashboard.State {
+        Dashboard.State(snapshot: snapshot, checks: [], items: [], log: [],
+                        prompt: prompt, version: "1.2.3")
+    }
+
+    // MARK: Typing an address
+
+    func testTypingBuildsTheAddressAndEnterSubmitsIt() {
+        var prompt = Prompt(caption: "Address:")
+        for character in "https://x.test/a" {
+            XCTAssertEqual(prompt.handle(.character(character)), .editing)
+        }
+        XCTAssertEqual(prompt.handle(.enter), .submitted("https://x.test/a"))
+    }
+
+    func testEscapeAbandonsIt() {
+        var prompt = Prompt(caption: "Address:", text: "https://x.test")
+        XCTAssertEqual(prompt.handle(.escape), .cancelled)
+    }
+
+    /// Enter on an empty prompt means "I changed my mind", not "fetch
+    /// nothing": submitting it would make the engine answer with a
+    /// complaint nobody asked for.
+    func testEnterOnAnEmptyPromptJustCloses() {
+        var prompt = Prompt(caption: "Address:")
+        XCTAssertEqual(prompt.handle(.enter), .cancelled)
+        var spaces = Prompt(caption: "Address:", text: "   ")
+        XCTAssertEqual(spaces.handle(.enter), .cancelled)
+    }
+
+    func testBackspaceDeletesAndStopsAtTheStart() {
+        var prompt = Prompt(caption: "Address:", text: "ab")
+        _ = prompt.handle(.backspace)
+        _ = prompt.handle(.backspace)
+        _ = prompt.handle(.backspace)
+        XCTAssertEqual(prompt.handle(.enter), .cancelled)
+    }
+
+    /// The prompt takes the menu's row, because every menu key is a letter
+    /// and every letter is text while you are typing. A URL with a q in it
+    /// must not quit the program.
+    func testThePromptReplacesTheMenuRatherThanSharingWithIt() {
+        let withPrompt = Dashboard.render(
+            state(prompt: Prompt(caption: "Address:", text: "https://q.test")),
+            size: size)
+        XCTAssertTrue(withPrompt.last!.plain.contains("https://q.test"))
+        XCTAssertFalse(withPrompt.last!.plain.contains("scan"))
+        XCTAssertEqual(withPrompt.count, size.rows)
+    }
+
+    // MARK: What a running job looks like
+
+    func testNothingRunningDrawsNoBar() {
+        XCTAssertEqual(Dashboard.progress(state(), columns: 80).plain, "")
+    }
+
+    func testEachKindOfJobNamesItself() {
+        let fetching = StatusSnapshot(downloading: true, downloadProgress: 0.5)
+        XCTAssertTrue(Dashboard.progress(state(fetching), columns: 80)
+            .plain.contains("Fetching"))
+
+        let sending = StatusSnapshot(transferring: true, transferProgress: 0.5)
+        XCTAssertTrue(Dashboard.progress(state(sending), columns: 80)
+            .plain.contains("Sending"))
+
+        let converting = StatusSnapshot(converting: true, convertProgress: 0.5)
+        XCTAssertTrue(Dashboard.progress(state(converting), columns: 80)
+            .plain.contains("Converting"))
+    }
+
+    func testTheBarFollowsTheFraction() {
+        for (fraction, expected) in [(0.0, 0), (0.5, 50), (1.0, 100)] {
+            let snapshot = StatusSnapshot(downloading: true,
+                                          downloadProgress: fraction)
+            let line = Dashboard.progress(state(snapshot), columns: 80).plain
+            XCTAssertTrue(line.contains("\(expected) %"), line)
+        }
+    }
+
+    /// A job whose size is unknown — a stream with no Content-Length, or
+    /// sftp, which reports nothing at all — gets words and no bar. A bar
+    /// would have to be invented, and an invented bar is what made the web
+    /// interface's transfer meter read as a stall.
+    func testAJobOfUnknownSizeGetsNoInventedBar() {
+        let snapshot = StatusSnapshot(downloading: true, downloadProgress: nil,
+                                      downloadDetail: "12,4 MB")
+        let line = Dashboard.progress(state(snapshot), columns: 80).plain
+        XCTAssertFalse(line.contains("%"), line)
+        XCTAssertTrue(line.contains("running"), line)
+        XCTAssertTrue(line.contains("12,4 MB"), line)
+    }
+
+    /// The bar costs a row, so the list must give one up rather than the
+    /// frame growing past the screen.
+    func testTheFrameStillFitsWhileSomethingIsRunning() {
+        for rows in [8, 12, 24] {
+            let size = ScreenSize(columns: 80, rows: rows)
+            let snapshot = StatusSnapshot(busy: true, downloading: true,
+                                          downloadProgress: 0.3)
+            let lines = Dashboard.render(state(snapshot), size: size)
+            XCTAssertEqual(lines.count, rows, "\(rows)")
+            XCTAssertTrue(lines.contains { $0.plain.contains("Fetching") },
+                          "the bar was dropped at \(rows) rows")
+        }
+    }
+}

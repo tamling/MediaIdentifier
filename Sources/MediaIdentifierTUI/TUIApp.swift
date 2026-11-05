@@ -27,6 +27,7 @@ public final class TUIApp {
         case move(Int)
         case cancel
         case openSettings
+        case fetch
         case nothing
     }
 
@@ -54,6 +55,7 @@ public final class TUIApp {
         // it was a gap worth closing straight away.
         case .character("c"): return busy ? .cancel : .nothing
         case .character("e"): return busy ? .nothing : .openSettings
+        case .character("d"): return busy ? .nothing : .fetch
         case .up, .character("k"): return .move(-1)
         case .down, .character("j"): return .move(1)
         case .pageUp: return .move(-10)
@@ -80,6 +82,10 @@ public final class TUIApp {
     private var selected = 0
     private var checksOpen = false
     private var running = true
+    /// Set while the URL is being typed. The dashboard keeps drawing
+    /// underneath it, so a download that is already running stays visible
+    /// while the next one is being entered.
+    private var prompt: Prompt?
 
     public init(coordinator: AppCoordinator, terminal: Terminal = Terminal()) {
         self.coordinator = coordinator
@@ -112,6 +118,20 @@ public final class TUIApp {
                 continue
             }
             if key == .timeout { continue }
+
+            // While the prompt is open every key is text, including the
+            // letters the menu uses. A URL with a "q" in it must not quit.
+            if var open = prompt {
+                switch open.handle(key) {
+                case .editing: prompt = open
+                case .cancelled: prompt = nil
+                case .submitted(let url):
+                    prompt = nil
+                    coordinator.submit(.downloadURL(url))
+                }
+                continue
+            }
+
             perform(Self.action(for: key,
                                 hasItems: !state.items.isEmpty,
                                 busy: state.snapshot.isWorking),
@@ -127,7 +147,8 @@ public final class TUIApp {
                         items: coordinator.items,
                         log: coordinator.logEntries,
                         selected: selected,
-                        checksOpen: checksOpen)
+                        checksOpen: checksOpen,
+                        prompt: prompt)
     }
 
     private func perform(_ action: Action, items: [RenameItem]) {
@@ -162,6 +183,8 @@ public final class TUIApp {
             else if snapshot.converting { coordinator.submit(.cancelConversions) }
         case .openSettings:
             runSettings()
+        case .fetch:
+            prompt = Prompt(caption: Text.s("Adresse:", "Address:"))
         case .nothing:
             break
         }
