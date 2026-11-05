@@ -91,11 +91,15 @@ enum Styling {
         scrollbar slider:hover { background-color: alpha(@mf_text, 0.4); }
 
         /* A grouped panel. */
+        /* 11px, not 18. Six of these cards sit in one column, so every
+           pixel here costs twelve down the page: at 18 the column asked for
+           about a thousand pixels of height and the window would not fit a
+           1366x768 laptop at all. */
         .mf-card {
           background-color: @mf_surface;
           border: 1px solid @mf_border;
-          border-radius: 14px;
-          padding: 18px;
+          border-radius: 12px;
+          padding: 11px;
         }
 
         .mf-card-title {
@@ -111,7 +115,7 @@ enum Styling {
 
         /* One proposal. */
         .mf-row {
-          padding: 9px 12px;
+          padding: 7px 10px;
           border-radius: 8px;
         }
 
@@ -138,7 +142,7 @@ enum Styling {
 
         .mf-empty {
           color: @mf_muted;
-          padding: 36px;
+          padding: 20px;
         }
 
         /* The log column. Separated by a hairline rather than a card, so it
@@ -146,7 +150,7 @@ enum Styling {
         .mf-log {
           background-color: @mf_surface;
           border-left: 1px solid @mf_border;
-          padding: 14px;
+          padding: 10px;
         }
 
         .mf-log-entry {

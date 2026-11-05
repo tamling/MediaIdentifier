@@ -100,6 +100,15 @@ final class AppWindow {
     /// the first build and leave the empty-state line unwritten.
     private var renderedItemIDs: [UUID]?
 
+    /// Tracked rather than read back from the window: `gdk_window_get_state`
+    /// needs the window realized and is a frame behind after a toggle.
+    private var isFullscreen = false
+
+    /// GDK_KEY_F11 and GDK_KEY_Escape. Written out because they are macros,
+    /// which Swift does not import from a C header.
+    static let keyF11: UInt32 = 0xFFC8
+    static let keyEscape: UInt32 = 0xFF1B
+
     /// - Parameter expandSettings: opens the identification section instead
     ///   of leaving it collapsed. Used by --demo, so the screenshot shows
     ///   those fields rendered rather than only proving they were built.
@@ -107,7 +116,8 @@ final class AppWindow {
         self.coordinator = coordinator
 
         let window = gtk_window_new(GTK_WINDOW_TOPLEVEL)!
-        gtk_window_set_default_size(Gtk.window(window), 1180, 680)
+        let opening = Self.openingSize()
+        gtk_window_set_default_size(Gtk.window(window), opening.width, opening.height)
         // Set as well as the header bar's title: this is what a taskbar, an
         // alt-tab switcher and a window list show.
         gtk_window_set_title(Gtk.window(window), "Mediafin")
@@ -134,9 +144,27 @@ final class AppWindow {
         let split = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0)!
         gtk_container_add(Gtk.container(window), split)
 
-        let page = gtk_box_new(GTK_ORIENTATION_VERTICAL, 16)!
-        gtk_container_set_border_width(Gtk.container(page), 18)
-        gtk_box_pack_start(Gtk.box(split), page, 1, 1, 0)
+        let page = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10)!
+        gtk_container_set_border_width(Gtk.container(page), 12)
+        // The whole left column scrolls, and this is the fix for the bug it
+        // shipped with: a GtkWindow cannot be made shorter than its content's
+        // minimum height, and this column's minimum was about a thousand
+        // pixels — six cards, each with its own padding. On a 1366×768
+        // laptop the window opened taller than the screen, so the row with
+        // ‚Umbenennen‘ and ‚Rückgängig‘ on it, and the footer under that,
+        // were off the bottom edge and could not be reached by resizing,
+        // maximising or going fullscreen — there was nothing to resize to.
+        // A scrolled window asks for almost no height of its own, so the
+        // window shrinks to whatever screen it is on and the bottom is always
+        // one scroll away.
+        let pageScroller = gtk_scrolled_window_new(nil, nil)!
+        gtk_scrolled_window_set_policy(Gtk.scrolledWindow(pageScroller),
+                                       GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC)
+        // Horizontal policy NEVER propagates the column's minimum width, so
+        // the controls are never squeezed sideways; only the height gives.
+        gtk_scrolled_window_set_min_content_height(Gtk.scrolledWindow(pageScroller), 160)
+        gtk_container_add(Gtk.container(pageScroller), page)
+        gtk_box_pack_start(Gtk.box(split), pageScroller, 1, 1, 0)
 
         // MARK: The traffic light
         //
@@ -345,14 +373,13 @@ final class AppWindow {
         // surface to get wrong for a list that only has to be read. It will
         // have to become a TreeView if these lists reach the thousands.
         listColumn = gtk_box_new(GTK_ORIENTATION_VERTICAL, 1)!
-        let scroller = gtk_scrolled_window_new(nil, nil)!
-        gtk_scrolled_window_set_policy(Gtk.scrolledWindow(scroller),
-                                       GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC)
-        gtk_container_add(Gtk.container(scroller), listColumn)
-        // A floor, so the cards above can never squeeze the list down to a
-        // single row: it is the one part of this window that is read.
-        gtk_widget_set_size_request(scroller, -1, 260)
-        Self.add(scroller, to: proposals, expand: true)
+        // Directly in the card, with no scroller of its own. It used to have
+        // one, with a 260-pixel floor so the cards above could not squeeze
+        // the list to a single row — but that floor was a large part of why
+        // the window could not fit a small screen, and a scroller inside the
+        // scrolling column would mean two scrollbars fighting over one wheel.
+        // The list now grows and the column scrolls.
+        Self.add(listColumn, to: proposals, expand: true)
 
         // Selecting on the left, acting on the right: the destructive end of
         // the row is the one that should take a deliberate reach.
@@ -385,7 +412,7 @@ final class AppWindow {
 
         let logSide = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8)!
         Styling.style(logSide, "mf-log")
-        gtk_widget_set_size_request(logSide, 320, -1)
+        gtk_widget_set_size_request(logSide, 264, -1)
         let logTitle = Self.label("VERLAUF", classes: "mf-card-title")
         gtk_box_pack_start(Gtk.box(logSide), logTitle, 0, 0, 0)
         logCountLabel = Self.label("", classes: "mf-dim")
@@ -413,8 +440,71 @@ final class AppWindow {
         Gtk.onClick(downloadButton, self) { $0.startDownload() }
         Gtk.onClick(cancelDownloadButton, self) { $0.cancelDownload() }
 
+        // F11 toggles fullscreen and Escape leaves it — the two keys anyone
+        // tries. Every other key is passed on untouched, so typing Escape in
+        // a text entry still does what the entry expects.
+        Gtk.onKeyPress(window, self) { window, key in
+            switch key {
+            case Self.keyF11: window.toggleFullscreen(); return true
+            case Self.keyEscape where window.isFullscreen:
+                window.leaveFullscreen(); return true
+            default: return false
+            }
+        }
+
         loadFolders()
         refresh()
+    }
+
+    /// A size that fits the screen the window opens on.
+    ///
+    /// It used to be a flat 1180×680. 680 is taller than the work area of a
+    /// 1366×768 laptop once the panel and the title bar are taken off, so the
+    /// window opened with its lower edge below the screen on the most common
+    /// size of cheap laptop there is.
+    ///
+    /// The monitor is asked for its *work* area, not its resolution: that is
+    /// the part left over after the desktop's panels, which is what a window
+    /// can actually occupy.
+    static func openingSize() -> (width: Int32, height: Int32) {
+        var width: Int32 = 1180
+        var height: Int32 = 740
+        if let display = gdk_display_get_default(),
+           let monitor = gdk_display_get_primary_monitor(display)
+               ?? gdk_display_get_monitor(display, 0) {
+            var area = GdkRectangle()
+            gdk_monitor_get_workarea(monitor, &area)
+            if area.width > 0, area.height > 0 {
+                width = min(width, Int32(Double(area.width) * 0.94))
+                height = min(height, Int32(Double(area.height) * 0.94))
+            }
+        }
+        // A floor as well as a ceiling: a misreported work area of a few
+        // pixels must not open a window nobody can use.
+        return (max(600, width), max(380, height))
+    }
+
+    /// Fullscreen, and back again.
+    ///
+    /// There was no way to do this at all — no key, no menu item — so
+    /// ‚fullscreen does not work‘ was literally true: pressing F11 did
+    /// nothing, and on a screen the window was already too tall for, the
+    /// desktop's own fullscreen could not help either because the window had
+    /// no smaller size to take. Escape leaves it, which is what every other
+    /// fullscreen does and what somebody who has lost the title bar will try.
+    func toggleFullscreen() {
+        if isFullscreen {
+            gtk_window_unfullscreen(Gtk.window(widget))
+        } else {
+            gtk_window_fullscreen(Gtk.window(widget))
+        }
+        isFullscreen.toggle()
+    }
+
+    func leaveFullscreen() {
+        guard isFullscreen else { return }
+        gtk_window_unfullscreen(Gtk.window(widget))
+        isFullscreen = false
     }
 
     // MARK: Actions
@@ -793,7 +883,7 @@ final class AppWindow {
             gtk_box_pack_start(Gtk.box(row), lamp, 0, 0, 0)
 
             let name = Self.label(check.name, classes: "mf-lamp-name")
-            gtk_widget_set_size_request(name, 150, -1)
+            gtk_widget_set_size_request(name, 128, -1)
             gtk_box_pack_start(Gtk.box(row), name, 0, 0, 0)
 
             // The word the comment above has always promised. Without it the
@@ -1006,7 +1096,7 @@ final class AppWindow {
     /// A grouped panel with a quiet caption, the shape GTK's own settings
     /// dialogues use.
     private static func card(titled title: String) -> UnsafeMutablePointer<GtkWidget> {
-        let card = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10)!
+        let card = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6)!
         Styling.style(card, "mf-card")
         let caption = label(title.uppercased(), classes: "mf-card-title")
         gtk_box_pack_start(Gtk.box(card), caption, 0, 0, 0)

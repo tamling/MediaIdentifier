@@ -226,6 +226,53 @@ enum Gtk {
         g_timeout_add_full(0, milliseconds, tick, payload, release)
     }
 
+    /// Calls `action` for every key pressed on `widget`, with the keyval.
+    ///
+    /// `action` returns true when it handled the key, which stops GTK passing
+    /// it on — so an entry that has the focus still gets every key this
+    /// does not claim.
+    static func onKeyPress<Owner: AnyObject>(
+        _ widget: UnsafeMutablePointer<GtkWidget>,
+        _ owner: Owner,
+        _ action: @escaping (Owner, UInt32) -> Bool
+    ) {
+        // The same shape as onClick, and for the same reason: the generic
+        // part stays in this Swift closure and only the non-generic box
+        // crosses into C.
+        let payload = Unmanaged.passRetained(KeyAction(owner: owner, action: action)).toOpaque()
+        let handler: @convention(c) (UnsafeMutablePointer<GtkWidget>?,
+                                     UnsafeMutablePointer<GdkEventKey>?,
+                                     UnsafeMutableRawPointer?) -> gboolean = { _, event, data in
+            guard let data, let event else { return 0 }
+            return Unmanaged<KeyAction>.fromOpaque(data)
+                .takeUnretainedValue().run(event.pointee.keyval) ? 1 : 0
+        }
+        let release: @convention(c) (UnsafeMutableRawPointer?, UnsafeMutablePointer<GClosure>?)
+            -> Void = { data, _ in
+                guard let data else { return }
+                Unmanaged<KeyAction>.fromOpaque(data).release()
+            }
+        g_signal_connect_data(object(widget), "key-press-event",
+                              unsafeBitCast(handler, to: GCallback.self),
+                              payload, release, GConnectFlags(rawValue: 0))
+    }
+
+    /// `Action`, but for a key: it takes the keyval and answers whether it
+    /// consumed it.
+    final class KeyAction {
+        private let body: (UInt32) -> Bool
+
+        init<Owner: AnyObject>(owner: Owner,
+                               action: @escaping (Owner, UInt32) -> Bool) {
+            body = { [weak owner] key in
+                guard let owner else { return false }
+                return action(owner, key)
+            }
+        }
+
+        func run(_ key: UInt32) -> Bool { body(key) }
+    }
+
     /// What a GTK callback is handed through `user_data`: one object, no
     /// generic parameters.
     ///

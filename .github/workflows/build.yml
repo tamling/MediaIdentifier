@@ -425,6 +425,57 @@ jobs:
       # Before the checks that can fail: the rendered window is the most
       # useful thing this job produces, and a later failing assertion must not
       # be what stops it being readable.
+      - name: It fits a small screen
+        shell: bash
+        env:
+          NO_AT_BRIDGE: "1"
+          GTK_A11Y: none
+        run: |
+          set -euo pipefail
+          # The bug this asserts against, and the reason it is measured and
+          # not reasoned about: a GtkWindow cannot be made shorter than its
+          # content's minimum height. The left column's minimum was around a
+          # thousand pixels - six cards at 18px padding, plus a 260px floor
+          # under the proposals list - so on a 1366x768 laptop the window
+          # opened taller than the screen and the row carrying "Umbenennen"
+          # and "Rueckgaengig", and the footer under it, sat below the bottom
+          # edge. Resizing, maximising and fullscreen could none of them help,
+          # because there was no shorter size for the window to take.
+          #
+          # 1024x600 is a netbook: the smallest screen anybody runs a desktop
+          # on, and under Xvfb there are no panels, so the whole 600 is the
+          # work area.
+          timeout 90 xvfb-run -a --server-args="-screen 0 1024x600x24" \
+            .build/release/mediafin-gtk --demo --screenshot small.png | tee small.log
+          file small.png
+          dims="$(file small.png | sed -n 's/.*PNG image data, \([0-9]*\) x \([0-9]*\).*/\1 \2/p')"
+          test -n "$dims" || { echo "FAIL: could not read the PNG size"; exit 1; }
+          w="${dims% *}"
+          h="${dims#* }"
+          echo "the window on a 1024x600 screen: ${w}x${h}"
+          test "$h" -le 600 || {
+            echo "FAIL: ${h}px tall on a 600px screen - the bottom cannot be reached"
+            exit 1
+          }
+          test "$w" -le 1024 || {
+            echo "FAIL: ${w}px wide on a 1024px screen"
+            exit 1
+          }
+          # Fitting by collapsing to nothing is not fitting. A drawn window
+          # has never been under 12 kB.
+          bytes="$(stat -c %s small.png)"
+          test "$bytes" -gt 12000 || {
+            echo "FAIL: $bytes bytes - it fits because it rendered blank"
+            exit 1
+          }
+          echo "ok: ${w}x${h}, ${bytes} bytes drawn"
+      - name: Emit the small-screen window as base64
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "--- BEGIN small.png base64 ---"
+          base64 -w 120 small.png
+          echo "--- END small.png base64 ---"
       - name: Emit the screenshot as base64
         shell: bash
         run: |
@@ -437,7 +488,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: gtk-window-screenshot
-          path: window.png
+          path: |
+            window.png
+            small.png
           if-no-files-found: warn
       - name: Refuse to hang without a display
         shell: bash
