@@ -233,31 +233,63 @@ public enum Dashboard {
         return Line(text, state.snapshot.hasError ? .failed : .normal)
     }
 
-    /// The menu, always on the last row. Every key it names does something
-    /// in this state; a key that would be refused is dimmed rather than
-    /// hidden, so the row does not move around under the user's eyes.
+    /// The menu, always on the last row, always fitting.
+    ///
+    /// Fitting is the part that needed thinking about. Adding two keys made
+    /// the full row longer than eighty columns, and what fell off the end
+    /// was `q` — the way out. So the row is built to the width it has: the
+    /// labels go first, then the least important keys, and `q` is never one
+    /// of them. A terminal that cannot show the way out is a trap.
     static func menu(_ state: State, columns: Int) -> Line {
         let snapshot = state.snapshot
         let busy = snapshot.isWorking
         let hasItems = !state.items.isEmpty
-        let entries: [(String, String, Bool)] = [
-            ("s", Text.s("suchen", "scan"), !busy),
-            ("␣", Text.s("an/aus", "tick"), hasItems),
-            ("a/n", Text.s("alle/keine", "all/none"), hasItems),
-            ("r", Text.s("umbenennen", "rename"), hasItems && !busy),
-            ("u", Text.s("zurück", "undo"), !busy),
-            ("t", Text.s("senden", "send"), snapshot.remoteConfigured && hasItems && !busy),
-            ("c", Text.s("stopp", "stop"), busy),
+        // Ordered by what you would miss most, least-missed first, because
+        // that is the end they are dropped from.
+        let entries: [(key: String, label: String, enabled: Bool)] = [
             ("e", Text.s("einstellungen", "settings"), !busy),
             ("i", Text.s("status", "status"), true),
+            ("a/n", Text.s("alle/keine", "all/none"), hasItems),
+            ("u", Text.s("zurück", "undo"), !busy),
+            ("t", Text.s("senden", "send"),
+             snapshot.remoteConfigured && hasItems && !busy),
+            ("c", Text.s("stopp", "stop"), busy),
+            ("␣", Text.s("an/aus", "tick"), hasItems),
+            ("r", Text.s("umbenennen", "rename"), hasItems && !busy),
+            ("s", Text.s("suchen", "scan"), !busy),
             ("q", Text.s("ende", "quit"), true),
         ]
-        var segments: [Segment] = []
-        for (key, label, enabled) in entries {
-            if !segments.isEmpty { segments.append(Segment("  ", .dim)) }
-            segments.append(Segment(key, enabled ? .accent : .dim))
-            segments.append(Segment(" " + label, enabled ? .normal : .dim))
+
+        func build(_ chosen: [(key: String, label: String, enabled: Bool)],
+                   labels: Bool) -> Line {
+            var segments: [Segment] = []
+            // Drawn in the order a hand expects, which is the reverse of the
+            // order they are dropped in.
+            for entry in chosen.reversed() {
+                if !segments.isEmpty { segments.append(Segment("  ", .dim)) }
+                segments.append(Segment(entry.key, entry.enabled ? .accent : .dim))
+                if labels {
+                    segments.append(Segment(" " + entry.label,
+                                            entry.enabled ? .normal : .dim))
+                }
+            }
+            return Line(segments)
         }
-        return Line(segments)
+
+        let full = build(entries, labels: true)
+        if full.width <= columns { return full }
+
+        // Keys only: on a narrow terminal the letters are the part that
+        // matters, and they are what somebody who has used it twice reads.
+        let bare = build(entries, labels: false)
+        if bare.width <= columns { return bare }
+
+        // Still too narrow: drop from the front of the list, which is the
+        // least-missed end, but never the last entry.
+        var kept = entries
+        while kept.count > 1, build(kept, labels: false).width > columns {
+            kept.removeFirst()
+        }
+        return build(kept, labels: false)
     }
 }

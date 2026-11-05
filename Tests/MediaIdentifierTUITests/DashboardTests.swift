@@ -70,9 +70,42 @@ final class DashboardTests: XCTestCase {
         for count in [0, 1, 5, 100] {
             let lines = Dashboard.render(
                 state(items: (0..<count).map { item("F\($0).mkv") }), size: size)
-            XCTAssertTrue(lines.last!.plain.contains("quit"),
+            XCTAssertTrue(lines.last!.plain.hasPrefix("s "),
                           "with \(count) items: \"\(lines.last!.plain)\"")
         }
+    }
+
+    /// The way out is never the thing that falls off the end.
+    ///
+    /// Adding two keys made the full row longer than eighty columns, and
+    /// what the truncation took was `q`. A terminal interface that cannot
+    /// show how to leave it is a trap, so the row is built to the width it
+    /// has rather than drawn and then cut.
+    func testTheMenuFitsAndAlwaysKeepsTheWayOut() {
+        for columns in [20, 30, 40, 60, 80, 120, 200] {
+            for busy in [false, true] {
+                let snapshot = StatusSnapshot(busy: busy, queuedWork: busy ? 1 : 0)
+                let line = Dashboard.menu(
+                    state(items: [item("A.mkv")], snapshot: snapshot),
+                    columns: columns)
+                XCTAssertLessThanOrEqual(line.width, columns,
+                                         "\(columns): \"\(line.plain)\"")
+                XCTAssertTrue(line.plain.contains("q"),
+                              "\(columns): no way out in \"\(line.plain)\"")
+            }
+        }
+    }
+
+    /// Wide enough and the words are there; narrow and the letters alone
+    /// are, which is what somebody who has used it twice reads anyway.
+    func testTheMenuDropsItsWordsBeforeItDropsItsKeys() {
+        let wide = Dashboard.menu(state(items: [item("A.mkv")]), columns: 200)
+        XCTAssertTrue(wide.plain.contains("quit"), wide.plain)
+
+        let narrow = Dashboard.menu(state(items: [item("A.mkv")]), columns: 30)
+        XCTAssertFalse(narrow.plain.contains("quit"), narrow.plain)
+        XCTAssertTrue(narrow.plain.contains("q"), narrow.plain)
+        XCTAssertTrue(narrow.plain.contains("s"), narrow.plain)
     }
 
     // MARK: The header
