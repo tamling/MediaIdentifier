@@ -94,7 +94,7 @@ public final class RenameExecutor {
             }()
 
             do {
-                guard let resolution = try resolveDestination(for: move, policy: effectivePolicy) else {
+                guard let resolution = resolveDestination(for: move, policy: effectivePolicy) else {
                     // Deliberately not recorded in `landed`: a skipped file is
                     // still where it was, and a caller that goes on to send or
                     // delete it must not be told otherwise.
@@ -107,15 +107,23 @@ public final class RenameExecutor {
                     continue
                 }
 
-                // For "replace", the existing file was moved to the Trash; record
-                // that first so undo can restore it before the main move is undone.
-                if let backup = resolution.backup {
-                    performed.append(backup)
-                }
-
                 let createdDirs = try ensureParentDirectory(for: resolution.destination)
-                try moveWithProgress(from: move.source, to: resolution.destination,
-                                     base: completed, total: total, progress: progress)
+                if resolution.replacesExisting {
+                    // The incoming file arrives before the library's own copy
+                    // is disturbed; `replace` is where that order lives, and
+                    // why. Nothing is appended to `performed` until it has
+                    // returned, so a throw leaves the journal describing only
+                    // what really happened.
+                    let backup = try replace(
+                        at: resolution.destination, with: move.source,
+                        base: completed, total: total, progress: progress)
+                    // Before the main move, so undo restores it after the main
+                    // move has been undone and the destination is free again.
+                    if let backup { performed.append(backup) }
+                } else {
+                    try moveWithProgress(from: move.source, to: resolution.destination,
+                                         base: completed, total: total, progress: progress)
+                }
 
                 performed.append(.init(from: move.source, to: resolution.destination, createdDirectories: createdDirs))
                 // The resolved destination, not the planned one: under the
@@ -214,32 +222,94 @@ public final class RenameExecutor {
 
     // MARK: Helpers
 
-    /// The outcome of resolving a conflict: the destination to move to, plus an
-    /// optional journal entry for a file that was moved to the Trash (so undo can
-    /// restore it).
+    /// The outcome of resolving a conflict: where the file should go, and
+    /// whether something is already there that the policy says to displace.
+    ///
+    /// It does **not** displace anything. This used to move the old file aside
+    /// as a side effect of being asked where the new one goes, which put the
+    /// library's own copy out of the way before the incoming file had got
+    /// anywhere — and *when* that happens is the whole point. See `apply`.
     private struct Resolution {
         let destination: URL
-        let backup: RenameTransaction.Move?
+        let replacesExisting: Bool
     }
 
     /// Resolves the final destination honouring the conflict policy. Returns nil
-    /// when the move should be skipped.
-    private func resolveDestination(for move: PlannedMove, policy: ConflictPolicy) throws -> Resolution? {
+    /// when the move should be skipped. Touches nothing on disk.
+    private func resolveDestination(for move: PlannedMove,
+                                    policy: ConflictPolicy) -> Resolution? {
         guard fileManager.fileExists(atPath: move.destination.path) else {
-            return Resolution(destination: move.destination, backup: nil)
+            return Resolution(destination: move.destination, replacesExisting: false)
         }
         switch policy {
         case .skip, .ask:
             return nil
         case .replace:
-            // Aside rather than deleted, and journalled, so undo can put it
-            // back. On Linux "aside" is a hidden folder beside the library;
-            // see trashExisting.
-            let backup = try trashExisting(at: move.destination)
-            return Resolution(destination: move.destination, backup: backup)
+            return Resolution(destination: move.destination, replacesExisting: true)
         case .rename:
-            return Resolution(destination: uniqueURL(for: move.destination), backup: nil)
+            return Resolution(destination: uniqueURL(for: move.destination),
+                              replacesExisting: false)
         }
+    }
+
+    /// Replaces the file at `destination` with `source`, in an order that
+    /// cannot leave the library with a gap.
+    ///
+    /// The old order moved the library's copy aside first and then moved the
+    /// new file in. The second step is the one that can fail — a full disk, a
+    /// read-only mount, a copy across filesystems that dies halfway — and when
+    /// it did, the library was left with nothing where the film had been. It
+    /// was recoverable: the move aside is journalled, so undo put it back. But
+    /// it was recoverable by someone who knew to press undo, and the failure
+    /// line said only what the error was.
+    ///
+    /// So now the expensive step goes first. The incoming file is brought into
+    /// the destination's own directory under a hidden name — every scanner here
+    /// passes `.skipsHiddenFiles`, so nothing picks it up — and only once it
+    /// has arrived is the old file moved aside and the new one renamed into
+    /// place. Those last two are renames within one directory on one
+    /// filesystem, which is as close to "cannot fail" as a file system offers.
+    /// If one does anyway, both are undone and the library keeps its own copy.
+    private func replace(
+        at destination: URL, with source: URL,
+        base: Int, total: Int, progress: ((Double) -> Void)?
+    ) throws -> RenameTransaction.Move? {
+        // The extension is kept and the name is not: a staged file left behind
+        // by a crash is then identifiable as a video rather than as a nameless
+        // blob, without risking the 255-byte limit that a library file's own
+        // name can already be close to.
+        let suffix = destination.pathExtension.isEmpty
+            ? "" : "." + destination.pathExtension
+        let staged = destination.deletingLastPathComponent()
+            .appendingPathComponent(
+                ".mediafin-incoming-\(UUID().uuidString.prefix(8))\(suffix)")
+
+        // Step one: the whole transfer, before anything of the user's moves.
+        try moveWithProgress(from: source, to: staged,
+                             base: base, total: total, progress: progress)
+
+        // Step two: the library's copy out of the way, journalled so undo can
+        // put it back.
+        let backup: RenameTransaction.Move?
+        do {
+            backup = try trashExisting(at: destination)
+        } catch {
+            // Put the incoming file back where it came from. A staged file
+            // left behind is invisible litter, and the source has to still be
+            // there for a second attempt to have anything to move.
+            try? fileManager.moveItem(at: staged, to: source)
+            throw error
+        }
+
+        // Step three: into place.
+        do {
+            try fileManager.moveItem(at: staged, to: destination)
+        } catch {
+            if let backup { try? fileManager.moveItem(at: backup.to, to: backup.from) }
+            try? fileManager.moveItem(at: staged, to: source)
+            throw error
+        }
+        return backup
     }
 
     /// Where a replaced file waits on a system with no desktop Trash.

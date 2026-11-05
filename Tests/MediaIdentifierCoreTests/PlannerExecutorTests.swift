@@ -198,4 +198,170 @@ final class PlannerExecutorTests: XCTestCase {
         XCTAssertEqual(outcome.skipped, 1)
         XCTAssertNil(outcome.landed[plan[0].id])
     }
+
+    // MARK: Replacing, which had no test at all
+
+    /// The happy path first, because the rest of this section is about what
+    /// happens when it does not happen: the new file is in place and the
+    /// library's old copy is aside rather than gone.
+    /// Linux only, and deliberately: putting a file aside here is a rename
+    /// into a folder beside the library, which a test can look inside. On a
+    /// Mac it is the real Trash, and whether a CI machine even has one is not
+    /// a thing to build an assertion on. The order under test is the same code
+    /// on both.
+    func testReplacePutsTheOldFileAsideAndTheNewOneInPlace() throws {
+        #if !os(macOS)
+        let source = try touch("Interstellar.2014.2160p.mkv")
+        let destDir = tempDir.appendingPathComponent("Interstellar (2014)")
+        try fm.createDirectory(at: destDir, withIntermediateDirectories: true)
+        let dest = destDir.appendingPathComponent("Interstellar (2014).mkv")
+        try Data("the old one".utf8).write(to: dest)
+
+        let files = MediaScanner().scan(urls: [source])
+        let plan = RenamePlanner().makePlan(for: files, outputRoot: tempDir)
+        let log = RenameLog(url: tempDir.appendingPathComponent("log.json"))
+        let journal = RenameJournal(url: tempDir.appendingPathComponent("journal.json"))
+
+        let outcome = RenameExecutor(log: log, journal: journal)
+            .execute(plan: plan, policy: .replace)
+        XCTAssertEqual(outcome.succeeded, 1)
+        XCTAssertEqual(try Data(contentsOf: dest), Data("x".utf8), "the new file is not there")
+
+        // Aside, not deleted. On a Mac that is the real Trash, which a test
+        // must not go rummaging in; on Linux it is a folder we can name.
+        let aside = destDir.appendingPathComponent(RenameExecutor.trashFolderName)
+        let kept = try fm.contentsOfDirectory(atPath: aside.path)
+        XCTAssertEqual(kept.count, 1, "the old file was not put aside")
+        XCTAssertEqual(
+            try Data(contentsOf: aside.appendingPathComponent(kept[0])),
+            Data("the old one".utf8))
+        #endif
+    }
+
+    /// Undo after a replacement has to put both files back, in the right
+    /// order: the new one out of the way first, then the old one home.
+    /// Linux only, and deliberately: putting a file aside here is a rename
+    /// into a folder beside the library, which a test can look inside. On a
+    /// Mac it is the real Trash, and whether a CI machine even has one is not
+    /// a thing to build an assertion on. The order under test is the same code
+    /// on both.
+    func testUndoAfterAReplacementRestoresTheOldFile() throws {
+        #if !os(macOS)
+        let source = try touch("Interstellar.2014.2160p.mkv")
+        let destDir = tempDir.appendingPathComponent("Interstellar (2014)")
+        try fm.createDirectory(at: destDir, withIntermediateDirectories: true)
+        let dest = destDir.appendingPathComponent("Interstellar (2014).mkv")
+        try Data("the old one".utf8).write(to: dest)
+
+        let files = MediaScanner().scan(urls: [source])
+        let plan = RenamePlanner().makePlan(for: files, outputRoot: tempDir)
+        let log = RenameLog(url: tempDir.appendingPathComponent("log.json"))
+        let journal = RenameJournal(url: tempDir.appendingPathComponent("journal.json"))
+        let executor = RenameExecutor(log: log, journal: journal)
+
+        XCTAssertEqual(executor.execute(plan: plan, policy: .replace).succeeded, 1)
+        _ = executor.undoLast()
+
+        XCTAssertEqual(try Data(contentsOf: source), Data("x".utf8),
+                       "the file that was renamed did not come back")
+        XCTAssertEqual(try Data(contentsOf: dest), Data("the old one".utf8),
+                       "the library's own copy did not come back")
+        #endif
+    }
+
+    /// The bug this section exists for.
+    ///
+    /// Replacing used to move the library's copy aside **first** and then move
+    /// the new file in. The second step is the one that fails — a full disk, a
+    /// read-only mount, a source that has gone away since the scan — and when
+    /// it did, the library was left with nothing where the film had been. It
+    /// was recoverable by undo, but only by someone who knew to press it, and
+    /// the failure line said only what the error was.
+    ///
+    /// A source that no longer exists is the cheapest way to make the move
+    /// fail for real, and it is not a contrived one: scan, go and make coffee,
+    /// let something clear the download folder, press "rename".
+    func testAFailedReplacementLeavesTheLibrarysOwnCopyWhereItWas() throws {
+        let source = try touch("Interstellar.2014.2160p.mkv")
+        let destDir = tempDir.appendingPathComponent("Interstellar (2014)")
+        try fm.createDirectory(at: destDir, withIntermediateDirectories: true)
+        let dest = destDir.appendingPathComponent("Interstellar (2014).mkv")
+        try Data("the old one".utf8).write(to: dest)
+
+        let files = MediaScanner().scan(urls: [source])
+        let plan = RenamePlanner().makePlan(for: files, outputRoot: tempDir)
+        // Between the scan and the rename, the source goes away.
+        try fm.removeItem(at: source)
+
+        let log = RenameLog(url: tempDir.appendingPathComponent("log.json"))
+        let journal = RenameJournal(url: tempDir.appendingPathComponent("journal.json"))
+        let outcome = RenameExecutor(log: log, journal: journal)
+            .execute(plan: plan, policy: .replace)
+
+        XCTAssertEqual(outcome.failed, 1)
+        XCTAssertEqual(outcome.succeeded, 0)
+        // The whole point: the library still has its film.
+        XCTAssertEqual(try Data(contentsOf: dest), Data("the old one".utf8),
+                       "the library lost its own copy to a move that never happened")
+        XCTAssertNil(outcome.landed[plan[0].id],
+                     "a failed replacement must not report having landed")
+
+        #if !os(macOS)
+        let aside = destDir.appendingPathComponent(RenameExecutor.trashFolderName)
+        XCTAssertFalse(fm.fileExists(atPath: aside.path),
+                       "the old file was put aside although nothing replaced it")
+        #endif
+    }
+
+    /// And it leaves nothing behind. A staged file is hidden, so litter here
+    /// would be litter nobody ever sees — holding a film's worth of disk.
+    func testAFailedReplacementLeavesNoHiddenLeftovers() throws {
+        let source = try touch("Tenet.2020.2160p.mkv")
+        let destDir = tempDir.appendingPathComponent("Tenet (2020)")
+        try fm.createDirectory(at: destDir, withIntermediateDirectories: true)
+        try Data("y".utf8).write(to: destDir.appendingPathComponent("Tenet (2020).mkv"))
+
+        let files = MediaScanner().scan(urls: [source])
+        let plan = RenamePlanner().makePlan(for: files, outputRoot: tempDir)
+        try fm.removeItem(at: source)
+
+        let log = RenameLog(url: tempDir.appendingPathComponent("log.json"))
+        let journal = RenameJournal(url: tempDir.appendingPathComponent("journal.json"))
+        _ = RenameExecutor(log: log, journal: journal)
+            .execute(plan: plan, policy: .replace)
+
+        let left = try fm.contentsOfDirectory(atPath: destDir.path)
+        XCTAssertEqual(left, ["Tenet (2020).mkv"],
+                       "something was left behind in the library folder: \(left)")
+    }
+
+    /// Replacing the same title twice must not have the second replacement
+    /// destroy the first one's backup — both old copies are still somewhere.
+    func testTwoReplacementsOfTheSameTitleKeepBothOldCopies() throws {
+        #if !os(macOS)
+        let destDir = tempDir.appendingPathComponent("Dune (2021)")
+        try fm.createDirectory(at: destDir, withIntermediateDirectories: true)
+        let dest = destDir.appendingPathComponent("Dune (2021).mkv")
+        let log = RenameLog(url: tempDir.appendingPathComponent("log.json"))
+        let journal = RenameJournal(url: tempDir.appendingPathComponent("journal.json"))
+
+        for round in ["first", "second"] {
+            let source = tempDir.appendingPathComponent("Dune.2021.2160p.mkv")
+            try Data("new \(round)".utf8).write(to: source)
+            try Data("old \(round)".utf8).write(to: dest)
+            let files = MediaScanner().scan(urls: [source])
+            let plan = RenamePlanner().makePlan(for: files, outputRoot: tempDir)
+            XCTAssertEqual(RenameExecutor(log: log, journal: journal)
+                .execute(plan: plan, policy: .replace).succeeded, 1, round)
+        }
+
+        let aside = destDir.appendingPathComponent(RenameExecutor.trashFolderName)
+        let kept = try fm.contentsOfDirectory(atPath: aside.path).sorted()
+        XCTAssertEqual(kept.count, 2, "one backup overwrote the other: \(kept)")
+        let contents = Set(try kept.map {
+            try Data(contentsOf: aside.appendingPathComponent($0))
+        })
+        XCTAssertEqual(contents, [Data("old first".utf8), Data("old second".utf8)])
+        #endif
+    }
 }
