@@ -67,6 +67,12 @@ public struct WebSettings: Codable, Sendable, Equatable {
     public var remote: RemoteTarget
     /// When Mediafin looks by itself.
     public var schedule: Schedule
+    /// The interface's language, or nil to follow the machine's locale.
+    ///
+    /// Optional rather than defaulted so that "I have not chosen" can be
+    /// told from "I chose German": the first follows LANG, the second does
+    /// not, and a settings file written before this existed means the first.
+    public var language: Language?
 
     public enum ConflictPolicyChoice: String, Codable, Sendable, CaseIterable {
         case skip, rename, replace
@@ -100,7 +106,8 @@ public struct WebSettings: Codable, Sendable, Equatable {
                 watchSourceFolder: Bool = false,
                 conversion: WebConversionSettings = WebConversionSettings(),
                 remote: RemoteTarget = RemoteTarget(),
-                schedule: Schedule = Schedule()) {
+                schedule: Schedule = Schedule(),
+                language: Language? = nil) {
         self.sourceFolder = sourceFolder
         self.moviesFolder = moviesFolder
         self.seriesFolder = seriesFolder
@@ -115,6 +122,7 @@ public struct WebSettings: Codable, Sendable, Equatable {
         self.conversion = conversion
         self.remote = remote
         self.schedule = schedule
+        self.language = language
     }
 
     // MARK: Decoding
@@ -126,7 +134,7 @@ public struct WebSettings: Codable, Sendable, Equatable {
         case sourceFolder, moviesFolder, seriesFolder, musicFolder, libraryMode
         case identification
         case localLLMBaseURL, localLLMModel, jellyfinBaseURL
-        case conflictPolicy, watchSourceFolder, conversion, remote, schedule
+        case conflictPolicy, watchSourceFolder, conversion, remote, schedule, language
     }
 
     public init(from decoder: Decoder) throws {
@@ -153,6 +161,8 @@ public struct WebSettings: Codable, Sendable, Equatable {
         conversion = value(.conversion, defaults.conversion)
         remote = value(.remote, defaults.remote)
         schedule = value(.schedule, defaults.schedule)
+        language = (try? container.decodeIfPresent(Language.self, forKey: .language))
+            ?? nil
     }
 
     // MARK: Validation
@@ -289,6 +299,13 @@ public struct WebSettings: Codable, Sendable, Equatable {
         settings.conversion = WebConversionSettings.fromForm(fields, current: current.conversion)
         settings.remote = RemoteTarget.fromForm(fields, current: current.remote)
         settings.schedule = Schedule.fromForm(fields, current: current.schedule)
+        // "" is the machine's locale, which is a choice and not an absence:
+        // an unknown value keeps what was stored rather than silently
+        // switching the interface's language under the user.
+        if let value = fields["language"] {
+            settings.language = value.isEmpty ? nil : (Language(rawValue: value)
+                ?? current.language)
+        }
         return settings.normalised()
     }
 }

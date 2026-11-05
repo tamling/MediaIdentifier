@@ -140,6 +140,11 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
 
         let loaded = settingsStore.load()
         _settings = loaded.settings
+        // Before anything builds a string. Both front-ends construct the
+        // coordinator first, so this is the one place that covers them both
+        // — and it has to happen before the first window label is made,
+        // because a GTK label is given its text once at construction.
+        Text.start(configured: loaded.settings.language)
         if case .unreadable(let detail) = loaded.state {
             settingsProblem = detail
         } else {
@@ -364,7 +369,11 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
                 _probes[.jellyfin] = nil
             }
             lock.unlock()
-            update { $0.lastResult = "Settings saved." }
+            if settings.language != previous.language {
+                Text.start(configured: settings.language)
+            }
+            update { $0.lastResult = Text.s("Einstellungen gespeichert.",
+                                            "Settings saved.") }
             updateWatchState()
             // Only a changed schedule resets the clock. Saving an unrelated
             // setting at 02:59 must not push tonight's 03:00 run to tomorrow.

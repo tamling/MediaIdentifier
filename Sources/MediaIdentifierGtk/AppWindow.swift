@@ -171,9 +171,12 @@ final class AppWindow {
         // At the top, before the folders: the first question anyone has when
         // a run does nothing is "is everything plugged in", and a panel that
         // answers it below the fold is a panel nobody reads.
-        let checks = Self.card(titled: "Status")
-        checksSummary = Self.label("", classes: "mf-dim")
-        Self.add(checksSummary, to: checks)
+        // No title and no summary line of its own: the expander's label
+        // already carries both, and in a window this is only ever seen
+        // opened, with that label directly above it. It read
+        // "Status - 4 bereit" and then "STATUS / 4 bereit" again, two lines
+        // under the first.
+        let checks = Self.card()
         checksColumn = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2)!
         Self.add(checksColumn, to: checks)
         let checkRow = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8)!
@@ -910,6 +913,12 @@ final class AppWindow {
             gtk_box_pack_start(Gtk.box(row), word, 0, 0, 0)
 
             let detail = Self.label(check.detail, classes: "mf-dim")
+            // Cut in the middle rather than wrapped: three of the eight rows
+            // are folder paths, each of which took a second line, and the
+            // readable parts of a path are its start and its end. The whole
+            // of it is still in the tooltip.
+            gtk_label_set_ellipsize(Gtk.label(detail), PANGO_ELLIPSIZE_MIDDLE)
+            gtk_widget_set_tooltip_text(detail, check.detail)
             gtk_label_set_line_wrap(Gtk.label(detail), 1)
             gtk_box_pack_start(Gtk.box(row), detail, 1, 1, 0)
 
@@ -1111,11 +1120,16 @@ final class AppWindow {
 
     /// A grouped panel with a quiet caption, the shape GTK's own settings
     /// dialogues use.
-    private static func card(titled title: String) -> UnsafeMutablePointer<GtkWidget> {
+    private static func card(titled title: String? = nil)
+        -> UnsafeMutablePointer<GtkWidget> {
         let card = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6)!
         Styling.style(card, "mf-card")
-        let caption = label(title.uppercased(), classes: "mf-card-title")
-        gtk_box_pack_start(Gtk.box(card), caption, 0, 0, 0)
+        // Optional: a card inside an expander already has that expander's
+        // label over it, and a caption repeating it is a wasted line.
+        if let title {
+            let caption = label(title.uppercased(), classes: "mf-card-title")
+            gtk_box_pack_start(Gtk.box(card), caption, 0, 0, 0)
+        }
         return card
     }
 

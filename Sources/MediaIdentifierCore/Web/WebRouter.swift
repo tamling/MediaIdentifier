@@ -938,6 +938,20 @@ public struct WebRouter: Sendable {
                 + "\(Self.escape(cadence.label))</option>"
         }.joined()
 
+        // "" first, and selected when nothing is stored: following the
+        // machine is the default, and it has to be choosable again after a
+        // language has been picked.
+        let languageOptions: String = {
+            let follow = "<option value=\"\"\(current.language == nil ? " selected" : "")>"
+                + Self.escape(Text.s("Wie das System (LANG)", "Follow the system (LANG)"))
+                + "</option>"
+            return follow + Language.allCases.map { language in
+                let selected = current.language == language ? " selected" : ""
+                return "<option value=\"\(language.rawValue)\"\(selected)>"
+                    + "\(Self.escape(language.label))</option>"
+            }.joined()
+        }()
+
         let modeOptions = LibraryMode.allCases.map { mode in
             let selected = mode == current.libraryMode ? " selected" : ""
             return "<option value=\"\(mode.rawValue)\"\(selected)>"
@@ -983,7 +997,11 @@ public struct WebRouter: Sendable {
             <h1>Settings</h1>
             \(problems.isEmpty ? banner : "<p class=\"note\">Nothing was saved — please correct the fields marked below.</p>")
 
-            <h2>What this library holds</h2>
+            <h2>\(Text.s("Sprache", "Language"))</h2>
+            <label for="language">\(Text.s("Sprache der Oberfl\u{00E4}che", "Interface language"))</label>
+            <select id="language" name="language">\(languageOptions)</select>
+
+            <h2>\(Text.s("Was diese Bibliothek enth\u{00E4}lt", "What this library holds"))</h2>
             <label for="libraryMode">Sorting</label>
             <select id="libraryMode" name="libraryMode">\(modeOptions)</select>
             <p class="hint">Video and music are sorted differently — different folders, \
