@@ -200,35 +200,37 @@ jobs:
       # the commit that first added this workflow while the assets beside it
       # were rebuilt on every release: the binaries were right and the release
       # page's own "Source code" links pointed somewhere else entirely.
+      # Moves the rolling tag to the commit this release was built from.
+      # softprops/action-gh-release creates "latest" when it is missing and
+      # leaves an existing one where it is, so without this the tag sat on the
+      # commit that first added this workflow while the assets beside it were
+      # rebuilt every time: the release page's "Source code" links pointed
+      # somewhere else entirely.
+      #
+      # With git rather than the API. The API route took a PATCH to
+      # /git/refs/tags%2Flatest -- Octokit encodes the slash -- and it answered
+      # 403 on one run having answered 200 on the one before, same code, same
+      # token. git uses the credentials checkout already configured and asks a
+      # simpler question.
+      #
+      # NOT fatal. The tag is a label; the binaries are the delivery, and they
+      # carry whatever bug fix somebody is waiting for. A release that refuses
+      # to publish them because a label would not move is the wrong trade. It
+      # warns instead, which shows up on the run, so a tag that stops moving
+      # cannot go unnoticed either.
       - name: Point the "latest" tag at this commit
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const sha = context.sha
-            try {
-              await github.rest.git.updateRef(
-                { ...context.repo, ref: 'tags/latest', sha, force: true })
-            } catch (error) {
-              if (error.status !== 422) throw error
-              await github.rest.git.createRef(
-                { ...context.repo, ref: 'refs/tags/latest', sha })
-            }
-            // The release's stored target_commitish keeps naming whatever
-            // branch it was first cut from, which is just as misleading to a
-            // reader. It is only honoured when a tag has to be created, so
-            // this is cosmetic -- and cosmetic is exactly what a reader
-            // believes. Non-fatal: a release must not fail over a label.
-            try {
-              const found = await github.rest.repos.listReleases(
-                { ...context.repo, per_page: 100 })
-              const release = found.data.find(r => r.tag_name === 'latest')
-              if (release) {
-                await github.rest.repos.updateRelease(
-                  { ...context.repo, release_id: release.id, target_commitish: sha })
-              }
-            } catch (error) {
-              core.warning(`could not restate the release's commit: ${error.message}`)
-            }
+        shell: bash
+        run: |
+          set -uo pipefail
+          git config --global --add safe.directory "$PWD" || true
+          if git tag -f latest "$GITHUB_SHA" \
+            && git push -f origin "refs/tags/latest"; then
+            echo "latest now points at $GITHUB_SHA"
+          else
+            echo "::warning title=The \"latest\" tag did not move::The release" \
+              "page will name an older commit than the assets were built from." \
+              "The assets themselves are current."
+          fi
       # The macOS half used to remove assets a release no longer produces, and
       # it is gone. Without this, Mediafin.app.zip would sit in the release for
       # ever with a date from whenever it was last built, next to Linux files
@@ -258,9 +260,16 @@ jobs:
             }
             for (const asset of release.data.assets) {
               if (!gone.includes(asset.name)) continue
-              await github.rest.repos.deleteReleaseAsset(
-                { ...context.repo, asset_id: asset.id })
-              core.info(`removed ${asset.name}`)
+              // Not fatal, for the same reason the tag move is not: tidying up
+              // an asset this release no longer builds must not stop it
+              // publishing the ones it does. A warning shows on the run.
+              try {
+                await github.rest.repos.deleteReleaseAsset(
+                  { ...context.repo, asset_id: asset.id })
+                core.info(`removed ${asset.name}`)
+              } catch (error) {
+                core.warning(`could not remove ${asset.name}: ${error.message}`)
+              }
             }
       - name: Publish to "latest" release
         uses: softprops/action-gh-release@v2
