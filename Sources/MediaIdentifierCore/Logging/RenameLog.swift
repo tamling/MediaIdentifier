@@ -9,9 +9,12 @@ public struct RenameLogEntry: Identifiable, Codable, Equatable, Sendable {
         /// A re-encode rather than a rename, so the history can say which it
         /// was instead of labelling a conversion "renamed".
         case converted
-        /// Sent to the remote library. Distinct from `success` because the
-        /// file did not move on this machine, and an entry that said
-        /// "renamed" would send the user looking for it in the wrong place.
+        /// Sent to a server by a version of Mediafin that could do that.
+        ///
+        /// Nothing writes this any more — the sending feature is gone — but
+        /// the case stays: removing it would make an existing
+        /// `rename-log.json` fail to decode and take the user's whole
+        /// history with it.
         case sent
         /// Fetched from a URL into the import folder.
         case downloaded
@@ -52,8 +55,8 @@ public final class RenameLog: @unchecked Sendable {
     /// A snapshot, taken on the queue.
     ///
     /// Reads used to go straight at the array while appends ran on the
-    /// queue, from another thread: the web page and the window both read it
-    /// twice a second while a transfer appended once per file. That is a
+    /// queue, from another thread: the window reads it twice a second
+    /// while a run appends once per file. That is a
     /// data race on an array's storage, which is a crash rather than a
     /// stale number.
     public var entries: [RenameLogEntry] { queue.sync { _entries } }

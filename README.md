@@ -22,8 +22,7 @@ before anything touches the disk. One window, one engine, Linux.
 - You **tick, untick or hand-edit** each row, then press **Umbenennen**.
 - Subtitles and extras (`.srt`, `.ass`, `.sub`, `.nfo`, posters, samples) are
   **renamed alongside** the video.
-- Optionally **sends** the sorted files to another machine over rsync or SFTP,
-  with a path per kind, and **re-encodes** to save space.
+- Optionally **re-encodes** to save space.
 - Every change is **logged** and can be **undone**.
 - Everything runs **locally**. Only a title and a year are ever sent anywhere,
   and only if you switch online identification on.
@@ -38,10 +37,8 @@ mediafin-gtk
 
 The package carries its own Swift runtime, so nothing else has to be installed
 for the window to start. `ffmpeg` is needed for converting and for reading
-music tags, `rsync` or `openssh-client` for sending to a server, `sshpass` only
-to log in with a password instead of a key, `yt-dlp` to fetch from a link. Each
-says which program it wants when that program is missing, rather than failing
-obscurely.
+music tags, `yt-dlp` to fetch from a link. Each says which program it wants
+when that program is missing, rather than failing obscurely.
 
 ## The window
 
@@ -49,7 +46,7 @@ Everything that is not the list lives behind the **menu button** in the header:
 
 | Menu entry | |
 |---|---|
-| **Einstellungen …** | Library folders, identification, schedule, server — all in one window, with one **Übernehmen** button at the bottom that says `Übernommen um 14:52:31`. The time is there so a second press is visibly a second press. |
+| **Einstellungen …** | Library folders, identification, schedule — all in one window, with one **Übernehmen** button at the bottom that says `Übernommen um 14:52:31`. The time is there so a second press is visibly a second press. |
 | **Status …** | The traffic light: one lamp per thing that can be wrong, each carrying the sentence that says what to do about it. |
 | **Aus dem Netz laden …** | Fetch a video from a link with `yt-dlp`. |
 
@@ -61,9 +58,9 @@ looking when you are wondering what happened.
 ## Running by itself
 
 The schedule in the settings runs either daily at a fixed time or every few
-hours, and may scan, rename and send — each asked for separately, all three off
-by default. A run that only scans leaves a list for you to look at, which is
-what most people mean by "check overnight".
+hours, and may scan and rename — each asked for separately, both off by
+default. A run that only scans leaves a list for you to look at, which is what
+most people mean by "check overnight".
 
 The timer lives in the engine, so it fires while the window is open. For runs
 with no window, the package installs a service:
@@ -106,7 +103,6 @@ Sources/
     Undo/                     RenameJournal
     Metadata/                 MetadataProvider (+ offline, TMDb, local LLM)
     Conversion/               FFmpeg argument builder + converter
-    Remote/                   rsync / SFTP command building and transfer
     Web/                      Settings, commands, status snapshot, stores.
                               The `Web` prefix is left over from a web
                               interface that no longer exists; this is the
@@ -177,24 +173,23 @@ copy.
 ## Security
 
 No media ever leaves the machine. Online identification sends a title and a
-year, nothing else, and only when switched on.
+year, nothing else, and only when switched on. There is no server to talk to
+and no port to listen on: the program is a window and a scheduler.
 
-- **Secrets are not in the settings file.** API keys and the server password
-  live in `secrets.json`, mode 0600; `settings.json` can be pasted into a bug
-  report.
-- **A password is never an argument.** It reaches `ssh` through the
-  environment, because anyone on the machine can read `ps`.
-- **Host keys are checked.** `StrictHostKeyChecking` is never `no`. The
-  optional "trust this server the first time" is `accept-new`, which remembers
-  a server it has not met and still refuses one whose key has *changed* — which
-  is the case that matters.
-- **Names that cannot be quoted are refused, not escaped.** A filename
-  containing a newline would become a second command in an SFTP batch script,
-  and `sftp`'s `!` runs a local shell. There is nothing to escape it to, so the
-  user is told which file to rename.
-- **Nothing is deleted to make room.** "Delete the local copy after sending" is
-  off by default and stays off unless you turn it on: sending is a copy, which
-  can be undone by deleting what arrived; deleting the original cannot.
+- **Secrets are not in the settings file.** API keys live in `secrets.json`,
+  mode 0600; `settings.json` can be pasted into a bug report. A key for a
+  feature that has been removed is deleted from that file on the next start,
+  rather than sitting in clear text for a feature nothing can use.
+- **A key in the clear is a lamp.** Both services take a credential, and
+  over `http://` it goes on the wire readable. `http://192.168.3.116:1234`
+  for LM Studio on the same desk is the normal case and is accepted quietly;
+  `http://` to a *public* host turns the **Verschlüsselung** lamp amber and
+  names which service, because that request succeeds either way and there is
+  no other way to see it.
+- **Nothing is deleted to make room.** A rename under the "replace" policy
+  stages the incoming file under a temporary name first and only then moves
+  the old one aside, so a failure half way through leaves both files where
+  they were rather than neither.
 
 ## License
 

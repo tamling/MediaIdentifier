@@ -63,8 +63,6 @@ public struct WebSettings: Codable, Sendable, Equatable {
     public var watchSourceFolder: Bool
     /// Transcoding settings (FR16, FR17).
     public var conversion: WebConversionSettings
-    /// Where the library lives when it is on another machine.
-    public var remote: RemoteTarget
     /// When Mediafin looks by itself.
     public var schedule: Schedule
     /// The interface's language, or nil to follow the machine's locale.
@@ -105,7 +103,6 @@ public struct WebSettings: Codable, Sendable, Equatable {
                 conflictPolicy: ConflictPolicyChoice = .skip,
                 watchSourceFolder: Bool = false,
                 conversion: WebConversionSettings = WebConversionSettings(),
-                remote: RemoteTarget = RemoteTarget(),
                 schedule: Schedule = Schedule(),
                 language: Language? = nil) {
         self.sourceFolder = sourceFolder
@@ -120,7 +117,6 @@ public struct WebSettings: Codable, Sendable, Equatable {
         self.conflictPolicy = conflictPolicy
         self.watchSourceFolder = watchSourceFolder
         self.conversion = conversion
-        self.remote = remote
         self.schedule = schedule
         self.language = language
     }
@@ -134,7 +130,7 @@ public struct WebSettings: Codable, Sendable, Equatable {
         case sourceFolder, moviesFolder, seriesFolder, musicFolder, libraryMode
         case identification
         case localLLMBaseURL, localLLMModel, jellyfinBaseURL
-        case conflictPolicy, watchSourceFolder, conversion, remote, schedule, language
+        case conflictPolicy, watchSourceFolder, conversion, schedule, language
     }
 
     public init(from decoder: Decoder) throws {
@@ -159,7 +155,6 @@ public struct WebSettings: Codable, Sendable, Equatable {
         conflictPolicy = value(.conflictPolicy, defaults.conflictPolicy)
         watchSourceFolder = value(.watchSourceFolder, defaults.watchSourceFolder)
         conversion = value(.conversion, defaults.conversion)
-        remote = value(.remote, defaults.remote)
         schedule = value(.schedule, defaults.schedule)
         language = (try? container.decodeIfPresent(Language.self, forKey: .language))
             ?? nil
@@ -219,7 +214,6 @@ public struct WebSettings: Codable, Sendable, Equatable {
             found.append(problem)
         }
         found.append(contentsOf: conversion.problems())
-        found.append(contentsOf: remote.problems())
         found.append(contentsOf: schedule.problems())
         return found
     }
@@ -297,7 +291,6 @@ public struct WebSettings: Codable, Sendable, Equatable {
             settings.watchSourceFolder = fields["watchSourceFolder"] != nil
         }
         settings.conversion = WebConversionSettings.fromForm(fields, current: current.conversion)
-        settings.remote = RemoteTarget.fromForm(fields, current: current.remote)
         settings.schedule = Schedule.fromForm(fields, current: current.schedule)
         // "" is the machine's locale, which is a choice and not an absence:
         // an unknown value keeps what was stored rather than silently
@@ -315,14 +308,12 @@ public enum SecretKey: String, Codable, Sendable, CaseIterable {
     case localLLMAPIKey = "local-llm-api-key"
     case jellyfinToken = "jellyfin-token"
     case tmdbAPIKey = "tmdb-api-key"
-    case remotePassword = "remote-password"
 
     public var label: String {
         switch self {
         case .localLLMAPIKey: return Text.s("API-Key des Modellservers", "Model server API key")
         case .jellyfinToken: return Text.s("Jellyfin-API-Key", "Jellyfin API key")
         case .tmdbAPIKey: return Text.s("TMDb-API-Key", "TMDb API key")
-        case .remotePassword: return Text.s("Server-Passwort", "Server password")
         }
     }
 
@@ -332,7 +323,6 @@ public enum SecretKey: String, Codable, Sendable, CaseIterable {
         case .localLLMAPIKey: return "localLLMAPIKey"
         case .jellyfinToken: return "jellyfinToken"
         case .tmdbAPIKey: return "tmdbAPIKey"
-        case .remotePassword: return "remotePassword"
         }
     }
 }

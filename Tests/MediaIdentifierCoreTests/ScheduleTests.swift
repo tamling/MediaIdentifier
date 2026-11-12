@@ -175,9 +175,7 @@ final class ScheduleTests: XCTestCase {
                        "renaming is off and must not be promised")
 
         schedule.alsoRename = true
-        schedule.alsoSend = true
         XCTAssertTrue(schedule.summary.contains("umbenennen"))
-        XCTAssertTrue(schedule.summary.contains("Server"))
 
         schedule.isEnabled = false
         XCTAssertTrue(schedule.summary.lowercased().contains("aus"), schedule.summary)
@@ -194,26 +192,22 @@ final class ScheduleTests: XCTestCase {
         XCTAssertEqual(schedule.summary, "Daily at 03:05: look through.")
 
         schedule.alsoRename = true
-        schedule.alsoSend = true
-        XCTAssertEqual(schedule.summary,
-                       "Daily at 03:05: look through, rename, send to the server.")
+        XCTAssertEqual(schedule.summary, "Daily at 03:05: look through, rename.")
 
         schedule.cadence = .everyFewHours
         schedule.everyHours = 6
-        XCTAssertEqual(schedule.summary,
-                       "Every 6 hours: look through, rename, send to the server.")
+        XCTAssertEqual(schedule.summary, "Every 6 hours: look through, rename.")
 
         schedule.isEnabled = false
         XCTAssertEqual(schedule.summary, "Off — nothing runs by itself.")
     }
 
-    /// Both off by default, and separately: an unattended run that only
-    /// proposes is what most people mean by "check overnight".
+    /// Off by default: an unattended run that only proposes is what most
+    /// people mean by "check overnight".
     func testNothingIsActedOnUnlessAskedFor() {
         let schedule = Schedule()
         XCTAssertFalse(schedule.isEnabled)
         XCTAssertFalse(schedule.alsoRename)
-        XCTAssertFalse(schedule.alsoSend)
     }
 
     // MARK: Reading the form
@@ -221,14 +215,13 @@ final class ScheduleTests: XCTestCase {
     /// Unticking a checkbox sends nothing, so the hidden companion is
     /// what tells "unticked" from "not in this form".
     func testTheCheckboxesNeedTheirCompanionField() {
-        let on = Schedule(isEnabled: true, alsoRename: true, alsoSend: true)
+        let on = Schedule(isEnabled: true, alsoRename: true)
         XCTAssertTrue(Schedule.fromForm([:], current: on).isEnabled,
                       "a form without the section wiped the schedule")
 
         let off = Schedule.fromForm(["schedulePresent": "1"], current: on)
         XCTAssertFalse(off.isEnabled)
         XCTAssertFalse(off.alsoRename)
-        XCTAssertFalse(off.alsoSend)
     }
 
     func testATimeIsReadFromTheForm() {

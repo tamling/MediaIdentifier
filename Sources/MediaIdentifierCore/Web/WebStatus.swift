@@ -26,14 +26,6 @@ public struct StatusSnapshot: Codable, Sendable, Equatable {
     /// True when the most recent run finished with one or more failures, so the
     /// health endpoint can report an error via its HTTP status code.
     public var hasError: Bool
-    /// A transfer to the remote library is running.
-    public var transferring: Bool
-    public var transferProgress: Double
-    /// "45 % · 12.3MB/s" as the tool reported it.
-    public var transferDetail: String?
-    public var pendingTransfers: Int
-    /// The remote library is switched on and complete enough to use.
-    public var remoteConfigured: Bool
     /// Commands accepted but not finished, including ones still queued.
     ///
     /// `busy` is only set once a job is running, and every button press
@@ -75,11 +67,6 @@ public struct StatusSnapshot: Codable, Sendable, Equatable {
         watchActive: Bool = false,
         jellyfinConfigured: Bool = false,
         hasError: Bool = false,
-        transferring: Bool = false,
-        transferProgress: Double = 0,
-        transferDetail: String? = nil,
-        pendingTransfers: Int = 0,
-        remoteConfigured: Bool = false,
         queuedWork: Int = 0,
         downloading: Bool = false,
         downloadProgress: Double? = nil,
@@ -104,11 +91,6 @@ public struct StatusSnapshot: Codable, Sendable, Equatable {
         self.watchActive = watchActive
         self.jellyfinConfigured = jellyfinConfigured
         self.hasError = hasError
-        self.transferring = transferring
-        self.transferProgress = transferProgress
-        self.transferDetail = transferDetail
-        self.pendingTransfers = pendingTransfers
-        self.remoteConfigured = remoteConfigured
         self.queuedWork = queuedWork
         self.downloading = downloading
         self.downloadProgress = downloadProgress
@@ -124,30 +106,12 @@ public struct StatusSnapshot: Codable, Sendable, Equatable {
     /// Percent (0–100) of whichever job is currently active.
     public var activePercent: Int {
         let fraction: Double
-        if transferring {
-            fraction = transferProgress
-        } else if converting {
+        if converting {
             fraction = convertProgress
         } else {
             fraction = renameProgress
         }
         return max(0, min(100, Int((fraction * 100).rounded())))
-    }
-
-    /// One line for the transfer progress bar.
-    ///
-    /// A bar with no words on it only says "something is happening". This
-    /// says which file, how far, and how fast — and when nothing is being
-    /// sent it says that instead of showing a stale last percentage.
-    public var transferSummary: String {
-        guard transferring else {
-            return pendingTransfers > 0 ? "Wartet …" : "Keine Übertragung"
-        }
-        var parts: [String] = []
-        if let file = currentFile { parts.append(file) }
-        parts.append(transferDetail ?? "\(Int((transferProgress * 100).rounded())) %")
-        if pendingTransfers > 0 { parts.append("noch \(pendingTransfers)") }
-        return parts.joined(separator: " · ")
     }
 
     public static let empty = StatusSnapshot()

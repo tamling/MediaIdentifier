@@ -65,7 +65,6 @@ public struct ProbeResult: Equatable, Sendable {
 public enum ProbeSubject: String, Sendable, Equatable, CaseIterable {
     case localLLM
     case jellyfin
-    case remote
 }
 
 /// Works out the lamps.
@@ -78,7 +77,6 @@ public enum SystemChecks {
 
     public static func all(
         settings: WebSettings,
-        tools: RemoteTools,
         ffmpegAvailable: Bool,
         secrets: Set<SecretKey>,
         probes: [ProbeSubject: ProbeResult],
@@ -135,11 +133,52 @@ public enum SystemChecks {
                                      probes: probes, now: now))
         checks.append(jellyfin(settings: settings, secrets: secrets,
                                probes: probes, now: now))
-        checks.append(contentsOf: remote(settings: settings, tools: tools,
-                                         secrets: secrets, probes: probes,
-                                         fileManager: fileManager, now: now))
+        checks.append(encryption(settings: settings))
         checks.append(schedule(settings.schedule, nextRun: nextScheduledRun, now: now))
         return checks
+    }
+
+    /// Whether a stored key would travel in the clear.
+    ///
+    /// The model server and Jellyfin each take a credential, and over
+    /// `http://` it goes on the wire readable. On a local network that is
+    /// the normal arrangement and this lamp says nothing about it; to a
+    /// public host it is the one thing on this panel that cannot be seen
+    /// any other way, because the request succeeds either way.
+    static func encryption(settings: WebSettings) -> SystemCheck {
+        let name = Text.s("Verschlüsselung", "Encryption")
+        var exposed: [String] = []
+        if URLSafety.sendsCredentialsInTheClear(settings.localLLMBaseURL) {
+            exposed.append(Text.s("Modellserver", "model server"))
+        }
+        if URLSafety.sendsCredentialsInTheClear(settings.jellyfinBaseURL) {
+            exposed.append("Jellyfin")
+        }
+        guard exposed.isEmpty else {
+            return SystemCheck(
+                id: "encryption", name: name, state: .warning,
+                detail: Text.s(
+                    "\(exposed.joined(separator: " und ")) wird über http:// "
+                        + "angesprochen, und der Host liegt nicht im eigenen Netz — "
+                        + "der hinterlegte Schlüssel ist unterwegs mitlesbar. "
+                        + "https:// verwenden.",
+                    "\(exposed.joined(separator: " and ")) is addressed over http:// "
+                        + "and the host is not on your own network, so the stored key "
+                        + "is readable in transit. Use https://."))
+        }
+        let configured = !settings.localLLMBaseURL.isEmpty
+            || !settings.jellyfinBaseURL.isEmpty
+        guard configured else {
+            return SystemCheck(id: "encryption", name: name, state: .off,
+                               detail: Text.s("Keine Adresse eingetragen.",
+                                              "No address entered."))
+        }
+        return SystemCheck(
+            id: "encryption", name: name, state: .ok,
+            detail: Text.s("Jede eingetragene Adresse ist entweder https:// oder "
+                               + "liegt im eigenen Netz.",
+                           "Every address entered is either https:// or on your own "
+                               + "network."))
     }
 
     /// Whether the unattended run is really going to happen.
@@ -280,100 +319,6 @@ public enum SystemChecks {
         }
         return probed(id: "jellyfin", name: "Jellyfin", probe: probes[.jellyfin],
                       untested: Self.untested, now: now)
-    }
-
-    private static func remote(settings: WebSettings, tools: RemoteTools,
-                               secrets: Set<SecretKey>,
-                               probes: [ProbeSubject: ProbeResult],
-                               fileManager: FileManager = .default,
-                               now: Date) -> [SystemCheck] {
-        let target = settings.remote
-        guard target.isEnabled else {
-            return [SystemCheck(id: "remote", name: "Server", state: .off,
-                                detail: Text.s("Nicht eingeschaltet.", "Not switched on."))]
-        }
-
-        var checks: [SystemCheck] = []
-        let missing = tools.missing(for: target)
-        checks.append(SystemCheck(
-            id: "remote-tools",
-            name: Text.s("Übertragungsprogramme", "Transfer programs"),
-            state: missing.isEmpty ? .ok : .failed,
-            detail: missing.isEmpty
-                ? Text.s("\(target.transport.rawValue) und OpenSSH sind da.",
-                         "\(target.transport.rawValue) and OpenSSH are present.")
-                : Text.s("Fehlt: \(missing.joined(separator: ", ")). ",
-                         "Missing: \(missing.joined(separator: ", ")). ")
-                    + "sudo apt install \(missing.joined(separator: " "))"))
-
-        let problems = target.problems()
-        if !problems.isEmpty {
-            checks.append(SystemCheck(
-                id: "remote", name: "Server", state: .failed,
-                detail: problems.map(\.message).joined(separator: " ")))
-            return checks
-        }
-        if target.authentication == .password, !secrets.contains(.remotePassword) {
-            checks.append(SystemCheck(id: "remote", name: "Server", state: .failed,
-                                      detail: Text.s(
-                                        "Anmeldung per Passwort gewählt, aber keines "
-                                            + "hinterlegt.",
-                                        "Password login is selected but none is stored.")))
-            return checks
-        }
-        if let lamp = login(target, secrets: secrets, fileManager: fileManager) {
-            checks.append(lamp)
-        }
-        checks.append(probed(id: "remote", name: "Server", probe: probes[.remote],
-                             untested: Self.untested, now: now))
-        return checks
-    }
-
-    /// The login trap, made visible.
-    ///
-    /// Key login puts ssh in batch mode: it may not ask for anything. So a
-    /// key file that is not there fails in a tenth of a second with
-    /// "Permission denied", and a password sitting in the store is never
-    /// offered — nothing anywhere said that it would not be. This is the
-    /// lamp for exactly that, because it is what happened.
-    static func login(_ target: RemoteTarget, secrets: Set<SecretKey>,
-                      fileManager: FileManager) -> SystemCheck? {
-        guard target.authentication == .key else { return nil }
-        let name = Text.s("Anmeldung", "Login")
-        let key = (target.identityFile as NSString).expandingTildeInPath
-
-        if !target.identityFile.isEmpty, !fileManager.fileExists(atPath: key) {
-            return SystemCheck(
-                id: "remote-login", name: name, state: .failed,
-                detail: Text.s(
-                    "Die Schlüsseldatei \(target.identityFile) ist nicht da, und bei "
-                        + "Anmeldung per Schlüssel darf ssh nicht nach einem Passwort "
-                        + "fragen — die Anmeldung scheitert also sofort."
-                        + (secrets.contains(.remotePassword)
-                            ? " Ein Passwort ist hinterlegt: „Anmeldung“ auf „Passwort“ "
-                                + "stellen, dann wird es benutzt."
-                            : " Entweder den Pfad berichtigen, das Feld leeren, oder bei "
-                                + "„Anmeldung“ auf „Passwort“ stellen."),
-                    "The key file \(target.identityFile) is not there, and with key login "
-                        + "ssh is not allowed to ask for a password — so the login fails "
-                        + "at once."
-                        + (secrets.contains(.remotePassword)
-                            ? " A password is stored: set “Login” to “Password” and it "
-                                + "will be used."
-                            : " Either correct the path, empty the field, or set “Login” "
-                                + "to “Password”.")))
-        }
-        if secrets.contains(.remotePassword) {
-            return SystemCheck(
-                id: "remote-login", name: name, state: .warning,
-                detail: Text.s(
-                    "Ein Passwort ist hinterlegt, aber die Anmeldung steht auf Schlüssel "
-                        + "— das Passwort wird nicht benutzt. „Anmeldung“ auf „Passwort“ "
-                        + "stellen, wenn es benutzt werden soll.",
-                    "A password is stored but the login is set to key, so the password is "
-                        + "not used. Set “Login” to “Password” if it should be."))
-        }
-        return nil
     }
 
     /// A lamp whose colour comes from an actual connection attempt.

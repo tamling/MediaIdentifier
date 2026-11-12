@@ -75,15 +75,6 @@ public enum DemoLibrary {
         // No network, no credentials.
         settings.identification = .offline
         settings.watchSourceFolder = false
-        // Filled in but switched off. The server fields then have something
-        // in them in a screenshot, and nothing in the demo can reach a
-        // network: an enabled target would have the status panel trying to
-        // log in to a machine that does not exist.
-        settings.remote = RemoteTarget(isEnabled: false,
-                                       host: "nas.fritz.box",
-                                       port: 22,
-                                       user: "mediafin",
-                                       basePath: "/volume1/Medien")
         return settings
     }
 }

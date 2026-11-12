@@ -2,8 +2,8 @@ import Foundation
 
 /// Finds the programs that fetch a video from a URL.
 ///
-/// Absolute paths only, for the same reason `RemoteTools` insists on them:
-/// Mediafin may run as a service whose `PATH` is whatever the unit inherited,
+/// Absolute paths only: Mediafin may run as a service whose `PATH` is
+/// whatever the unit inherited,
 /// and a service that executes the first `yt-dlp` it happens to find is a
 /// service that can be made to execute something else.
 public struct DownloadTools: Sendable, Equatable {

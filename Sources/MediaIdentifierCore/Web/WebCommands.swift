@@ -31,8 +31,6 @@ public enum WebCommand: Sendable, Equatable {
     /// Converts the files the user ticked. Never started on its own.
     case convertFiles(accepting: Set<UUID>)
     case cancelConversions
-    /// Sends the files the user ticked to the remote library, sorted into the
-    /// proposed folders. Never started on its own.
     /// Ticks or unticks every proposal.
     ///
     /// Server-side because the web interface forbids JavaScript outright in
@@ -46,17 +44,13 @@ public enum WebCommand: Sendable, Equatable {
     /// and the counts in its header come from the engine, so the engine has
     /// to be where a tick is recorded.
     case setAccepted(UUID, Bool)
-    case transferFiles(accepting: Set<UUID>)
-    case cancelTransfers
     /// Fetches one URL into the import folder with yt-dlp, then scans, so
     /// the download appears as a proposal like anything else that lands
     /// there. Never started on its own.
     case downloadURL(String)
     case cancelDownload
-    /// Logs in to the server and checks the target path, for the status panel.
-    case testRemoteConnection
     /// Runs every connection test there is, so one press answers "is
-    /// everything there?" instead of three.
+    /// everything there?" instead of two.
     case checkEverything
     case clearHistory
 }

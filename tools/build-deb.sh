@@ -11,10 +11,10 @@
 #   ./tools/build-deb.sh --binary ./mediafin  # package a binary you already have
 #   …           --binary ./mediafin --gtk-binary ./mediafin-gtk
 #
-# The package carries the server, and the native window too when one is given
-# or built. Both end up in one package: the desktop it is meant for has GTK
-# already, and splitting it would mean two packages to keep in step. On a
-# headless server use the tarball, or build without the window.
+# The package carries the scheduler binary, and the native window too when
+# one is given or built. Both end up in one package: the desktop it is meant
+# for has GTK already, and splitting it would mean two packages to keep in
+# step. On a headless machine use the tarball, or build without the window.
 #
 # The second form needs no Swift toolchain, so you can turn the published
 # tarball into a .deb on the machine you want to install it on:
@@ -121,7 +121,7 @@ install -d -m 755 "$STAGE/DEBIAN"
 
 # The native window, when there is one to ship. Optional rather than required
 # so the package can still be built on a machine without GTK headers, and so
-# `--binary` on its own keeps working for the server-only case.
+# `--binary` on its own keeps working for the scheduler-only case.
 if [ -n "$PREBUILT_GTK" ]; then
   [ -x "$PREBUILT_GTK" ] || { echo "FAIL: $PREBUILT_GTK is not executable" >&2; exit 1; }
   echo "==> Including the native window: $PREBUILT_GTK"
@@ -146,7 +146,7 @@ StartupNotify=true
 DESKTOP
   chmod 644 "$STAGE/usr/share/applications/mediafin.desktop"
 else
-  echo "==> No native window supplied; packaging the server only"
+  echo "==> No native window supplied; packaging the scheduler only"
 fi
 
 # Debian wants a changelog, compressed, with no timestamp inside the archive
@@ -197,7 +197,7 @@ Print the version and exit.
 Settings. Contains no credentials.
 .TP
 .I ~/.config/mediafin/secrets.json
-API keys and the server password, mode 0600.
+API keys, mode 0600.
 .SH ENVIRONMENT
 .TP
 .B MEDIAFIN_CONFIG_DIR
@@ -205,8 +205,7 @@ Use this directory instead of
 .IR $XDG_CONFIG_HOME/mediafin .
 .SH SEE ALSO
 .BR mediafin-gtk (1),
-.BR ffmpeg (1),
-.BR rsync (1)
+.BR ffmpeg (1)
 EOF
 gzip -9n "$STAGE/usr/share/man/man1/mediafin.1"
 
@@ -309,9 +308,9 @@ Maintainer: Mediafin <noreply@example.invalid>
 Installed-Size: $INSTALLED_SIZE
 Section: video
 Priority: optional
-Depends: $SHLIB_DEPENDS, adduser, openssl
-Recommends: ffmpeg, rsync, openssh-client
-Suggests: sshpass, yt-dlp
+Depends: $SHLIB_DEPENDS, adduser
+Recommends: ffmpeg
+Suggests: yt-dlp
 Description: Rename media into a Jellyfin layout, in a native window
  Mediafin parses release names, proposes Jellyfin-conformant names and shows
  them for review before anything is moved. It can also re-encode files to
@@ -321,17 +320,14 @@ Description: Rename media into a Jellyfin layout, in a native window
  dragged into it from the file manager. The mediafin command draws nothing;
  it exists so scheduled runs happen while the window is closed.
  .
- Sending the sorted files to a server over rsync or SFTP, fetching a video
- from a link with yt-dlp, and sorting a music library from its own tags are
- all optional; each names the program it needs when that program is absent,
- rather than failing obscurely. sshpass is only needed to log in with a
- password instead of a key, and yt-dlp is usually installed with pip rather
- than from the distribution, which is why it is a suggestion and not a
- recommendation.
+ Fetching a video from a link with yt-dlp, and sorting a music library from
+ its own tags, are both optional; each names the program it needs when that
+ program is absent, rather than failing obscurely. yt-dlp is usually
+ installed with pip rather than from the distribution, which is why it is a
+ suggestion and not a recommendation.
  .
  The Swift runtime is linked statically, so no Swift installation is needed.
- openssl is required to create the first self-signed certificate; ffmpeg only
- for re-encoding.
+ ffmpeg is only needed for re-encoding.
 EOF
 
 cat > "$STAGE/DEBIAN/postinst" <<'EOF'
@@ -391,8 +387,8 @@ case "$1" in
     fi
     ;;
   purge)
-    # Only on purge, and only the state directory: tokens and certificates
-    # are not worth keeping, but nobody's media lives here.
+    # Only on purge, and only the state directory: stored keys are not
+    # worth keeping, and nobody's media lives here.
     rm -rf /var/lib/mediafin
     if getent passwd mediafin >/dev/null; then
       deluser --system mediafin || true

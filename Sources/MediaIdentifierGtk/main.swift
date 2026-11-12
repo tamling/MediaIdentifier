@@ -255,8 +255,6 @@ case .pressScan:
     // queue and the window's own refresh time to pick that answer up.
     let press: @convention(c) (UnsafeMutableRawPointer?) -> gboolean = { _ in
         print("scan button available: \(mainWindow.scanButtonIsAvailable)")
-        print("send button on the main surface: "
-            + "\(mainWindow.sendButtonIsOnTheMainSurface)")
         mainWindow.pressScan()
         let report: @convention(c) (UnsafeMutableRawPointer?) -> gboolean = { _ in
             defer { gtk_main_quit() }

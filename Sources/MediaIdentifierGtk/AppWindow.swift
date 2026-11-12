@@ -34,23 +34,6 @@ final class AppWindow {
     private let llmKeyEntry: UnsafeMutablePointer<GtkWidget>
     private let logColumn: UnsafeMutablePointer<GtkWidget>
     private let logCountLabel: UnsafeMutablePointer<GtkWidget>
-    private let remoteEnabledCheck: UnsafeMutablePointer<GtkWidget>
-    private let remoteHostEntry: UnsafeMutablePointer<GtkWidget>
-    private let remotePortEntry: UnsafeMutablePointer<GtkWidget>
-    private let remoteUserEntry: UnsafeMutablePointer<GtkWidget>
-    private let remoteBaseEntry: UnsafeMutablePointer<GtkWidget>
-    private let remoteMoviesPathEntry: UnsafeMutablePointer<GtkWidget>
-    private let remoteSeriesPathEntry: UnsafeMutablePointer<GtkWidget>
-    private let remoteMusicPathEntry: UnsafeMutablePointer<GtkWidget>
-    private let remoteIdentityEntry: UnsafeMutablePointer<GtkWidget>
-    private let remotePasswordEntry: UnsafeMutablePointer<GtkWidget>
-    private let remoteTransportCombo: UnsafeMutablePointer<GtkWidget>
-    private let remoteAuthCombo: UnsafeMutablePointer<GtkWidget>
-    private let remoteTrustCheck: UnsafeMutablePointer<GtkWidget>
-    private let remoteRemoveLocalCheck: UnsafeMutablePointer<GtkWidget>
-    private let remoteProgress: UnsafeMutablePointer<GtkWidget>
-    private let sendButton: UnsafeMutablePointer<GtkWidget>
-    private let cancelSendButton: UnsafeMutablePointer<GtkWidget>
     private let urlEntry: UnsafeMutablePointer<GtkWidget>
     private let downloadButton: UnsafeMutablePointer<GtkWidget>
     private let cancelDownloadButton: UnsafeMutablePointer<GtkWidget>
@@ -60,7 +43,6 @@ final class AppWindow {
     private let scheduleTimeEntry: UnsafeMutablePointer<GtkWidget>
     private let scheduleHoursEntry: UnsafeMutablePointer<GtkWidget>
     private let scheduleRenameCheck: UnsafeMutablePointer<GtkWidget>
-    private let scheduleSendCheck: UnsafeMutablePointer<GtkWidget>
     private let scheduleSummary: UnsafeMutablePointer<GtkWidget>
     private let checksColumn: UnsafeMutablePointer<GtkWidget>
     private let checksExpander: UnsafeMutablePointer<GtkWidget>
@@ -342,86 +324,6 @@ final class AppWindow {
         gtk_container_add(Gtk.container(detectionExpander), detection)
         gtk_box_pack_start(Gtk.box(settingsPage), detectionExpander, 0, 0, 0)
 
-        // MARK: The library on another machine
-        //
-        // Also behind an expander, for the same reason: it is configured once.
-        // The progress bar lives in here rather than in the header, because
-        // a transfer is the one job in this window that runs for minutes and
-        // the question while it does is "how far", not "is it busy".
-        remoteEnabledCheck = gtk_check_button_new_with_label(
-            "Die Bibliothek liegt auf einem Server")!
-        remoteHostEntry = Self.entry(placeholder: "nas.fritz.box")
-        remotePortEntry = Self.entry(placeholder: "22")
-        remoteUserEntry = Self.entry(placeholder: Text.s("benutzer", "user"))
-        remoteBaseEntry = Self.entry(placeholder: "/volume1/Medien")
-        // One path per kind: a server rarely keeps films, series and music
-        // under one parent, and the single path above cannot say so.
-        remoteMoviesPathEntry = Self.entry(
-            placeholder: Text.s("leer = Zielpfad", "empty = target path"))
-        remoteSeriesPathEntry = Self.entry(
-            placeholder: Text.s("leer = Zielpfad", "empty = target path"))
-        remoteMusicPathEntry = Self.entry(
-            placeholder: Text.s("leer = Zielpfad", "empty = target path"))
-        remoteIdentityEntry = Self.entry(placeholder: Text.s("~/.ssh/id_ed25519 (leer = Standard)",
-                                       "~/.ssh/id_ed25519 (empty = default)"))
-        // Write-only, like the model server's key: never filled in from
-        // storage, so the password cannot end up in a screenshot.
-        remotePasswordEntry = Self.entry(placeholder: "")
-        gtk_entry_set_visibility(Gtk.entry(remotePasswordEntry), 0)
-        remoteTransportCombo = gtk_combo_box_text_new()!
-        for transport in RemoteTarget.Transport.allCases {
-            gtk_combo_box_text_append_text(Gtk.comboBoxText(remoteTransportCombo),
-                                           transport.label)
-        }
-        remoteAuthCombo = gtk_combo_box_text_new()!
-        for auth in RemoteTarget.Authentication.allCases {
-            gtk_combo_box_text_append_text(Gtk.comboBoxText(remoteAuthCombo), auth.label)
-        }
-        remoteTrustCheck = gtk_check_button_new_with_label(
-            Text.s("Dem Server beim ersten Mal vertrauen (geänderter Schlüssel bleibt abgelehnt)",
-                   "Trust this server the first time (a changed key is still refused)"))!
-        remoteRemoveLocalCheck = gtk_check_button_new_with_label(
-            Text.s("Lokale Datei nach erfolgreicher Übertragung löschen",
-                   "Delete the local file after a successful transfer"))!
-
-        let remote = Self.card(titled: Text.s("Server", "Server"))
-        Self.add(remoteEnabledCheck, to: remote)
-        Self.add(Self.row(Text.s("Adresse", "Address"), remoteHostEntry), to: remote)
-        Self.add(Self.row(Text.s("Port", "Port"), remotePortEntry), to: remote)
-        Self.add(Self.row(Text.s("Benutzer", "User"), remoteUserEntry), to: remote)
-        Self.add(Self.row(Text.s("Zielpfad", "Target path"), remoteBaseEntry), to: remote)
-        Self.add(Self.row(Text.s("Nur Filme", "Films only"), remoteMoviesPathEntry),
-                 to: remote)
-        Self.add(Self.row(Text.s("Nur Serien", "Series only"), remoteSeriesPathEntry),
-                 to: remote)
-        Self.add(Self.row(Text.s("Nur Musik", "Music only"), remoteMusicPathEntry),
-                 to: remote)
-        Self.add(Self.row(Text.s("Übertragung", "Transfer"), remoteTransportCombo), to: remote)
-        Self.add(Self.row(Text.s("Anmeldung", "Login"), remoteAuthCombo), to: remote)
-        Self.add(Self.row(Text.s("Schlüsseldatei", "Key file"), remoteIdentityEntry), to: remote)
-        Self.add(Self.row(Text.s("Passwort", "Password"), remotePasswordEntry), to: remote)
-        Self.add(remoteTrustCheck, to: remote)
-        Self.add(remoteRemoveLocalCheck, to: remote)
-
-        // Testing the server on its own, rather than only as part of
-        // "Alles prüfen": this is the one the user presses while they are
-        // still getting the address and the key right. It belongs beside the
-        // fields it tests, so it stays in this panel.
-        let testServerRow = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8)!
-        let testServerButton = gtk_button_new_with_label(Text.s("Server testen", "Test the server"))!
-        gtk_box_pack_end(Gtk.box(testServerRow), testServerButton, 0, 0, 0)
-        Self.add(testServerRow, to: remote)
-
-        // Sending, and how far it has got, are built here but belong on the
-        // main surface — see the proposals card. They were in this panel, and
-        // when the panel moved behind the menu the only way to send anything
-        // went with it: "how is this supposed to be synced, there is no
-        // button". Sending is a thing you do to the list, like renaming, not
-        // a setting.
-        remoteProgress = gtk_progress_bar_new()!
-        sendButton = gtk_button_new_with_label(Text.s("Senden", "Send"))!
-        cancelSendButton = gtk_button_new_with_label(Text.s("Stopp", "Stop"))!
-
         // MARK: Looking by itself
 
         scheduleCheck = gtk_check_button_new_with_label(Text.s("Von selbst nachsehen", "Look by itself"))!
@@ -434,8 +336,6 @@ final class AppWindow {
         scheduleHoursEntry = Self.entry(placeholder: "6")
         scheduleRenameCheck = gtk_check_button_new_with_label(
             Text.s("Dabei auch umbenennen", "Rename what it finds"))!
-        scheduleSendCheck = gtk_check_button_new_with_label(
-            Text.s("Dabei auch zum Server senden", "Also send to the server"))!
         scheduleSummary = Self.label("", classes: "mf-dim")
         gtk_label_set_line_wrap(Gtk.label(scheduleSummary), 1)
 
@@ -445,19 +345,12 @@ final class AppWindow {
         Self.add(Self.row(Text.s("Uhrzeit", "Time"), scheduleTimeEntry), to: scheduleCard)
         Self.add(Self.row(Text.s("Abstand (h)", "Interval (h)"), scheduleHoursEntry), to: scheduleCard)
         Self.add(scheduleRenameCheck, to: scheduleCard)
-        Self.add(scheduleSendCheck, to: scheduleCard)
         Self.add(scheduleSummary, to: scheduleCard)
 
         let scheduleExpander = gtk_expander_new(Text.s("Zeitplan", "Schedule"))!
         gtk_expander_set_expanded(Gtk.expander(scheduleExpander), 1)
         gtk_container_add(Gtk.container(scheduleExpander), scheduleCard)
         gtk_box_pack_start(Gtk.box(settingsPage), scheduleExpander, 0, 0, 0)
-
-        let remoteExpander = gtk_expander_new(
-            Text.s("Server (rsync / SFTP)", "Server (rsync / SFTP)"))!
-        gtk_expander_set_expanded(Gtk.expander(remoteExpander), 1)
-        gtk_container_add(Gtk.container(remoteExpander), remote)
-        gtk_box_pack_start(Gtk.box(settingsPage), remoteExpander, 0, 0, 0)
 
         // MARK: Proposals
 
@@ -488,17 +381,11 @@ final class AppWindow {
         undoButton = gtk_button_new_with_label(Text.s("Rückgängig", "Undo"))!
         applyButton = gtk_button_new_with_label(Text.s("Umbenennen", "Rename"))!
         Styling.style(applyButton, "suggested-action")
-        // Right to left: rename, then send, then stop, then undo. Renaming is
-        // the usual one and sits furthest right; sending is the same kind of
-        // thing — something you do to what is ticked — and belongs beside it
-        // rather than behind a menu.
+        // Right to left: rename, then undo. Renaming is the usual one and
+        // sits furthest right.
         gtk_box_pack_end(Gtk.box(actions), applyButton, 0, 0, 0)
-        gtk_box_pack_end(Gtk.box(actions), sendButton, 0, 0, 0)
-        gtk_box_pack_end(Gtk.box(actions), cancelSendButton, 0, 0, 0)
         gtk_box_pack_end(Gtk.box(actions), undoButton, 0, 0, 0)
         Self.add(actions, to: proposals)
-        // The transfer's progress, under the buttons that start it.
-        Self.add(remoteProgress, to: proposals)
 
         gtk_box_pack_start(Gtk.box(page), proposals, 1, 1, 0)
 
@@ -592,10 +479,7 @@ final class AppWindow {
         Gtk.onClick(allButton, self) { $0.setAllChecked(true) }
         Gtk.onClick(noneButton, self) { $0.setAllChecked(false) }
         Gtk.onClick(testButton, self) { $0.testModelServer() }
-        Gtk.onClick(sendButton, self) { $0.sendSelected() }
-        Gtk.onClick(cancelSendButton, self) { $0.cancelSending() }
         Gtk.onClick(checkButton, self) { $0.checkEverything() }
-        Gtk.onClick(testServerButton, self) { $0.testServer() }
         Gtk.onClick(downloadButton, self) { $0.startDownload() }
         Gtk.onClick(cancelDownloadButton, self) { $0.cancelDownload() }
 
@@ -740,7 +624,6 @@ final class AppWindow {
             settings.libraryMode = LibraryMode.allCases[library]
         }
         settings.schedule = readScheduleFields(from: settings.schedule)
-        settings.remote = readRemoteFields(from: settings.remote)
         coordinator.submit(.saveSettings(settings))
 
         // With the time of day, and said next to the button that was just
@@ -767,13 +650,6 @@ final class AppWindow {
             coordinator.submit(.setSecret(.localLLMAPIKey, key))
             Gtk.setText(of: llmKeyEntry, "")
         }
-        let serverPassword = Gtk.text(of: remotePasswordEntry)
-        if !serverPassword.isEmpty {
-            coordinator.submit(.setSecret(.remotePassword, serverPassword))
-            // Cleared from the widget at once: it is in the secret store now,
-            // and a password left in a field is a password on the screen.
-            Gtk.setText(of: remotePasswordEntry, "")
-        }
     }
 
     /// Reads the schedule fields.
@@ -785,7 +661,6 @@ final class AppWindow {
         var schedule = current
         schedule.isEnabled = Gtk.isChecked(scheduleCheck)
         schedule.alsoRename = Gtk.isChecked(scheduleRenameCheck)
-        schedule.alsoSend = Gtk.isChecked(scheduleSendCheck)
 
         let typed = Gtk.text(of: scheduleTimeEntry).trimmingCharacters(in: .whitespaces)
         let parts = typed.split(separator: ":", maxSplits: 1)
@@ -805,73 +680,6 @@ final class AppWindow {
         return schedule
     }
 
-    /// Reads the server fields, keeping anything the window cannot express.
-    ///
-    /// The port is the one field that can be typed wrong in a way worth
-    /// catching here: an empty or non-numeric box keeps the stored port
-    /// rather than quietly becoming 22, which would send the library to
-    /// whatever answers there.
-    private func readRemoteFields(from current: RemoteTarget) -> RemoteTarget {
-        let loaded = loadedSettings.remote
-        var target = current
-
-        // Each field is written back only when the widget differs from what
-        // was loaded into it — that is, only when the user changed it here.
-        // Anything they did not touch keeps whatever is in the settings now,
-        // which may have been changed from the web interface since.
-        func merge<T: Equatable>(_ widget: T, _ wasLoaded: T, into field: inout T) {
-            if widget != wasLoaded { field = widget }
-        }
-
-        merge(Gtk.isChecked(remoteEnabledCheck), loaded.isEnabled, into: &target.isEnabled)
-        merge(Gtk.isChecked(remoteRemoveLocalCheck), loaded.removeLocalAfterSend,
-              into: &target.removeLocalAfterSend)
-        merge(Gtk.isChecked(remoteTrustCheck), loaded.trustOnFirstUse,
-              into: &target.trustOnFirstUse)
-        merge(Gtk.text(of: remoteHostEntry).trimmingCharacters(in: .whitespaces),
-              loaded.host, into: &target.host)
-        merge(Gtk.text(of: remoteUserEntry).trimmingCharacters(in: .whitespaces),
-              loaded.user, into: &target.user)
-        merge(Gtk.text(of: remoteBaseEntry).trimmingCharacters(in: .whitespaces),
-              loaded.basePath, into: &target.basePath)
-        merge(Gtk.text(of: remoteMoviesPathEntry).trimmingCharacters(in: .whitespaces),
-              loaded.moviesPath, into: &target.moviesPath)
-        merge(Gtk.text(of: remoteSeriesPathEntry).trimmingCharacters(in: .whitespaces),
-              loaded.seriesPath, into: &target.seriesPath)
-        merge(Gtk.text(of: remoteMusicPathEntry).trimmingCharacters(in: .whitespaces),
-              loaded.musicPath, into: &target.musicPath)
-        merge(Gtk.text(of: remoteIdentityEntry).trimmingCharacters(in: .whitespaces),
-              loaded.identityFile, into: &target.identityFile)
-
-        if let port = Int(Gtk.text(of: remotePortEntry).trimmingCharacters(in: .whitespaces)),
-           (1...65535).contains(port) {
-            merge(port, loaded.port, into: &target.port)
-        }
-        let transport = Int(gtk_combo_box_get_active(Gtk.comboBox(remoteTransportCombo)))
-        if transport >= 0, transport < RemoteTarget.Transport.allCases.count {
-            merge(RemoteTarget.Transport.allCases[transport], loaded.transport,
-                  into: &target.transport)
-        }
-        let auth = Int(gtk_combo_box_get_active(Gtk.comboBox(remoteAuthCombo)))
-        if auth >= 0, auth < RemoteTarget.Authentication.allCases.count {
-            merge(RemoteTarget.Authentication.allCases[auth], loaded.authentication,
-                  into: &target.authentication)
-        }
-        return target
-    }
-
-    /// Saves first, for the same reason scanning does: sending to an address
-    /// that was typed but never saved would send to the old one.
-    func sendSelected() {
-        saveFolders()
-        let ticked = rowChecks.filter { Gtk.isChecked($0.check) }.map(\.id)
-        coordinator.submit(.transferFiles(accepting: Set(ticked)))
-    }
-
-    func cancelSending() {
-        coordinator.submit(.cancelTransfers)
-    }
-
     /// Saves first, so the file lands in the folder currently shown rather
     /// than in whichever one was stored when the window opened.
     func startDownload() {
@@ -886,14 +694,6 @@ final class AppWindow {
 
     func cancelDownload() {
         coordinator.submit(.cancelDownload)
-    }
-
-    /// Saves first, for the same reason the model-server test does: testing
-    /// the stored address while the user looks at a corrected one reports on
-    /// the wrong server.
-    func testServer() {
-        saveFolders()
-        coordinator.submit(.testRemoteConnection)
     }
 
     /// Saves first, so the lamps report on what is in the fields rather than
@@ -1052,16 +852,6 @@ final class AppWindow {
         gtk_widget_get_sensitive(scanButton) != 0
     }
 
-    /// Whether Send is on the main surface at all. It was built into the
-    /// server card, and when that card moved behind the menu the only way to
-    /// send anything went with it.
-    var sendButtonIsOnTheMainSurface: Bool {
-        // Which window it ends up in is the whole question, and that is one
-        // call. The panels are toplevels of their own, so a button inside one
-        // answers with that panel rather than with the main window.
-        gtk_widget_get_toplevel(sendButton) == widget
-    }
-
     /// Presses Scan exactly as a click does -- through the signal, so the
     /// real handler runs and nothing about this path is special.
     func pressScan() {
@@ -1116,7 +906,6 @@ final class AppWindow {
         let schedule = settings.schedule
         Gtk.setChecked(scheduleCheck, schedule.isEnabled)
         Gtk.setChecked(scheduleRenameCheck, schedule.alsoRename)
-        Gtk.setChecked(scheduleSendCheck, schedule.alsoSend)
         Gtk.setText(of: scheduleTimeEntry,
                     String(format: "%02d:%02d", schedule.hour, schedule.minute))
         Gtk.setText(of: scheduleHoursEntry, String(schedule.everyHours))
@@ -1124,32 +913,6 @@ final class AppWindow {
             gtk_combo_box_set_active(Gtk.comboBox(scheduleCadenceCombo), Int32(index))
         }
         Gtk.setText(scheduleSummary, ScheduleLine.describe(schedule, coordinator.snapshot))
-
-        let remote = settings.remote
-        Gtk.setChecked(remoteEnabledCheck, remote.isEnabled)
-        Gtk.setChecked(remoteRemoveLocalCheck, remote.removeLocalAfterSend)
-        Gtk.setChecked(remoteTrustCheck, remote.trustOnFirstUse)
-        Gtk.setText(of: remoteHostEntry, remote.host)
-        Gtk.setText(of: remoteUserEntry, remote.user)
-        Gtk.setText(of: remoteBaseEntry, remote.basePath)
-        Gtk.setText(of: remoteMoviesPathEntry, remote.moviesPath)
-        Gtk.setText(of: remoteSeriesPathEntry, remote.seriesPath)
-        Gtk.setText(of: remoteMusicPathEntry, remote.musicPath)
-        Gtk.setText(of: remoteIdentityEntry, remote.identityFile)
-        Gtk.setText(of: remotePortEntry, String(remote.port))
-        if let index = RemoteTarget.Transport.allCases.firstIndex(of: remote.transport) {
-            gtk_combo_box_set_active(Gtk.comboBox(remoteTransportCombo), Int32(index))
-        }
-        if let index = RemoteTarget.Authentication.allCases
-            .firstIndex(of: remote.authentication) {
-            gtk_combo_box_set_active(Gtk.comboBox(remoteAuthCombo), Int32(index))
-        }
-        // As with the model key: whether one is stored, never the password.
-        let hasPassword = coordinator.configuredSecrets.contains(.remotePassword)
-        gtk_entry_set_placeholder_text(
-            Gtk.entry(remotePasswordEntry),
-            hasPassword ? "gespeichert — zum Ersetzen neu eingeben" : "keines hinterlegt"
-        )
     }
 
     // MARK: Reading the engine back
@@ -1203,17 +966,6 @@ final class AppWindow {
         gtk_widget_set_sensitive(scanButton, state.busy ? 0 : 1)
         gtk_widget_set_sensitive(applyButton, (!rowChecks.isEmpty && !state.busy) ? 1 : 0)
         gtk_widget_set_sensitive(undoButton, state.busy ? 0 : 1)
-
-        // Available whenever there is something ticked and nothing running,
-        // even with no server configured -- the same lesson as the scan
-        // button. It used to also require remoteConfigured, so on a machine
-        // with no server set up it was permanently grey and said nothing
-        // about why; the engine answers "the server is not switched on" the
-        // moment it is pressed. Stopping still needs something to stop.
-        gtk_widget_set_sensitive(
-            sendButton, (!rowChecks.isEmpty && !state.busy) ? 1 : 0)
-        gtk_widget_set_sensitive(cancelSendButton, state.transferring ? 1 : 0)
-
         gtk_widget_set_sensitive(downloadButton, (!hasSource || state.busy) ? 0 : 1)
         gtk_widget_set_sensitive(cancelDownloadButton, state.downloading ? 1 : 0)
         if state.downloading {
@@ -1234,13 +986,6 @@ final class AppWindow {
             Gtk.setProgress(downloadProgress, fraction: 0,
                             text: Text.s("Kein Download", "No download"))
         }
-        // Emptied when nothing is running: the bar used to stay visually
-        // full after a run while the words beside it said "Keine
-        // Übertragung", which reads as a transfer stuck at 100 %.
-        Gtk.setProgress(remoteProgress,
-                        fraction: state.transferring ? state.transferProgress : 0,
-                        text: state.transferSummary)
-
         // The schedule line too, so "Nächster Lauf" stays true while the
         // window is open rather than being whatever it was when the settings
         // were last loaded.

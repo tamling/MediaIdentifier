@@ -94,128 +94,7 @@ jobs:
           set -euo pipefail
           apt-get update -qq
           apt-get install -y -qq pkg-config libgtk-3-dev
-      # A real SSH server, so the transfer code is tested by transferring
-      # rather than by reading its own arguments back. Everything else about
-      # that feature can be checked without a network; whether the command
-      # lines actually work cannot.
-      - name: Start an SSH server for the transfer tests
-        shell: bash
-        run: |
-          set -euo pipefail
-          apt-get install -y -qq openssh-server openssh-client rsync sshpass
-
-          # A separate sshd on a high port with its own config: nothing here
-          # touches the container's own ssh setup, and the whole thing dies
-          # with the job.
-          mkdir -p /run/sshd /tmp/mediafin-sshd /tmp/mediafin-remote
-          ssh-keygen -q -t ed25519 -f /tmp/mediafin-sshd/host_key -N ""
-
-          # The account the tests log in as. A throwaway password, printed
-          # here on purpose: it exists for ninety seconds inside a container
-          # that is discarded, and pretending it is a secret would only make
-          # the next person wonder where the real one is.
-          useradd -m -s /bin/bash mediafintest
-          echo 'mediafintest:transfer-test-password' | chpasswd
-          chmod 777 /tmp/mediafin-remote
-
-          ssh-keygen -q -t ed25519 -f /tmp/mediafin-sshd/client_key -N ""
-          install -d -m 700 -o mediafintest -g mediafintest /home/mediafintest/.ssh
-          install -m 600 -o mediafintest -g mediafintest \
-            /tmp/mediafin-sshd/client_key.pub /home/mediafintest/.ssh/authorized_keys
-
-          cat > /tmp/mediafin-sshd/sshd_config <<CONF
-          Port 2222
-          ListenAddress 127.0.0.1
-          HostKey /tmp/mediafin-sshd/host_key
-          PidFile /tmp/mediafin-sshd/sshd.pid
-          PasswordAuthentication yes
-          PubkeyAuthentication yes
-          UsePAM no
-          PermitRootLogin no
-          Subsystem sftp /usr/lib/openssh/sftp-server
-          CONF
-          /usr/sbin/sshd -f /tmp/mediafin-sshd/sshd_config
-          for _ in $(seq 1 30); do
-            ss -ltn 2>/dev/null | grep -q ':2222' && break
-            sleep 0.5
-          done
-
-          # The host key goes into known_hosts the same way a user would put
-          # it there: by looking at it once. StrictHostKeyChecking stays on,
-          # and one test deliberately uses a name that is NOT in here to
-          # prove the check still bites.
-          #
-          # Written to the system-wide file as well as this user's, because
-          # the Swift test process need not have the same HOME as this step
-          # — and a first attempt failed exactly there, with ssh reporting
-          # the key as unknown while the file sat in another home directory.
-          # stderr is NOT discarded: a keyscan that prints nothing would
-          # otherwise leave an empty file and a green step.
-          install -d -m 700 ~/.ssh
-          ssh-keyscan -p 2222 127.0.0.1 > /tmp/mediafin-sshd/known_hosts
-          grep -q ed25519 /tmp/mediafin-sshd/known_hosts || {
-            echo "FAIL: ssh-keyscan returned no ed25519 key for 127.0.0.1:2222"
-            cat /tmp/mediafin-sshd/known_hosts
-            exit 1
-          }
-          cat /tmp/mediafin-sshd/known_hosts >> ~/.ssh/known_hosts
-          chmod 600 ~/.ssh/known_hosts
-          install -d -m 755 /etc/ssh
-          cat /tmp/mediafin-sshd/known_hosts >> /etc/ssh/ssh_known_hosts
-          chmod 644 /etc/ssh/ssh_known_hosts
-
-          # Prove it before the tests rely on it. A login that works here
-          # with strict checking on is the one thing that distinguishes
-          # "the server is ready" from "the server exists".
-          ssh -i /tmp/mediafin-sshd/client_key -p 2222 \
-            -o StrictHostKeyChecking=yes -o BatchMode=yes -o IdentitiesOnly=yes \
-            mediafintest@127.0.0.1 'echo ssh login ok' || {
-            echo "FAIL: cannot log in to the test server with the host key known"
-            echo "HOME=$HOME"
-            ls -l ~/.ssh/known_hosts /etc/ssh/ssh_known_hosts || true
-            exit 1
-          }
-          # testAnUnknownHostIsRefused reaches the same sshd as "localhost"
-          # and expects to be turned away. That only means anything while
-          # "localhost" resolves and is absent from known_hosts.
-          getent hosts localhost > /dev/null || {
-            echo "FAIL: localhost does not resolve; the unknown-host test would"
-            echo "      fail for the wrong reason"
-            exit 1
-          }
-          if grep -qw localhost ~/.ssh/known_hosts /etc/ssh/ssh_known_hosts; then
-            echo "FAIL: localhost is in known_hosts; the unknown-host test would"
-            echo "      pass without proving anything"
-            exit 1
-          fi
-          # Why the sftp arguments are ordered the way they are, demonstrated
-          # rather than asserted in a comment. `sftp -b` appends its own
-          # "-obatchmode yes" as it parses -b, and ssh keeps the FIRST
-          # setting of an option — so BatchMode=no only takes effect ahead of
-          # -b. If a future OpenSSH changes that, this step says so plainly
-          # instead of the password test failing with "Permission denied".
-          export SSHPASS=transfer-test-password
-          echo "put /etc/hostname /tmp/mediafin-remote/order-check.txt" > /tmp/mediafin-sshd/b
-          after=0
-          sshpass -e sftp -b /tmp/mediafin-sshd/b -P 2222 \
-            -o BatchMode=no -o PubkeyAuthentication=no \
-            -o StrictHostKeyChecking=yes mediafintest@127.0.0.1 >/dev/null 2>&1 || after=$?
-          before=0
-          sshpass -e sftp -o BatchMode=no -o PubkeyAuthentication=no \
-            -o StrictHostKeyChecking=yes -b /tmp/mediafin-sshd/b -P 2222 \
-            mediafintest@127.0.0.1 >/dev/null 2>&1 || before=$?
-          echo "sftp password login — options after -b: exit $after, before -b: exit $before"
-          test "$before" -eq 0 || {
-            echo "FAIL: password login over sftp does not work even with the options"
-            echo "      ahead of -b; the ordering fix in RemoteCommand.sftp rests on this"
-            exit 1
-          }
-          rm -f /tmp/mediafin-remote/order-check.txt
-          unset SSHPASS
-
-          echo "sshd is up on 127.0.0.1:2222"
-      # A real yt-dlp against a real HTTP server, for the same reason the
-      # transfer tests run against a real sshd: the command line can only
+      # A real yt-dlp against a real HTTP server: the command line can only
       # be proved by running it. No internet is involved — the file is
       # built here and served from 127.0.0.1.
       - name: Serve a media file locally for the download tests
@@ -285,14 +164,6 @@ jobs:
         # has no `set -o pipefail` and would abort the step immediately.
         shell: bash
         env:
-          # Picked up by RemoteTransferIntegrationTests, which skip entirely
-          # when this is unset — as they do on macOS, where there is no sshd.
-          MEDIAFIN_SSH_TEST_HOST: 127.0.0.1
-          MEDIAFIN_SSH_TEST_PORT: "2222"
-          MEDIAFIN_SSH_TEST_USER: mediafintest
-          MEDIAFIN_SSH_TEST_KEY: /tmp/mediafin-sshd/client_key
-          MEDIAFIN_SSH_TEST_PASSWORD: transfer-test-password
-          MEDIAFIN_SSH_TEST_BASE: /tmp/mediafin-remote
           # Picked up by VideoDownloadIntegrationTests, which skip without it.
           MEDIAFIN_HTTP_TEST_URL: http://127.0.0.1:18080/Sample.Video.2024.1080p.mp4
           MEDIAFIN_HTTP_TEST_FILE: /tmp/mediafin-www/Sample.Video.2024.1080p.mp4
@@ -307,9 +178,10 @@ jobs:
           grep -E ": error:|XCTAssert.* failed" test.log | head -60 || true
           echo "--- totals ---"
           grep -E "Executed [0-9]+ tests" test.log | tail -2 || true
-      # Same reasoning as the transfer guard below: a skipped test reports
-      # success, and this suite has already had one silently skip itself
-      # five runs in a row.
+      # A skipped test reports success, and a skip is quiet: this suite has
+      # already silently skipped itself five runs in a row. This makes it
+      # loud — if the HTTP server stops coming up, the job fails here
+      # instead of going green with the feature untested.
       - name: The download tests must have run
         shell: bash
         run: |
@@ -326,36 +198,9 @@ jobs:
             echo "FAIL: expected at least 5 download tests, saw $ran"
             exit 1
           }
-      # A skipped transfer test is a test that proves nothing, and a skip is
-      # quiet. This makes it loud: if the sshd setup silently stops working,
-      # the job fails here instead of going green with the feature untested.
-      - name: The transfer tests must have run
-        shell: bash
-        run: |
-          set -uo pipefail
-          # Both suites: RemoteSendIntegrationTests covers the deletion
-          # path and was not named here, although its own header said the
-          # CI step guarded it.
-          if grep -qE "Remote(Transfer|Send)IntegrationTests.*skipped" test.log; then
-            echo "FAIL: transfer tests were skipped; the SSH server did not come up"
-            grep -E "Remote(Transfer|Send)IntegrationTests" test.log | head -20
-            exit 1
-          fi
-          ran=$(grep -cE "Test Case .*RemoteTransferIntegrationTests.* passed" test.log || true)
-          sent=$(grep -cE "Test Case .*RemoteSendIntegrationTests.* passed" test.log || true)
-          echo "transfer tests passed: $ran, send tests passed: $sent"
-          test "$sent" -ge 5 || {
-            echo "FAIL: expected at least 5 send tests, saw $sent"
-            exit 1
-          }
-          test "$ran" -ge 7 || {
-            echo "FAIL: expected at least 7 transfer tests to run, saw $ran"
-            exit 1
-          }
       # Runs the real binary: that --once comes back, that --watch stays up
       # and stops on SIGTERM, and that a bare invocation refuses rather than
-      # silently doing nothing. openssl and curl are no longer needed here —
-      # there is no server to talk to.
+      # silently doing nothing.
       - name: Smoke-test the mediafin binary
         shell: bash
         run: ./tools/smoke-mediafin.sh
@@ -506,12 +351,6 @@ jobs:
           run_window "$empty" | tee empty.log
           grep -q "^scan button available: true" empty.log || {
             echo "FAIL: the scan button was not even available"; exit 1; }
-          # Sending is something you do to the list, like renaming. It was
-          # built into the server card, and when that card moved behind the
-          # menu the only way to send anything went with it — "how is this
-          # supposed to be synced, there is no button".
-          grep -q "^send button on the main surface: true" empty.log || {
-            echo "FAIL: the send button is not on the main window"; exit 1; }
           grep -qiE "^status: .*(import|Importordner)" empty.log || {
             echo "FAIL: pressing Scan did not name the missing import folder"
             exit 1

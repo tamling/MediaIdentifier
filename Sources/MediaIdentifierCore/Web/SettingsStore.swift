@@ -119,6 +119,34 @@ public struct SecretStore: Sendable {
         return true
     }
 
+    /// Deletes stored secrets that nothing can read any more.
+    ///
+    /// A removed feature leaves its password behind: the file is a plain
+    /// dictionary, so a key no longer in `SecretKey` is simply never looked
+    /// up again — and sits there in clear text for ever. Credentials for a
+    /// feature that no longer exists are pure liability, so they go.
+    ///
+    /// - Returns: the raw names that were removed, for the log.
+    @discardableResult
+    public func forgetUnknownKeys() -> [String] {
+        let secrets = load()
+        guard !secrets.isEmpty else { return [] }
+        let known = Set(SecretKey.allCases.map(\.rawValue))
+        let unknown = secrets.keys.filter { !known.contains($0) }.sorted()
+        guard !unknown.isEmpty else { return [] }
+        var kept = secrets
+        for key in unknown { kept.removeValue(forKey: key) }
+        guard let data = try? JSONEncoder().encode(kept) else { return [] }
+        // Only report what really went: a write that fails must not make the
+        // caller tell the user a password is gone when it is still there.
+        do {
+            try AtomicFile.write(data, to: fileURL, permissions: 0o600)
+        } catch {
+            return []
+        }
+        return unknown
+    }
+
     /// Errors are swallowed deliberately: a damaged secrets file must not stop
     /// the app, and its contents must never end up in a message.
     private func load() -> [String: String] {
