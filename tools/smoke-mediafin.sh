@@ -1,20 +1,27 @@
 #!/usr/bin/env bash
 #
-# Smoke-tests the `mediafin` binary end to end: builds it, starts it, and
-# checks over a real socket that HTTPS works, that the interface is closed
-# without the token and open with it, and that plain HTTP is not served on the
-# TLS port.
+# Smoke-tests the `mediafin` binary: the headless runner that holds the engine
+# so scheduled work happens with no window open.
+#
+# It used to test a web server — HTTPS, an access token, a /healthz endpoint.
+# That server is gone, and so are its options, so testing for them was testing
+# that a deleted feature still existed.
+#
+# What matters about this binary is the process contract around it, because a
+# systemd unit and a cron line both depend on it: --once has to RETURN, --watch
+# has to stay up and stop on SIGTERM, and a bare invocation must not silently
+# do nothing. Whether the schedule picks the right moment is the engine's
+# business and is covered by the Core tests.
 #
 # Run it from the repository root:
 #     ./tools/smoke-mediafin.sh
 #
 set -euo pipefail
 
-PORT="${MEDIAFIN_SMOKE_PORT:-8731}"
 WORK="$(mktemp -d)"
 export MEDIAFIN_CONFIG_DIR="$WORK/config"
 BIN=".build/release/mediafin"
-LOG="$WORK/server.log"
+LOG="$WORK/runner.log"
 PID=""
 
 cleanup() {
@@ -28,8 +35,10 @@ trap cleanup EXIT
 
 fail() {
   echo "FAIL: $*" >&2
-  echo "--- server log ---" >&2
-  cat "$LOG" >&2 || true
+  if [ -f "$LOG" ]; then
+    echo "--- runner log ---" >&2
+    cat "$LOG" >&2 || true
+  fi
   exit 1
 }
 
@@ -37,70 +46,58 @@ echo "==> Building"
 swift build -c release --product mediafin
 [ -x "$BIN" ] || fail "no binary at $BIN"
 
-echo "==> --help works without any configuration"
-"$BIN" --help | grep -q -- "--rotate-token" || fail "help text is missing options"
+echo "==> --help names what it offers"
+"$BIN" --help | grep -q -- "--watch" || fail "--help does not mention --watch"
+"$BIN" --help | grep -q -- "--once" || fail "--help does not mention --once"
 
-echo "==> Rejects bad input"
-if "$BIN" --port 70000 >/dev/null 2>&1; then
-  fail "an out-of-range port was accepted"
-fi
+echo "==> --help says where the interface is"
+# Because this binary draws nothing, and somebody who runs it expecting a
+# window needs to be told where the window is rather than left guessing.
+"$BIN" --help | grep -q "mediafin-gtk" || fail "--help does not point at the window"
 
-echo "==> Starting on port $PORT"
-"$BIN" --port "$PORT" --bind local >"$LOG" 2>&1 &
+echo "==> --version prints a version"
+"$BIN" --version | grep -qE "Mediafin [0-9]+\.[0-9]+\.[0-9]+" \
+  || fail "--version printed something unexpected"
+
+echo "==> A bare invocation refuses rather than doing nothing"
+code=0
+"$BIN" >"$LOG" 2>&1 || code=$?
+[ "$code" = "64" ] || fail "a bare invocation exited $code, expected 64"
+grep -q "mediafin-gtk" "$LOG" || fail "a bare invocation did not say where to go"
+
+echo "==> An unknown option refuses"
+code=0
+"$BIN" --serve >/dev/null 2>&1 || code=$?
+[ "$code" = "64" ] || fail "an unknown option exited $code, expected 64"
+
+echo "==> --once returns instead of sitting there"
+# The whole point: a cron line that never returns piles up, and systemd would
+# kill a run it thinks has hung. Nothing is scheduled here, so there is no
+# work — this is about the process coming back at all.
+timeout 90 "$BIN" --once >"$LOG" 2>&1 || fail "--once did not finish"
+
+echo "==> --watch stays up and stops on SIGTERM"
+"$BIN" --watch >"$LOG" 2>&1 &
 PID=$!
-
-for _ in $(seq 1 60); do
-  if curl -sk --max-time 2 "https://127.0.0.1:$PORT/healthz" >/dev/null 2>&1; then
-    break
-  fi
-  kill -0 "$PID" 2>/dev/null || fail "the server exited during start-up"
-  sleep 0.5
-done
-
-echo "==> /healthz answers over HTTPS"
-health="$(curl -sk --max-time 5 "https://127.0.0.1:$PORT/healthz")" \
-  || fail "could not reach /healthz over HTTPS"
-[ "$health" = "ok" ] || fail "expected 'ok' from /healthz, got '$health'"
-
-echo "==> The interface is closed without the token"
-code="$(curl -sk --max-time 5 -o /dev/null -w '%{http_code}' "https://127.0.0.1:$PORT/")"
-[ "$code" = "401" ] || fail "expected 401 without a token, got $code"
-
-code="$(curl -sk --max-time 5 -o /dev/null -w '%{http_code}' \
-  -H 'Authorization: Bearer wrong-token' "https://127.0.0.1:$PORT/api/status")"
-[ "$code" = "401" ] || fail "expected 401 for a wrong token, got $code"
-
-echo "==> The interface opens with the token"
-TOKEN="$("$BIN" --print-token)"
-[ -n "$TOKEN" ] || fail "--print-token printed nothing"
-code="$(curl -sk --max-time 5 -o /dev/null -w '%{http_code}' \
-  -H "Authorization: Bearer $TOKEN" "https://127.0.0.1:$PORT/")"
-[ "$code" = "200" ] || fail "expected 200 with the token, got $code"
-
-echo "==> The token is not readable by other accounts"
-mode="$(stat -c '%a' "$MEDIAFIN_CONFIG_DIR/token" 2>/dev/null \
-  || stat -f '%Lp' "$MEDIAFIN_CONFIG_DIR/token")"
-[ "$mode" = "600" ] || fail "token file mode is $mode, expected 600"
-
-echo "==> Plain HTTP is not served on the TLS port"
-if curl -s --max-time 5 "http://127.0.0.1:$PORT/healthz" 2>/dev/null | grep -q .; then
-  fail "the TLS port answered an unencrypted request"
-fi
-
-echo "==> A certificate was created and is reported"
-[ -f "$MEDIAFIN_CONFIG_DIR/cert.pem" ] || fail "no certificate was created"
-grep -q "fingerprint" "$LOG" || fail "the certificate fingerprint was not reported"
-
-echo "==> Shutting down on SIGTERM"
+sleep 3
+kill -0 "$PID" 2>/dev/null || fail "--watch exited on its own"
 kill "$PID"
 for _ in $(seq 1 20); do
   kill -0 "$PID" 2>/dev/null || break
   sleep 0.5
 done
 if kill -0 "$PID" 2>/dev/null; then
-  fail "the server did not stop on SIGTERM"
+  fail "--watch did not stop on SIGTERM"
 fi
 PID=""
+
+echo "==> It created its configuration directory and nothing secret world-readable"
+[ -d "$MEDIAFIN_CONFIG_DIR" ] || fail "no configuration directory was created"
+for secret in "$MEDIAFIN_CONFIG_DIR/secrets.json"; do
+  [ -f "$secret" ] || continue
+  mode="$(stat -c '%a' "$secret" 2>/dev/null || stat -f '%Lp' "$secret")"
+  [ "$mode" = "600" ] || fail "$secret is mode $mode, expected 600"
+done
 
 echo
 echo "All smoke tests passed."

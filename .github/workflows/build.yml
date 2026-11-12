@@ -332,15 +332,10 @@ jobs:
             echo "FAIL: expected at least 7 transfer tests to run, saw $ran"
             exit 1
           }
-      # openssl creates the self-signed certificate on first start.
-      - name: Ensure openssl and curl are present
-        shell: bash
-        run: |
-          command -v openssl >/dev/null && command -v curl >/dev/null && exit 0
-          apt-get update -qq
-          apt-get install -y -qq openssl curl
-      # Runs the real binary against a real socket: HTTPS, the access gate and
-      # the refusal to answer plaintext on the TLS port.
+      # Runs the real binary: that --once comes back, that --watch stays up
+      # and stops on SIGTERM, and that a bare invocation refuses rather than
+      # silently doing nothing. openssl and curl are no longer needed here —
+      # there is no server to talk to.
       - name: Smoke-test the mediafin binary
         shell: bash
         run: ./tools/smoke-mediafin.sh
