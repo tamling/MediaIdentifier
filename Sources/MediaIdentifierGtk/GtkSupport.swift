@@ -42,6 +42,12 @@ enum Gtk {
         UnsafeMutableRawPointer(widget).assumingMemoryBound(to: GtkEntry.self)
     }
 
+    static func button(
+        _ widget: UnsafeMutablePointer<GtkWidget>
+    ) -> UnsafeMutablePointer<GtkButton> {
+        UnsafeMutableRawPointer(widget).assumingMemoryBound(to: GtkButton.self)
+    }
+
     static func comboBox(
         _ widget: UnsafeMutablePointer<GtkWidget>
     ) -> UnsafeMutablePointer<GtkComboBox> {

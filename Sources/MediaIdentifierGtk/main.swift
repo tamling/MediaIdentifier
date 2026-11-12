@@ -20,6 +20,14 @@ private enum Mode {
     case interactive
     /// Render the window to this path, then quit.
     case screenshot(path: String)
+    /// Press "Scan" and report what the window then says, then quit.
+    ///
+    /// This exists because CI had only ever rendered a picture of the window.
+    /// It proved that the window draws; it never pressed anything. So "the
+    /// scan button does nothing and says nothing" was a report CI had no way
+    /// of contradicting -- and a check that cannot run looks exactly like a
+    /// check that passes.
+    case pressScan
 }
 
 private struct Options {
@@ -43,6 +51,9 @@ private func usage() -> String {
                                        files instead of your own settings
       mediafin-gtk --delay MS          how long to let the window settle
                                        before --screenshot captures it
+      mediafin-gtk --press-scan        press "Scan", print what the window
+                                       then says, and exit non-zero if it
+                                       says nothing at all
       mediafin-gtk --help              this text
 
     Needs a display. Without one it exits 2 rather than hanging, so it is safe
@@ -78,6 +89,8 @@ private func parse(_ arguments: [String]) -> Options {
             }
             options.captureDelay = value
             index = next
+        case "--press-scan":
+            options.mode = .pressScan
         case "--screenshot":
             let next = arguments.index(after: index)
             guard next < arguments.endIndex else {
@@ -206,6 +219,38 @@ gtk_widget_show_all(mainWindow.widget)
 switch options.mode {
 case .interactive:
     gtk_main()
+
+case .pressScan:
+    // Two timeouts, not one. The first lets GTK finish laying the window out
+    // -- pressing a button that has not been allocated yet is not the thing
+    // under test -- and the second gives the engine time to answer on its own
+    // queue and the window's own refresh time to pick that answer up.
+    let press: @convention(c) (UnsafeMutableRawPointer?) -> gboolean = { _ in
+        print("scan button available: \(mainWindow.scanButtonIsAvailable)")
+        mainWindow.pressScan()
+        let report: @convention(c) (UnsafeMutableRawPointer?) -> gboolean = { _ in
+            defer { gtk_main_quit() }
+            mainWindow.refresh()
+            let status = mainWindow.statusText
+            print("status: \(status)")
+            print("proposals: \(coordinator.items.count)")
+            if status.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                Pending.failure = "pressing Scan left the window saying nothing"
+            }
+            return Gtk.sourceRemove
+        }
+        g_timeout_add(3000, report, nil)
+        return Gtk.sourceRemove
+    }
+    g_timeout_add(400, press, nil)
+    gtk_main()
+
+    // Checked here and not only in the screenshot branch: a mode that reports
+    // a fault and then exits 0 is a check that cannot fail, which is the
+    // thing this whole mode exists to stop.
+    if let failure = Pending.failure {
+        fail(failure, code: 1)
+    }
 
 case let .screenshot(path):
     Pending.screenshotPath = path

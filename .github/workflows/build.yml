@@ -467,6 +467,58 @@ jobs:
             echo "late capture (3000 ms): $late bytes — this now renders."
             echo "  The early-capture workaround in main.swift may be removable."
           fi
+      # The window's buttons, pressed for real.
+      #
+      # Everything above renders a picture: it proves the window draws, and it
+      # has never pressed anything. So "the scan button does nothing and says
+      # nothing" was a report this job had no way of contradicting, and a
+      # check that cannot run looks exactly like one that passes. This presses
+      # Scan and insists the window then says something.
+      - name: Pressing Scan must do something and say so
+        shell: bash
+        run: |
+          set -euo pipefail
+          # MEDIAFIN_CONFIG_DIR rather than HOME: it is the one variable the
+          # engine reads first, so the test points at its config directly
+          # instead of relying on how XDG paths are assembled.
+          run_window() {
+            timeout 90 xvfb-run -a --server-args="-screen 0 1280x900x24" \
+              env MEDIAFIN_CONFIG_DIR="$1" .build/release/mediafin-gtk --press-scan
+          }
+
+          # First with nothing configured at all, which is the state a new
+          # install is in and the one the button used to be greyed out for.
+          # Saying nothing here is the exact complaint.
+          empty="$(mktemp -d)"
+          echo "=== no import folder set ==="
+          run_window "$empty" | tee empty.log
+          grep -q "^scan button available: true" empty.log || {
+            echo "FAIL: the scan button was not even available"; exit 1; }
+          grep -qiE "^status: .*(import|Importordner)" empty.log || {
+            echo "FAIL: pressing Scan did not name the missing import folder"
+            exit 1
+          }
+
+          # Then with a folder that has a film in it: the button has to
+          # produce proposals, not merely a sentence.
+          ready="$(mktemp -d)"
+          mkdir -p "$ready/config" "$ready/downloads"
+          # A real file: the scanner reads names, not contents, but it does
+          # insist the file is there.
+          : > "$ready/downloads/Tenet.2020.1080p.BluRay.x264-GROUP.mkv"
+          # printf and not a heredoc: a heredoc terminator has to sit at
+          # column zero, which ends the YAML block scalar it is written in.
+          printf '{"sourceFolder":"%s","identification":"offline","language":"en"}\n' \
+            "$ready/downloads" > "$ready/config/settings.json"
+          echo "=== with one film to find ==="
+          run_window "$ready/config" | tee ready.log
+          found="$(sed -n 's/^proposals: \([0-9]*\)$/\1/p' ready.log)"
+          echo "proposals after pressing Scan: ${found:-none}"
+          test "${found:-0}" -ge 1 || {
+            echo "FAIL: pressing Scan found nothing in a folder with a film in it"
+            exit 1
+          }
+
       # Before the checks that can fail: the rendered window is the most
       # useful thing this job produces, and a later failing assertion must not
       # be what stops it being readable.

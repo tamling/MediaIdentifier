@@ -807,6 +807,32 @@ final class AppWindow {
         coordinator.submit(.undoLastRename)
     }
 
+    // MARK: Driven from outside, so CI can press a button
+
+    /// What the window is currently telling the user, read back from the
+    /// label itself.
+    ///
+    /// Read from the widget and not from the snapshot on purpose: the
+    /// complaint was "pressing Scan says nothing at all", and only the widget
+    /// can answer that. Asking the engine what it thinks it said would agree
+    /// with itself and prove nothing.
+    var statusText: String {
+        String(cString: gtk_label_get_text(Gtk.label(resultLabel)))
+    }
+
+    /// Whether the Scan button can be pressed at all. It used to be greyed
+    /// out whenever no import folder was set, which is how "the scan button
+    /// does not work" came about.
+    var scanButtonIsAvailable: Bool {
+        gtk_widget_get_sensitive(scanButton) != 0
+    }
+
+    /// Presses Scan exactly as a click does -- through the signal, so the
+    /// real handler runs and nothing about this path is special.
+    func pressScan() {
+        gtk_button_clicked(Gtk.button(scanButton))
+    }
+
     /// Files let go of on the window.
     ///
     /// Handed straight to the engine with no filtering here: which of them
