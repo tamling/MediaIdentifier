@@ -77,6 +77,19 @@ final class AppWindow {
     private let settingsDialog: UnsafeMutablePointer<GtkWidget>
     private let statusDialog: UnsafeMutablePointer<GtkWidget>
     private let fetchDialog: UnsafeMutablePointer<GtkWidget>
+    /// The traffic light, in the bar at the bottom: a coloured dot and one
+    /// line, always visible.
+    ///
+    /// It lived behind the menu, which answers "what is wrong" only once you
+    /// have thought to go and look. The first question anyone has when a run
+    /// does nothing is whether everything is plugged in, and a panel that has
+    /// to be opened to answer it is a panel nobody opens.
+    private let lampDot: UnsafeMutablePointer<GtkWidget>
+    private let lampText: UnsafeMutablePointer<GtkWidget>
+    /// What the bar last said, so an unchanged bar is left alone rather than
+    /// rewritten twice a second.
+    private var lampShown: (state: SystemCheck.State, text: String)?
+
     /// Says when the settings were last taken, with the time of day.
     ///
     /// The time is the point. "Saved." appearing where "Saved." already was
@@ -474,11 +487,32 @@ final class AppWindow {
 
         gtk_box_pack_start(Gtk.box(page), proposals, 1, 1, 0)
 
-        // Footer: what just happened on the left, which version said so on
-        // the right. The version is there so a bug report can name one.
+        // Footer, left to right: the traffic light, what just happened, and
+        // the version. The version is there so a bug report can name one.
+        //
+        // The traffic light is first because it is the standing answer -- "is
+        // everything plugged in" -- while the message beside it is whatever
+        // happened a moment ago. Both at a glance, neither needing a click.
         let footer = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12)!
+
+        // A button, not a label: the one line says how many lamps are amber,
+        // and the obvious next question is which. Flat, so the bar still
+        // reads as a bar.
+        let lampButton = gtk_button_new()!
+        gtk_button_set_relief(Gtk.button(lampButton), GTK_RELIEF_NONE)
+        gtk_widget_set_tooltip_text(
+            lampButton, Text.s("Status öffnen", "Open the status panel"))
+        let lampRow = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6)!
+        lampDot = Self.label("\u{25CF}", classes: "mf-lamp", "mf-skip")
+        lampText = Self.label("", classes: "mf-dim")
+        gtk_box_pack_start(Gtk.box(lampRow), lampDot, 0, 0, 0)
+        gtk_box_pack_start(Gtk.box(lampRow), lampText, 0, 0, 0)
+        gtk_container_add(Gtk.container(lampButton), lampRow)
+        gtk_box_pack_start(Gtk.box(footer), lampButton, 0, 0, 0)
+
         resultLabel = Self.label("", classes: "mf-dim")
         gtk_label_set_line_wrap(Gtk.label(resultLabel), 1)
+        gtk_label_set_xalign(Gtk.label(resultLabel), 0)
         gtk_box_pack_start(Gtk.box(footer), resultLabel, 1, 1, 0)
         let version = Self.label(MediafinVersion.display, classes: "mf-dim")
         gtk_label_set_xalign(Gtk.label(version), 1)
@@ -536,6 +570,7 @@ final class AppWindow {
 
         Gtk.onClick(saveButton, self) { $0.saveFolders() }
         Gtk.onClick(menuButton, self) { $0.showMenu() }
+        Gtk.onClick(lampButton, self) { $0.open($0.statusDialog) }
         Gtk.onClick(scanButton, self) { $0.scan() }
         Gtk.onClick(applyButton, self) { $0.applySelected() }
         Gtk.onClick(undoButton, self) { $0.undoLast() }
@@ -1112,6 +1147,7 @@ final class AppWindow {
             "\(state.totalItems) proposals · \(state.ready) ticked · "
                 + "\(state.done) renamed"))
         Gtk.setText(resultLabel, state.lastResult ?? "")
+        refreshLampBar()
 
         // While the list is empty, the last thing that happened goes in the
         // middle too. Not instead of the footer -- the footer is the running
@@ -1242,6 +1278,43 @@ final class AppWindow {
             gtk_widget_show_all(row)
             checkWidgets.append(row)
         }
+    }
+
+    /// The traffic light in the bar at the bottom.
+    ///
+    /// Rewritten only when it changed. This runs twice a second, and setting a
+    /// label to the text it already has makes GTK re-measure the row for
+    /// nothing.
+    private func refreshLampBar() {
+        let checks = coordinator.systemChecks
+        let worst = SystemChecks.worst(checks)
+        // The summary carries the counts; the word carries the verdict. One
+        // without the other reads either as "7 of something" or as a mood.
+        // The lamp's own word, with a capital so it opens the line: "bereit"
+        // and "prüfen" are lower case in the lamp rows, where they sit after
+        // a name.
+        let word = worst.word
+        let verdict = word.isEmpty ? word : word.prefix(1).uppercased() + word.dropFirst()
+        let text = checks.isEmpty
+            ? Text.s("Noch nicht geprüft", "Not checked yet")
+            : verdict + " · " + SystemChecks.summary(checks)
+        guard lampShown?.state != worst || lampShown?.text != text else { return }
+        lampShown = (worst, text)
+
+        Gtk.setText(lampText, text)
+        // Remove every other class before adding this one. Styling.style only
+        // ever adds, and a dot that has been green and is now red would
+        // otherwise carry both and let CSS precedence pick.
+        let context = gtk_widget_get_style_context(lampDot)
+        for state in [SystemCheck.State.ok, .warning, .failed, .off] {
+            gtk_style_context_remove_class(context, Self.lampClass(state))
+        }
+        gtk_style_context_add_class(context, Self.lampClass(worst))
+    }
+
+    /// What the bar says about the worst lamp, read back off the label.
+    var lampBarText: String {
+        String(cString: gtk_label_get_text(Gtk.label(lampText)))
     }
 
     private static func lampClass(_ state: SystemCheck.State) -> String {

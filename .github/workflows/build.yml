@@ -518,6 +518,15 @@ jobs:
             echo "FAIL: the empty list did not say what happened; only the footer did"
             exit 1
           }
+          # The traffic light belongs in the bar at the bottom, not only
+          # behind the menu: "is everything plugged in" is the standing
+          # question, and a panel you have to open to answer it is a panel
+          # nobody opens. It has to carry a verdict and counts, not be blank.
+          grep -qE "^lamp bar: .+ · .*[0-9]" empty.log || {
+            echo "FAIL: the bar at the bottom says nothing about the lamps"
+            grep "^lamp bar:" empty.log || echo "(no lamp bar line at all)"
+            exit 1
+          }
 
           # Then with a folder that has a film in it: the button has to
           # produce proposals, not merely a sentence.

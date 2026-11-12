@@ -261,6 +261,7 @@ case .pressScan:
             mainWindow.refresh()
             let status = mainWindow.statusText
             print("status: \(status)")
+            print("lamp bar: \(mainWindow.lampBarText)")
             print("middle: \(mainWindow.emptyListText)")
             print("proposals: \(coordinator.items.count)")
             if status.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
