@@ -21,6 +21,13 @@ static void mediafin_free_drop_target(gpointer data, GClosure *closure) {
     g_free(target);
 }
 
+/* Does NOT call gtk_drag_finish. GTK_DEST_DEFAULT_DROP, which is part of the
+   GTK_DEST_DEFAULT_ALL set below, calls it itself once this returns -- the
+   documentation is explicit: "Whether or not the drop is successful, GTK+ will
+   call gtk_drag_finish()". Calling it here as well finished the same context
+   twice, whose state is torn down by the first call. That is the classic
+   mistake at this spot, and I made it: the first version of this file did,
+   and dropping a file took the window down with it. */
 static void mediafin_on_drag_data_received(GtkWidget *widget,
                                            GdkDragContext *context,
                                            gint x, gint y,
@@ -28,17 +35,15 @@ static void mediafin_on_drag_data_received(GtkWidget *widget,
                                            guint info, guint time,
                                            gpointer user_data) {
     (void)widget;
+    (void)context;
     (void)x;
     (void)y;
     (void)info;
+    (void)time;
 
     DropTarget *target = (DropTarget *)user_data;
     gchar **uris = gtk_selection_data_get_uris(data);
     if (uris == NULL) {
-        /* Nothing usable arrived. Said to be a failure, so the file manager
-           draws the "did not take it" animation rather than implying that
-           something is now happening. */
-        gtk_drag_finish(context, FALSE, FALSE, time);
         return;
     }
 
@@ -70,7 +75,6 @@ static void mediafin_on_drag_data_received(GtkWidget *widget,
     }
     g_free(paths);
     g_strfreev(uris);
-    gtk_drag_finish(context, kept > 0, FALSE, time);
 }
 
 void mediafin_accept_file_drops(GtkWidget *widget,
