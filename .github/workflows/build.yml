@@ -5,6 +5,27 @@ on:
   workflow_dispatch:
 
 jobs:
+  # First, and on a bare runner rather than in a container: PyYAML is there
+  # on a GitHub-hosted image and is not guaranteed in the Swift container.
+  #
+  # This exists because `yaml.safe_load` accepts a mapping with the same key
+  # twice and keeps the last one, while GitHub Actions rejects it outright.
+  # A bad edit put two `with:` blocks on one step of the release workflow, a
+  # permissive load called it fine, and the next release refused to start --
+  # which is a thing you find out at the moment you need a release.
+  workflows:
+    name: Workflow files
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Refuse a workflow Actions would refuse
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -c 'import yaml' 2>/dev/null || pip install --quiet pyyaml
+          python3 tools/check-workflows.py .github/workflows/*.yml
+
   test:
     name: Core tests
     runs-on: macos-15
