@@ -498,6 +498,14 @@ jobs:
             echo "FAIL: pressing Scan did not name the missing import folder"
             exit 1
           }
+          # And it has to say so in the middle of the window, not only in the
+          # small dim footer line. "It does nothing, no status, nothing at
+          # all" was reported about a window that did in fact answer -- down
+          # at the bottom edge, where nobody was looking.
+          grep -qiE "^middle: .*(import|Importordner)" empty.log || {
+            echo "FAIL: the empty list did not say what happened; only the footer did"
+            exit 1
+          }
 
           # Then with a folder that has a film in it: the button has to
           # produce proposals, not merely a sentence.

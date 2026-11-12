@@ -233,6 +233,7 @@ case .pressScan:
             mainWindow.refresh()
             let status = mainWindow.statusText
             print("status: \(status)")
+            print("middle: \(mainWindow.emptyListText)")
             print("proposals: \(coordinator.items.count)")
             if status.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 Pending.failure = "pressing Scan left the window saying nothing"

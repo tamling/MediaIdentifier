@@ -92,6 +92,14 @@ final class AppWindow {
     /// The rows currently on screen, kept so they can be destroyed without
     /// walking the container — which would mean another C callback.
     private var rowWidgets: [UnsafeMutablePointer<GtkWidget>] = []
+    /// The second line of the empty list, kept so what just happened can be
+    /// said in the middle of the window rather than only in the footer.
+    ///
+    /// The footer line is small, dim and at the bottom edge. Pressing Scan
+    /// with no import folder set put the answer there and nowhere else, and
+    /// "it does nothing, no status, nothing at all" is what that looks like
+    /// from a chair in front of it. The answer belongs where the eye is.
+    private var emptyDetail: UnsafeMutablePointer<GtkWidget>?
     /// Which proposal each tick box belongs to. The window holds no opinion
     /// about what is selected beyond what these say, so there is nothing to
     /// keep in step with them.
@@ -820,6 +828,17 @@ final class AppWindow {
         String(cString: gtk_label_get_text(Gtk.label(resultLabel)))
     }
 
+    /// What the middle of the window says while the list is empty, read back
+    /// off that label. Empty when the list has rows.
+    ///
+    /// Checked separately from `statusText` because the complaint was not
+    /// that nothing was said -- something was -- but that it was said in a
+    /// small dim line at the bottom edge where nobody was looking.
+    var emptyListText: String {
+        guard let detail = emptyDetail else { return "" }
+        return String(cString: gtk_label_get_text(Gtk.label(detail)))
+    }
+
     /// Whether the Scan button can be pressed at all. It used to be greyed
     /// out whenever no import folder was set, which is how "the scan button
     /// does not work" came about.
@@ -939,6 +958,21 @@ final class AppWindow {
             "\(state.totalItems) proposals · \(state.ready) ticked · "
                 + "\(state.done) renamed"))
         Gtk.setText(resultLabel, state.lastResult ?? "")
+
+        // While the list is empty, the last thing that happened goes in the
+        // middle too. Not instead of the footer -- the footer is the running
+        // commentary -- but because an empty list is exactly the moment the
+        // user is looking at the middle and asking "well, what happened?".
+        if let detail = emptyDetail, let said = state.lastResult, !said.isEmpty {
+            Gtk.setText(detail, said)
+            // Remove then add, rather than Styling.style, which only ever
+            // adds: this runs twice a second, so a state that flips would
+            // otherwise end up carrying both classes at once and let CSS
+            // precedence decide which colour the user gets.
+            let context = gtk_widget_get_style_context(detail)
+            gtk_style_context_remove_class(context, state.hasError ? "mf-dim" : "mf-fail")
+            gtk_style_context_add_class(context, state.hasError ? "mf-fail" : "mf-dim")
+        }
 
         // Available whenever nothing is running, even with no import folder
         // set. It used to be greyed out without one -- and the engine has the
@@ -1169,6 +1203,7 @@ final class AppWindow {
 
         for row in rowWidgets { gtk_widget_destroy(row) }
         rowWidgets = []
+        emptyDetail = nil
         rowChecks = []
 
         if items.isEmpty {
@@ -1194,6 +1229,7 @@ final class AppWindow {
             gtk_label_set_line_wrap(Gtk.label(second), 1)
             gtk_box_pack_start(Gtk.box(listColumn), second, 0, 0, 0)
             rowWidgets = [empty, second]
+            emptyDetail = second
         } else {
             for (index, item) in items.enumerated() {
                 let built = Self.proposalRow(item, banded: index % 2 == 1)
