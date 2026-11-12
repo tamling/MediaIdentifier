@@ -518,6 +518,23 @@ jobs:
           # column zero, which ends the YAML block scalar it is written in.
           printf '{"sourceFolder":"%s","identification":"offline","language":"en"}\n' \
             "$ready/downloads" > "$ready/config/settings.json"
+          # Applying settings has to be visibly an event, not a word that was
+          # already on screen. Two presses, and the time has to move.
+          echo "=== pressing Apply in the settings ==="
+          applied="$(mktemp -d)"
+          timeout 90 xvfb-run -a --server-args="-screen 0 1280x900x24" \
+            env MEDIAFIN_CONFIG_DIR="$applied" \
+            .build/release/mediafin-gtk --press-apply | tee applied.log
+          first="$(sed -n 's/^applied once: //p' applied.log)"
+          second="$(sed -n 's/^applied twice: //p' applied.log)"
+          echo "first: ${first:-nothing}"
+          echo "second: ${second:-nothing}"
+          test -n "$first" || { echo "FAIL: Apply said nothing at all"; exit 1; }
+          test "$first" != "$second" || {
+            echo "FAIL: the second Apply looked exactly like the first"
+            exit 1
+          }
+
           echo "=== with one film to find ==="
           run_window "$ready/config" | tee ready.log
           found="$(sed -n 's/^proposals: \([0-9]*\)$/\1/p' ready.log)"

@@ -64,6 +64,25 @@ final class AppWindow {
     private let scheduleSummary: UnsafeMutablePointer<GtkWidget>
     private let checksColumn: UnsafeMutablePointer<GtkWidget>
     private let checksExpander: UnsafeMutablePointer<GtkWidget>
+    /// Settings, status and fetching live in windows of their own, opened from
+    /// the header's menu.
+    ///
+    /// They used to be six cards stacked above the proposals on the main
+    /// surface. That made the main surface a form with a list at the bottom,
+    /// and it made "are these options even working, did that save" a fair
+    /// question: a settings form you are looking at all the time looks like
+    /// it should be live, and this one is not -- it is read when Apply is
+    /// pressed. Behind a menu, opened deliberately, with one Apply button and
+    /// a timestamp, it stops pretending.
+    private let settingsDialog: UnsafeMutablePointer<GtkWidget>
+    private let statusDialog: UnsafeMutablePointer<GtkWidget>
+    private let fetchDialog: UnsafeMutablePointer<GtkWidget>
+    /// Says when the settings were last taken, with the time of day.
+    ///
+    /// The time is the point. "Saved." appearing where "Saved." already was
+    /// is indistinguishable from nothing happening, which is exactly what was
+    /// reported. A clock that moves proves the press landed.
+    private let savedLabel: UnsafeMutablePointer<GtkWidget>
 
     /// The log rows on screen, so they can be replaced without walking the
     /// container.
@@ -158,6 +177,15 @@ final class AppWindow {
 
         let page = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10)!
         gtk_container_set_border_width(Gtk.container(page), 12)
+        // Where the settings cards go. Built here so the construction below
+        // can pack into it exactly as it used to pack into the page; the
+        // dialog that holds it is assembled at the end of this initialiser.
+        let settingsPage = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10)!
+        gtk_container_set_border_width(Gtk.container(settingsPage), 12)
+        let statusPage = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10)!
+        gtk_container_set_border_width(Gtk.container(statusPage), 12)
+        let fetchPage = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10)!
+        gtk_container_set_border_width(Gtk.container(fetchPage), 12)
         // The whole left column scrolls, and this is the fix for the bug it
         // shipped with: a GtkWindow cannot be made shorter than its content's
         // minimum height, and this column's minimum was about a thousand
@@ -202,9 +230,9 @@ final class AppWindow {
         // answers "is everything plugged in" in one line; opened, it says
         // which lamp and why.
         checksExpander = gtk_expander_new(Text.s("Status", "Status"))!
-        gtk_expander_set_expanded(Gtk.expander(checksExpander), expandSettings ? 1 : 0)
+        gtk_expander_set_expanded(Gtk.expander(checksExpander), 1)
         gtk_container_add(Gtk.container(checksExpander), checks)
-        gtk_box_pack_start(Gtk.box(page), checksExpander, 0, 0, 0)
+        gtk_box_pack_start(Gtk.box(statusPage), checksExpander, 1, 1, 0)
 
         // MARK: Fetching from a link
         //
@@ -228,7 +256,7 @@ final class AppWindow {
                     "Lands in the import folder and is then proposed like any other "
                         + "file found there."), classes: "mf-dim"),
                  to: fetch)
-        gtk_box_pack_start(Gtk.box(page), fetch, 0, 0, 0)
+        gtk_box_pack_start(Gtk.box(fetchPage), fetch, 0, 0, 0)
 
         // MARK: Folders
 
@@ -262,11 +290,7 @@ final class AppWindow {
         Self.add(Self.row(Text.s("Serien", "Series"), seriesChooser), to: folders)
         Self.add(Self.row(Text.s("Musik", "Music"), musicChooser), to: folders)
 
-        let saveRow = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0)!
-        let saveButton = gtk_button_new_with_label(Text.s("Übernehmen", "Apply"))!
-        gtk_box_pack_end(Gtk.box(saveRow), saveButton, 0, 0, 0)
-        Self.add(saveRow, to: folders)
-        gtk_box_pack_start(Gtk.box(page), folders, 0, 0, 0)
+        gtk_box_pack_start(Gtk.box(settingsPage), folders, 0, 0, 0)
 
         // MARK: Identification
         //
@@ -298,9 +322,9 @@ final class AppWindow {
 
         let detectionExpander = gtk_expander_new(
             Text.s("Erkennung und Modellserver", "Identification and model server"))!
-        gtk_expander_set_expanded(Gtk.expander(detectionExpander), expandSettings ? 1 : 0)
+        gtk_expander_set_expanded(Gtk.expander(detectionExpander), 1)
         gtk_container_add(Gtk.container(detectionExpander), detection)
-        gtk_box_pack_start(Gtk.box(page), detectionExpander, 0, 0, 0)
+        gtk_box_pack_start(Gtk.box(settingsPage), detectionExpander, 0, 0, 0)
 
         // MARK: The library on another machine
         //
@@ -405,15 +429,15 @@ final class AppWindow {
         Self.add(scheduleSummary, to: scheduleCard)
 
         let scheduleExpander = gtk_expander_new(Text.s("Zeitplan", "Schedule"))!
-        gtk_expander_set_expanded(Gtk.expander(scheduleExpander), expandSettings ? 1 : 0)
+        gtk_expander_set_expanded(Gtk.expander(scheduleExpander), 1)
         gtk_container_add(Gtk.container(scheduleExpander), scheduleCard)
-        gtk_box_pack_start(Gtk.box(page), scheduleExpander, 0, 0, 0)
+        gtk_box_pack_start(Gtk.box(settingsPage), scheduleExpander, 0, 0, 0)
 
         let remoteExpander = gtk_expander_new(
             Text.s("Server (rsync / SFTP)", "Server (rsync / SFTP)"))!
-        gtk_expander_set_expanded(Gtk.expander(remoteExpander), expandSettings ? 1 : 0)
+        gtk_expander_set_expanded(Gtk.expander(remoteExpander), 1)
         gtk_container_add(Gtk.container(remoteExpander), remote)
-        gtk_box_pack_start(Gtk.box(page), remoteExpander, 0, 0, 0)
+        gtk_box_pack_start(Gtk.box(settingsPage), remoteExpander, 0, 0, 0)
 
         // MARK: Proposals
 
@@ -479,7 +503,39 @@ final class AppWindow {
         gtk_box_pack_start(Gtk.box(logSide), logScroller, 1, 1, 0)
         gtk_box_pack_start(Gtk.box(split), logSide, 0, 0, 0)
 
+        // MARK: The three windows behind the menu
+
+        // One Apply for the whole dialog, at the bottom where a dialog's
+        // buttons belong. It used to sit inside the Library card, which read
+        // as though it applied to that card and left the three sections below
+        // it looking like they saved themselves. They never did: Apply reads
+        // every field in the dialog, and always has.
+        savedLabel = Self.label("", classes: "mf-dim")
+        gtk_label_set_xalign(Gtk.label(savedLabel), 0)
+        let saveRow = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8)!
+        let saveButton = gtk_button_new_with_label(Text.s("Übernehmen", "Apply"))!
+        Styling.style(saveButton, "suggested-action")
+        gtk_box_pack_start(Gtk.box(saveRow), savedLabel, 1, 1, 0)
+        gtk_box_pack_end(Gtk.box(saveRow), saveButton, 0, 0, 0)
+        gtk_box_pack_end(Gtk.box(settingsPage), saveRow, 0, 0, 0)
+
+        settingsDialog = Self.panel(Text.s("Einstellungen", "Settings"),
+                                    holding: settingsPage, over: window)
+        statusDialog = Self.panel(Text.s("Status", "Status"),
+                                  holding: statusPage, over: window)
+        fetchDialog = Self.panel(Text.s("Aus dem Netz laden", "Fetch from a link"),
+                                 holding: fetchPage, over: window)
+
+        // A menu in the header, which is where a GTK application keeps the
+        // things it is not doing right now -- the same place a Mac keeps
+        // them. The main surface is then the list and nothing else.
+        let menuButton = gtk_button_new_from_icon_name("open-menu-symbolic",
+                                                       GTK_ICON_SIZE_BUTTON)!
+        gtk_widget_set_tooltip_text(menuButton, Text.s("Menü", "Menu"))
+        gtk_header_bar_pack_start(Gtk.headerBar(header), menuButton)
+
         Gtk.onClick(saveButton, self) { $0.saveFolders() }
+        Gtk.onClick(menuButton, self) { $0.showMenu() }
         Gtk.onClick(scanButton, self) { $0.scan() }
         Gtk.onClick(applyButton, self) { $0.applySelected() }
         Gtk.onClick(undoButton, self) { $0.undoLast() }
@@ -636,6 +692,17 @@ final class AppWindow {
         settings.schedule = readScheduleFields(from: settings.schedule)
         settings.remote = readRemoteFields(from: settings.remote)
         coordinator.submit(.saveSettings(settings))
+
+        // With the time of day, and said next to the button that was just
+        // pressed. "Saved." appearing where "Saved." already was is
+        // indistinguishable from nothing happening, which is what was
+        // reported: "no idea whether that saved or not". A clock that moves
+        // is the only version of this sentence that answers the question.
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm:ss"
+        Gtk.setText(savedLabel, Text.s(
+            "Übernommen um \(formatter.string(from: Date()))",
+            "Applied at \(formatter.string(from: Date()))"))
         if languageChanged {
             Gtk.setText(resultLabel, Text.s(
                 "Sprache gespeichert — das Fenster zeigt sie nach einem Neustart.",
@@ -815,6 +882,78 @@ final class AppWindow {
         coordinator.submit(.undoLastRename)
     }
 
+    // MARK: The menu and the windows behind it
+
+    /// A window for one group of settings, hidden rather than destroyed when
+    /// it is closed.
+    ///
+    /// Hidden, because destroying it would take the entries with it, and
+    /// every read and fill in this file points at those entries. A closed
+    /// panel that can be opened again with its text still in it is also what
+    /// a person expects.
+    private static func panel(_ title: String,
+                              holding content: UnsafeMutablePointer<GtkWidget>,
+                              over parent: UnsafeMutablePointer<GtkWidget>)
+        -> UnsafeMutablePointer<GtkWidget> {
+        let panel = gtk_window_new(GTK_WINDOW_TOPLEVEL)!
+        gtk_window_set_title(Gtk.window(panel), title)
+        gtk_window_set_transient_for(Gtk.window(panel), Gtk.window(parent))
+        // Not modal: someone adjusting the server address may well want to
+        // read the list behind it while they do.
+        gtk_window_set_modal(Gtk.window(panel), 0)
+        gtk_window_set_destroy_with_parent(Gtk.window(panel), 1)
+        gtk_window_set_default_size(Gtk.window(panel), 560, 620)
+        // The same reason the main column scrolls: a window cannot be made
+        // shorter than its content's minimum height, and four sections of
+        // settings are taller than a laptop screen.
+        let scroller = gtk_scrolled_window_new(nil, nil)!
+        gtk_scrolled_window_set_policy(Gtk.scrolledWindow(scroller),
+                                       GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC)
+        gtk_container_add(Gtk.container(scroller), content)
+        gtk_container_add(Gtk.container(panel), scroller)
+        // Closing hides it. Without this the window is destroyed and every
+        // widget this file holds a pointer to goes with it.
+        let onDelete: @convention(c) (UnsafeMutablePointer<GtkWidget>?,
+                                      UnsafeMutableRawPointer?,
+                                      UnsafeMutableRawPointer?) -> gboolean = { widget, _, _ in
+            guard let widget else { return 0 }
+            gtk_widget_hide(widget)
+            return 1   // handled: do not destroy
+        }
+        Gtk.connect(panel, "delete-event", unsafeBitCast(onDelete, to: GCallback.self))
+        return panel
+    }
+
+    /// Opens one of those windows, building it on screen the first time.
+    private func open(_ panel: UnsafeMutablePointer<GtkWidget>) {
+        gtk_widget_show_all(panel)
+        gtk_window_present(Gtk.window(panel))
+    }
+
+    /// The header menu.
+    ///
+    /// Built fresh each time rather than kept: it has four entries and no
+    /// state, and a menu assembled on demand cannot drift out of step with
+    /// what the window can actually do.
+    func showMenu() {
+        let menu = gtk_menu_new()!
+        func entry(_ label: String, _ action: @escaping (AppWindow) -> Void) {
+            let item = gtk_menu_item_new_with_label(label)!
+            Gtk.onActivate(item, self, action)
+            gtk_menu_shell_append(Gtk.menuShell(menu), item)
+        }
+        entry(Text.s("Einstellungen …", "Settings…")) { $0.open($0.settingsDialog) }
+        entry(Text.s("Status …", "Status…")) { $0.open($0.statusDialog) }
+        entry(Text.s("Aus dem Netz laden …", "Fetch from a link…")) {
+            $0.open($0.fetchDialog)
+        }
+        gtk_menu_shell_append(Gtk.menuShell(menu),
+                              gtk_separator_menu_item_new())
+        entry(MediafinVersion.display) { _ in }
+        gtk_widget_show_all(menu)
+        gtk_menu_popup_at_pointer(Gtk.menu(menu), nil)
+    }
+
     // MARK: Driven from outside, so CI can press a button
 
     /// What the window is currently telling the user, read back from the
@@ -827,6 +966,18 @@ final class AppWindow {
     var statusText: String {
         String(cString: gtk_label_get_text(Gtk.label(resultLabel)))
     }
+
+    /// What the settings panel says about the last time Apply was pressed,
+    /// read back off that label.
+    var appliedText: String {
+        String(cString: gtk_label_get_text(Gtk.label(savedLabel)))
+    }
+
+    /// Opens the settings panel, as the menu does.
+    func openSettings() { open(settingsDialog) }
+
+    /// Presses Apply in the settings panel.
+    func pressApply() { saveFolders() }
 
     /// What the middle of the window says while the list is empty, read back
     /// off that label. Empty when the list has rows.

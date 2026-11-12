@@ -48,6 +48,16 @@ enum Gtk {
         UnsafeMutableRawPointer(widget).assumingMemoryBound(to: GtkButton.self)
     }
 
+    static func menu(_ widget: UnsafeMutablePointer<GtkWidget>) -> UnsafeMutablePointer<GtkMenu> {
+        UnsafeMutableRawPointer(widget).assumingMemoryBound(to: GtkMenu.self)
+    }
+
+    static func menuShell(
+        _ widget: UnsafeMutablePointer<GtkWidget>
+    ) -> UnsafeMutablePointer<GtkMenuShell> {
+        UnsafeMutableRawPointer(widget).assumingMemoryBound(to: GtkMenuShell.self)
+    }
+
     static func comboBox(
         _ widget: UnsafeMutablePointer<GtkWidget>
     ) -> UnsafeMutablePointer<GtkComboBox> {
@@ -204,6 +214,29 @@ enum Gtk {
                 Unmanaged<Action>.fromOpaque(data).release()
             }
         g_signal_connect_data(object(widget), "clicked",
+                              unsafeBitCast(handler, to: GCallback.self),
+                              payload, release, GConnectFlags(rawValue: 0))
+    }
+
+    /// A menu item chosen. The same ownership dance as `onClick`; menu items
+    /// emit "activate" rather than "clicked".
+    static func onActivate<Owner: AnyObject>(
+        _ widget: UnsafeMutablePointer<GtkWidget>,
+        _ owner: Owner,
+        _ action: @escaping (Owner) -> Void
+    ) {
+        let payload = Unmanaged.passRetained(Action(owner: owner, action: action)).toOpaque()
+        let handler: @convention(c) (UnsafeMutablePointer<GtkWidget>?,
+                                     UnsafeMutableRawPointer?) -> Void = { _, data in
+            guard let data else { return }
+            Unmanaged<Action>.fromOpaque(data).takeUnretainedValue().run()
+        }
+        let release: @convention(c) (UnsafeMutableRawPointer?, UnsafeMutablePointer<GClosure>?)
+            -> Void = { data, _ in
+                guard let data else { return }
+                Unmanaged<Action>.fromOpaque(data).release()
+            }
+        g_signal_connect_data(object(widget), "activate",
                               unsafeBitCast(handler, to: GCallback.self),
                               payload, release, GConnectFlags(rawValue: 0))
     }

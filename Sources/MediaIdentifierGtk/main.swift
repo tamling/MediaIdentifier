@@ -20,6 +20,10 @@ private enum Mode {
     case interactive
     /// Render the window to this path, then quit.
     case screenshot(path: String)
+    /// Open the settings panel, press Apply twice, and report what it says
+    /// each time. Exists because "no idea whether that saved" is a report
+    /// about a window that gave no answer at all.
+    case pressApply
     /// Press "Scan" and report what the window then says, then quit.
     ///
     /// This exists because CI had only ever rendered a picture of the window.
@@ -54,6 +58,8 @@ private func usage() -> String {
       mediafin-gtk --press-scan        press "Scan", print what the window
                                        then says, and exit non-zero if it
                                        says nothing at all
+      mediafin-gtk --press-apply       open the settings, press Apply twice,
+                                       and print what it says each time
       mediafin-gtk --help              this text
 
     Needs a display. Without one it exits 2 rather than hanging, so it is safe
@@ -91,6 +97,8 @@ private func parse(_ arguments: [String]) -> Options {
             index = next
         case "--press-scan":
             options.mode = .pressScan
+        case "--press-apply":
+            options.mode = .pressApply
         case "--screenshot":
             let next = arguments.index(after: index)
             guard next < arguments.endIndex else {
@@ -249,6 +257,30 @@ case .pressScan:
     // Checked here and not only in the screenshot branch: a mode that reports
     // a fault and then exits 0 is a check that cannot fail, which is the
     // thing this whole mode exists to stop.
+    if let failure = Pending.failure {
+        fail(failure, code: 1)
+    }
+
+case .pressApply:
+    let apply: @convention(c) (UnsafeMutableRawPointer?) -> gboolean = { _ in
+        mainWindow.openSettings()
+        mainWindow.pressApply()
+        print("applied once: \(mainWindow.appliedText)")
+        // A second press a second later. The question is not whether the
+        // label has text -- it is whether pressing again is visibly a second
+        // press, which is the thing a fixed "Saved." cannot show.
+        let again: @convention(c) (UnsafeMutableRawPointer?) -> gboolean = { _ in
+            defer { gtk_main_quit() }
+            mainWindow.pressApply()
+            print("applied twice: \(mainWindow.appliedText)")
+            return Gtk.sourceRemove
+        }
+        g_timeout_add(1200, again, nil)
+        return Gtk.sourceRemove
+    }
+    g_timeout_add(400, apply, nil)
+    gtk_main()
+
     if let failure = Pending.failure {
         fail(failure, code: 1)
     }
