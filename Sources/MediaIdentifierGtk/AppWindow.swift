@@ -1468,7 +1468,7 @@ final class AppWindow {
             emptyDetail = second
         } else {
             for (index, item) in items.enumerated() {
-                let built = Self.proposalRow(item, banded: index % 2 == 1)
+                let built = proposalRow(item, banded: index % 2 == 1)
                 gtk_box_pack_start(Gtk.box(listColumn), built.row, 0, 0, 0)
                 rowWidgets.append(built.row)
                 rowChecks.append((id: item.id, check: built.check))
@@ -1483,7 +1483,10 @@ final class AppWindow {
     ///
     /// Nothing here says the rename has happened — the list is a preview, and
     /// the wording has to keep saying so until a button is pressed.
-    private static func proposalRow(_ item: RenameItem, banded: Bool)
+    /// An instance method, not a static one: the folder button has to carry
+    /// this row's path into its handler, and the handler needs the window to
+    /// put a failure somewhere the user will see it.
+    private func proposalRow(_ item: RenameItem, banded: Bool)
         -> (row: UnsafeMutablePointer<GtkWidget>,
             destination: UnsafeMutablePointer<GtkWidget>,
             check: UnsafeMutablePointer<GtkWidget>) {
@@ -1504,7 +1507,7 @@ final class AppWindow {
         gtk_box_pack_start(Gtk.box(row), check, 0, 0, 0)
 
         let text = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2)!
-        let from = label(item.originalFileName, classes: "mf-from")
+        let from = Self.label(item.originalFileName, classes: "mf-from")
         gtk_label_set_ellipsize(Gtk.label(from), PANGO_ELLIPSIZE_MIDDLE)
         gtk_box_pack_start(Gtk.box(text), from, 0, 0, 0)
 
@@ -1521,7 +1524,7 @@ final class AppWindow {
         // Ellipsised in the middle so a long path keeps both ends, and the
         // whole thing is on the tooltip.
         let destination = item.primaryDestination.path
-        let to = label("→ " + destination, classes: "mf-to")
+        let to = Self.label("→ " + destination, classes: "mf-to")
         gtk_label_set_ellipsize(Gtk.label(to), PANGO_ELLIPSIZE_MIDDLE)
         gtk_widget_set_tooltip_text(to, destination)
         gtk_box_pack_start(Gtk.box(text), to, 0, 0, 0)
@@ -1533,7 +1536,7 @@ final class AppWindow {
         if item.outputRoot.standardizedFileURL.path
             == item.mediaFile.url.deletingLastPathComponent()
                 .standardizedFileURL.path {
-            let here = label(
+            let here = Self.label(
                 Text.s("Bleibt neben der Datei — kein Bibliotheksordner gesetzt",
                        "Stays next to the file — no library folder is set"),
                 classes: "mf-warn")
@@ -1542,11 +1545,62 @@ final class AppWindow {
         }
 
         if let conflict = item.conflict {
-            let warning = label(conflictText(conflict), classes: "mf-warn")
+            let warning = Self.label(Self.conflictText(conflict), classes: "mf-warn")
             gtk_box_pack_start(Gtk.box(text), warning, 0, 0, 0)
         }
         gtk_box_pack_start(Gtk.box(row), text, 1, 1, 0)
+
+        // Opens the destination in whatever file manager the desktop uses.
+        // Before the rename that folder does not exist yet, so what opens is
+        // the deepest folder on the way that does — which is where the file
+        // is now, and a true answer rather than a button that does nothing.
+        let revealButton = gtk_button_new_from_icon_name("folder-open-symbolic",
+                                                         GTK_ICON_SIZE_BUTTON)!
+        gtk_button_set_relief(Gtk.button(revealButton), GTK_RELIEF_NONE)
+        gtk_widget_set_valign(revealButton, GTK_ALIGN_CENTER)
+        gtk_widget_set_tooltip_text(revealButton,
+                                    Text.s("Ordner öffnen", "Open the folder"))
+        let folder = item.primaryDestination.deletingLastPathComponent()
+        Gtk.onClick(revealButton, self) { $0.reveal(folder) }
+        gtk_box_pack_end(Gtk.box(row), revealButton, 0, 0, 0)
+
         return (row, destination: to, check)
+    }
+
+    /// Hands a folder to the desktop's file manager.
+    ///
+    /// `g_filename_to_uri` rather than "file://" + path: a path with a space
+    /// or an umlaut in it — which a film called "Der Name der Rose" certainly
+    /// has — is not a URI until it is escaped, and getting that wrong opens
+    /// nothing with no explanation.
+    func reveal(_ folder: URL) {
+        guard let existing = FolderReveal.nearestExistingDirectory(for: folder) else {
+            Gtk.setText(resultLabel, Text.s(
+                "Dieser Ordner lässt sich nicht öffnen: \(folder.path)",
+                "That folder cannot be opened: \(folder.path)"))
+            return
+        }
+        var error: UnsafeMutablePointer<GError>?
+        guard let uri = g_filename_to_uri(existing.path, nil, &error) else {
+            if let error { g_error_free(error) }
+            Gtk.setText(resultLabel, Text.s(
+                "Dieser Ordner lässt sich nicht öffnen: \(existing.path)",
+                "That folder cannot be opened: \(existing.path)"))
+            return
+        }
+        defer { g_free(uri) }
+        // Timestamp 0 is "now". Passing a real event time would be better
+        // form, but a button handler has none to hand and every desktop
+        // accepts 0.
+        if gtk_show_uri_on_window(Gtk.window(widget), uri, 0, &error) == 0 {
+            let detail = error.flatMap { String(cString: $0.pointee.message) } ?? ""
+            if let error { g_error_free(error) }
+            // In the footer rather than swallowed: a file manager that is not
+            // installed, or a sandbox that forbids this, is worth saying.
+            Gtk.setText(resultLabel, Text.s(
+                "Der Ordner ließ sich nicht öffnen: \(detail)",
+                "The folder could not be opened: \(detail)"))
+        }
     }
 
     private static func conflictText(_ kind: ConflictKind) -> String {
