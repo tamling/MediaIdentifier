@@ -20,6 +20,16 @@ private enum Mode {
     case interactive
     /// Render the window to this path, then quit.
     case screenshot(path: String)
+    /// Hand these files to the window exactly as a drop does, and report
+    /// what came of it.
+    ///
+    /// This splits the drop in two. GTK's own drag plumbing cannot be faked
+    /// from here -- there is no public way to build a GdkDragContext -- but
+    /// everything after it can, and that is the half with the engine in it.
+    /// If this works and a real drop still dies, the fault is in the
+    /// plumbing; if this dies too, it is in the engine. Either answer is
+    /// worth more than another guess.
+    case drop(paths: [String])
     /// Open the settings panel, press Apply twice, and report what it says
     /// each time. Exists because "no idea whether that saved" is a report
     /// about a window that gave no answer at all.
@@ -60,6 +70,8 @@ private func usage() -> String {
                                        says nothing at all
       mediafin-gtk --press-apply       open the settings, press Apply twice,
                                        and print what it says each time
+      mediafin-gtk --drop FILE…        hand these files to the window as a
+                                       drop would, and print what came of it
       mediafin-gtk --help              this text
 
     Needs a display. Without one it exits 2 rather than hanging, so it is safe
@@ -99,6 +111,12 @@ private func parse(_ arguments: [String]) -> Options {
             options.mode = .pressScan
         case "--press-apply":
             options.mode = .pressApply
+        case "--drop":
+            // Everything after --drop is a path, so this has to come last.
+            let rest = Array(arguments[arguments.index(after: index)...])
+            guard !rest.isEmpty else { fail("--drop needs at least one path", code: 64) }
+            options.mode = .drop(paths: rest)
+            index = arguments.endIndex
         case "--screenshot":
             let next = arguments.index(after: index)
             guard next < arguments.endIndex else {
@@ -121,6 +139,8 @@ private func parse(_ arguments: [String]) -> Options {
 private enum Pending {
     static var window: UnsafeMutablePointer<GtkWidget>?
     static var screenshotPath: String?
+    /// What --drop was given, so the C timeout callback can reach it.
+    static var dropPaths: [String] = []
     /// Set by the snapshot callback; read after the main loop returns to decide
     /// the exit status. A GUI that silently fails to draw must not exit 0.
     static var failure: String?
@@ -257,6 +277,30 @@ case .pressScan:
     // Checked here and not only in the screenshot branch: a mode that reports
     // a fault and then exits 0 is a check that cannot fail, which is the
     // thing this whole mode exists to stop.
+    if let failure = Pending.failure {
+        fail(failure, code: 1)
+    }
+
+case let .drop(paths):
+    let handOver: @convention(c) (UnsafeMutableRawPointer?) -> gboolean = { _ in
+        mainWindow.addDropped(Pending.dropPaths.map { URL(fileURLWithPath: $0) })
+        let report: @convention(c) (UnsafeMutableRawPointer?) -> gboolean = { _ in
+            defer { gtk_main_quit() }
+            mainWindow.refresh()
+            print("proposals: \(coordinator.items.count)")
+            print("status: \(mainWindow.statusText)")
+            if coordinator.items.isEmpty {
+                Pending.failure = "the dropped files produced no proposal"
+            }
+            return Gtk.sourceRemove
+        }
+        g_timeout_add(4000, report, nil)
+        return Gtk.sourceRemove
+    }
+    Pending.dropPaths = paths
+    g_timeout_add(400, handOver, nil)
+    gtk_main()
+
     if let failure = Pending.failure {
         fail(failure, code: 1)
     }

@@ -520,6 +520,30 @@ jobs:
             "$ready/downloads" > "$ready/config/settings.json"
           # Applying settings has to be visibly an event, not a word that was
           # already on screen. Two presses, and the time has to move.
+          # The engine half of a drop. GTK's drag plumbing cannot be faked
+          # from a script -- there is no public way to build a drag context --
+          # but everything after it can be, and that is the half with the
+          # engine in it. A real drop that still dies after this passes
+          # narrows the fault to the plumbing, which is worth more than
+          # another guess.
+          echo "=== handing files over as a drop does ==="
+          dropped="$(mktemp -d)"
+          mkdir -p "$dropped/config" "$dropped/elsewhere"
+          : > "$dropped/elsewhere/Dark.S01E01.GERMAN.1080p.WEB-DL.mkv"
+          printf '{"identification":"offline","language":"en"}\n' \
+            > "$dropped/config/settings.json"
+          timeout 90 xvfb-run -a --server-args="-screen 0 1280x900x24" \
+            env MEDIAFIN_CONFIG_DIR="$dropped/config" \
+            .build/release/mediafin-gtk --drop \
+            "$dropped/elsewhere/Dark.S01E01.GERMAN.1080p.WEB-DL.mkv" 2>&1 \
+            | tee dropped.log
+          grep -q "^mediafin: drop: 1 handed to the engine" dropped.log || {
+            echo "FAIL: the drop never reached the engine"; exit 1; }
+          got="$(sed -n 's/^proposals: \([0-9]*\)$/\1/p' dropped.log)"
+          echo "proposals from the drop: ${got:-none}"
+          test "${got:-0}" -ge 1 || {
+            echo "FAIL: a dropped film produced no proposal"; exit 1; }
+
           echo "=== pressing Apply in the settings ==="
           applied="$(mktemp -d)"
           timeout 90 xvfb-run -a --server-args="-screen 0 1280x900x24" \

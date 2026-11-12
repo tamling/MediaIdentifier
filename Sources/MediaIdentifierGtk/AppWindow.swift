@@ -1010,7 +1010,10 @@ final class AppWindow {
     /// listed is one set of rules, and it lives in one place. A window that
     /// formed its own opinion would be a second place for the two to disagree.
     func addDropped(_ urls: [URL]) {
+        FileHandle.standardError.write(Data(
+            "mediafin: drop: \(urls.count) handed to the engine\n".utf8))
         coordinator.submit(.addFiles(urls))
+        FileHandle.standardError.write(Data("mediafin: drop: submitted\n".utf8))
     }
 
     func setAllChecked(_ on: Bool) {

@@ -41,9 +41,16 @@ static void mediafin_on_drag_data_received(GtkWidget *widget,
     (void)info;
     (void)time;
 
+    /* Traced, on stderr, in stages. A drop is rare, three lines cost
+       nothing, and a drop that takes the window down with it leaves the last
+       line printed saying how far it got -- which is the difference between
+       a cause and a theory. Two releases were spent guessing at this. */
+    g_printerr("mediafin: drop: received\n");
+
     DropTarget *target = (DropTarget *)user_data;
     gchar **uris = gtk_selection_data_get_uris(data);
     if (uris == NULL) {
+        g_printerr("mediafin: drop: nothing usable in the selection\n");
         return;
     }
 
@@ -51,6 +58,7 @@ static void mediafin_on_drag_data_received(GtkWidget *widget,
     while (uris[count] != NULL) {
         count++;
     }
+    g_printerr("mediafin: drop: %u uri(s)\n", count);
 
     const char **paths = g_new0(const char *, count + 1);
     guint kept = 0;
@@ -66,8 +74,10 @@ static void mediafin_on_drag_data_received(GtkWidget *widget,
     }
     paths[kept] = NULL;
 
+    g_printerr("mediafin: drop: %u local path(s)\n", kept);
     if (kept > 0 && target != NULL && target->callback != NULL) {
         target->callback(paths, target->user_data);
+        g_printerr("mediafin: drop: handed over\n");
     }
 
     for (guint i = 0; i < kept; i++) {
