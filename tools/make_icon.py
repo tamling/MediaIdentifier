@@ -73,25 +73,8 @@ def make_master():
     return icon
 
 def export(master):
-    app_dir = "Sources/MediaIdentifierApp/Assets.xcassets"
-    icon_dir = os.path.join(app_dir, "AppIcon.appiconset")
-    os.makedirs(icon_dir, exist_ok=True)
-
-    specs = [(16,1),(16,2),(32,1),(32,2),(128,1),(128,2),(256,1),(256,2),(512,1),(512,2)]
-    images = []; seen = {}
-    for size, scale in specs:
-        px = size*scale
-        if px not in seen:
-            fname = f"icon_{size}x{size}@{scale}x.png"
-            master.resize((px,px), Image.LANCZOS).save(os.path.join(icon_dir,fname))
-            seen[px] = fname
-        images.append({"size":f"{size}x{size}","idiom":"mac","filename":seen[px],"scale":f"{scale}x"})
-
-    with open(os.path.join(icon_dir,"Contents.json"),"w") as f:
-        json.dump({"images":images,"info":{"version":1,"author":"xcode"}}, f, indent=2)
-    with open(os.path.join(app_dir,"Contents.json"),"w") as f:
-        json.dump({"info":{"version":1,"author":"xcode"}}, f, indent=2)
-
+    # The macOS asset catalogue is gone with the SwiftUI app; what is left
+    # is the icon the .deb installs and the one the README shows.
     os.makedirs("docs", exist_ok=True)
     master.save("docs/logo.png")
     print("Wrote", icon_dir, "and docs/logo.png")

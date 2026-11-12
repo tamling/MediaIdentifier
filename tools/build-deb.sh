@@ -166,81 +166,55 @@ install -d -m 755 "$STAGE/usr/share/man/man1"
 cat > "$STAGE/usr/share/man/man1/mediafin.1" <<'EOF'
 .TH MEDIAFIN 1 "" "mediafin" "User Commands"
 .SH NAME
-mediafin \- rename media into a Jellyfin layout, through a local web interface
+mediafin \- run Mediafin's scheduled work with no window open
 .SH SYNOPSIS
 .B mediafin
-[\fB\-\-port\fR \fIn\fR]
-[\fB\-\-bind\fR local|all]
-[\fB\-\-no\-tls\fR]
-[\fB\-\-cert\fR \fIfile\fR \fB\-\-key\fR \fIfile\fR]
-[\fB\-\-config\-dir\fR \fIdir\fR]
+\fB\-\-watch\fR | \fB\-\-once\fR | \fB\-\-version\fR | \fB\-\-help\fR
 .SH DESCRIPTION
-Serves a local web interface over HTTPS for renaming downloaded media into a
-Jellyfin-compatible layout, and for re-encoding it.
+Mediafin's interface is
+.BR mediafin\-gtk (1).
+This command draws nothing: it exists so that scheduled scans, renames and
+transfers happen while that window is closed.
 .PP
-On the first start an access token and a self\-signed certificate are created
-in the configuration directory. The token is printed once; it is needed to
-sign in. The certificate's SHA\-256 fingerprint is printed too, to compare
-against the browser's warning.
+There used to be a local web interface and a terminal interface here. Both are
+gone, and so are their options \(em there is nothing to serve and nothing to
+draw.
 .SH OPTIONS
 .TP
-.BR \-p ", " \-\-port " " \fIn\fR
-Port to listen on. Default 8720.
+.B \-\-watch
+Hold the engine and let its schedule fire. Does not exit on its own; this is
+what the systemd service starts.
 .TP
-.BR \-\-bind " " local|all
-Reachable from this machine only (default), or from the network. A network
-bind requires TLS.
+.B \-\-once
+Do whatever the schedule says is due, then exit. For a cron line of your own.
+It returns only when the work has finished, so a rename is never cut short.
 .TP
-.B \-\-no\-tls
-Serve plain HTTP. Refused for a network bind unless
-.B \-\-i\-accept\-plain\-http\-on\-the\-network
-is also given.
-.TP
-.BR \-\-cert " " \fIfile\fR ", " \-\-key " " \fIfile\fR
-Use this PEM certificate chain and key instead of the self\-signed one.
-.TP
-.BR \-\-config\-dir " " \fIdir\fR
-Where to keep the token, certificate and settings. Defaults to
-.I $XDG_CONFIG_HOME/mediafin
-or
-.IR ~/.config/mediafin .
-.TP
-.B \-\-rotate\-token
-Issue a new access token and exit. Signs every browser out.
-.TP
-.B \-\-print\-token
-Print the access token and exit.
+.B \-\-version
+Print the version and exit.
 .SH FILES
-.TP
-.I ~/.config/mediafin/token
-The access token, mode 0600.
-.TP
-.I ~/.config/mediafin/cert.pem, ~/.config/mediafin/key.pem
-The TLS certificate and its key. The key is mode 0600.
 .TP
 .I ~/.config/mediafin/settings.json
 Settings. Contains no credentials.
 .TP
 .I ~/.config/mediafin/secrets.json
-API keys, mode 0600.
-.SH SECURITY
-The interface can see the whole media library, so it requires the access
-token and is served over TLS. Binding to the network without TLS is refused
-rather than sending the token in clear text.
-.I /healthz
-answers without the token, for uptime monitors, and reveals only
-idle/busy/error.
+API keys and the server password, mode 0600.
+.SH ENVIRONMENT
+.TP
+.B MEDIAFIN_CONFIG_DIR
+Use this directory instead of
+.IR $XDG_CONFIG_HOME/mediafin .
 .SH SEE ALSO
+.BR mediafin-gtk (1),
 .BR ffmpeg (1),
-.BR openssl (1)
+.BR rsync (1)
 EOF
 gzip -9n "$STAGE/usr/share/man/man1/mediafin.1"
 
 echo "==> Writing the systemd unit"
 install -d -m 755 "$STAGE/usr/lib/systemd/system"
 cat > "$STAGE/usr/lib/systemd/system/mediafin.service" <<'EOF'
-# Deliberately NOT enabled on install: starting a server that exposes your
-# media library is your decision, not the package's.
+# Deliberately NOT enabled on install: letting a service move your media
+# unattended is your decision, not the package's.
 #
 # Before `systemctl enable --now mediafin`, give the service access to your
 # media. The mediafin user owns nothing by default, so either add it to the
@@ -256,7 +230,7 @@ cat > "$STAGE/usr/lib/systemd/system/mediafin.service" <<'EOF'
 #     Group=<you>
 #
 [Unit]
-Description=Mediafin — media renaming with a local web interface
+Description=Mediafin — scheduled media renaming, with no window open
 Documentation=man:mediafin(1)
 After=network-online.target
 Wants=network-online.target
@@ -266,7 +240,7 @@ Type=simple
 User=mediafin
 Group=mediafin
 Environment=MEDIAFIN_CONFIG_DIR=/var/lib/mediafin
-ExecStart=/usr/bin/mediafin --bind local
+ExecStart=/usr/bin/mediafin --watch
 Restart=on-failure
 RestartSec=5
 
@@ -338,14 +312,14 @@ Priority: optional
 Depends: $SHLIB_DEPENDS, adduser, openssl
 Recommends: ffmpeg, rsync, openssh-client
 Suggests: sshpass, yt-dlp
-Description: Rename media into a Jellyfin layout from a local web interface
+Description: Rename media into a Jellyfin layout, in a native window
  Mediafin parses release names, proposes Jellyfin-conformant names and shows
  them for review before anything is moved. It can also re-encode files to
  save space, and tells Jellyfin to rescan once a run finishes.
  .
- The interface is served over HTTPS and requires an access token. It binds to
- loopback by default; binding to the network without TLS is refused rather
- than sending the token in clear text.
+ The interface is mediafin-gtk, a GTK3 window: files and folders can be
+ dragged into it from the file manager. The mediafin command draws nothing;
+ it exists so scheduled runs happen while the window is closed.
  .
  Sending the sorted files to a server over rsync or SFTP, fetching a video
  from a link with yt-dlp, and sorting a music library from its own tags are

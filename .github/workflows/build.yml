@@ -382,30 +382,27 @@ jobs:
             fonts-dejavu-core fonts-cantarell adwaita-icon-theme
       - name: Build
         run: swift build -c release --product mediafin-gtk
-      - name: The terminal interface starts and leaves the terminal alone
+      # The headless runner draws nothing, so what is worth checking is that
+      # it says what it offers rather than silently doing nothing, and that
+      # --once finishes instead of hanging like the old server did.
+      - name: The headless runner says what it offers and --once returns
         shell: bash
         run: |
           set -euo pipefail
           swift build -c release --product mediafin
-          # There is no terminal in CI, so this is the path that must refuse
-          # rather than the one that draws: a program that puts a pipe into
-          # raw mode and then exits leaves the shell that started it unusable.
+          .build/release/mediafin --help | grep -q -- "--watch"
+          .build/release/mediafin --help | grep -q -- "--once"
+          # No arguments must not start something: there is nothing to start.
           code=0
-          .build/release/mediafin --tui < /dev/null > tui.log 2>&1 || code=$?
-          cat tui.log
-          test "$code" = 2 || {
-            echo "FAIL: expected exit 2 with no terminal, got $code"
-            exit 1
-          }
-          # --serve rather than the sentence: the message is translated, and
-          # which language CI gets depends on its LANG. The flag it points
-          # at is in both.
-          grep -q -- "--serve" tui.log || {
-            echo "FAIL: it exited 2 without saying what to do instead"
-            exit 1
-          }
-          # And the other direction: options still mean the server.
-          .build/release/mediafin --help | grep -q -- "--tui"
+          .build/release/mediafin > bare.log 2>&1 || code=$?
+          test "$code" = 64 || { echo "FAIL: bare invocation exited $code"; exit 1; }
+          grep -q "mediafin-gtk" bare.log || {
+            echo "FAIL: it did not say where the interface is"; exit 1; }
+          # --once with nothing scheduled has nothing to do, and has to come
+          # back rather than sit there: a cron line that never returns piles up.
+          timeout 60 env MEDIAFIN_CONFIG_DIR="$(mktemp -d)" \
+            .build/release/mediafin --once || {
+            echo "FAIL: --once did not finish"; exit 1; }
       - name: Render the window headless
         shell: bash
         env:
@@ -705,49 +702,3 @@ jobs:
           fi
           echo "ok    : exits 2 with no display and writes nothing"
 
-  app:
-    name: Build .app
-    runs-on: macos-15
-    # Measured at about five minutes once the app links SwiftNIO, so 40 is
-    # ample and still catches a hang quickly.
-    timeout-minutes: 40
-    steps:
-      - uses: actions/checkout@v4
-      - uses: maxim-lobanov/setup-xcode@v1
-        with:
-          xcode-version: latest-stable
-      - name: Install XcodeGen
-        run: brew install xcodegen
-      - name: Generate Xcode project
-        run: xcodegen generate
-      - name: Build (Release, unsigned)
-        run: |
-          set -o pipefail
-          xcodebuild \
-            -project Mediafin.xcodeproj \
-            -scheme Mediafin \
-            -configuration Release \
-            -derivedDataPath build \
-            -destination 'generic/platform=macOS' \
-            ARCHS="arm64 x86_64" ONLY_ACTIVE_ARCH=NO \
-            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
-            build
-      - name: Package .app
-        run: |
-          APP=$(find build/Build/Products/Release -maxdepth 1 -name '*.app' | head -1)
-          echo "Built: $APP"
-          ARCHS_OUT=$(lipo -archs "$APP/Contents/MacOS/Mediafin")
-          echo "Architectures: $ARCHS_OUT"
-          case "$ARCHS_OUT" in
-            *arm64*x86_64*|*x86_64*arm64*) echo "Universal binary OK." ;;
-            *) echo "::error::Expected a universal binary but got: $ARCHS_OUT"; exit 1 ;;
-          esac
-          # Ad-hoc sign so the unsigned universal app is not rejected as "damaged".
-          codesign --force --deep --sign - "$APP"
-          ditto -c -k --keepParent "$APP" Mediafin.app.zip
-      - name: Upload .app artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: Mediafin-app
-          path: Mediafin.app.zip
-          if-no-files-found: error

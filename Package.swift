@@ -1,20 +1,26 @@
 // swift-tools-version: 5.9
 import PackageDescription
 
-// The SwiftUI front-end only exists on Apple platforms. The manifest is
-// evaluated on the build machine, so excluding that target on Linux lets
-// `swift build` / `swift test` work there for the portable parts.
+// One engine, one interface.
+//
+// There used to be four front-ends over this engine: a GTK window, a terminal
+// interface, a local web interface and a SwiftUI app for macOS. Keeping them in
+// step was most of the work and none of the value — every setting had to be
+// built three times, and a release could be green while the one front-end
+// anybody ran was broken. The three that nobody ran are gone, along with
+// SwiftNIO, which only the web server needed.
+//
+// What is left: MediaIdentifierCore, which does the work and carries the
+// tests; mediafin-gtk, the window; and mediafin, a headless runner whose only
+// job is to hold the engine so scheduled runs happen while the window is shut.
 var products: [Product] = [
     .library(name: "MediaIdentifierCore", targets: ["MediaIdentifierCore"]),
-    .library(name: "MediaIdentifierWeb", targets: ["MediaIdentifierWeb"]),
-    .library(name: "MediaIdentifierTUI", targets: ["MediaIdentifierTUI"]),
-    // How Mediafin runs on Linux: a binary that serves the web interface.
     .executable(name: "mediafin", targets: ["mediafin"]),
 ]
 
 var targets: [Target] = [
-    // Pure-Foundation domain logic. No SwiftUI / AppKit imports so it stays
-    // portable and unit-testable (including on Linux).
+    // Pure-Foundation domain logic: no interface imports of any kind, so it
+    // stays portable and testable without a screen.
     .target(
         name: "MediaIdentifierCore",
         path: "Sources/MediaIdentifierCore"
@@ -24,61 +30,23 @@ var targets: [Target] = [
         dependencies: ["MediaIdentifierCore"],
         path: "Tests/MediaIdentifierCoreTests"
     ),
-    // HTTPS server for the local web interface. Separate target so the Core
-    // stays dependency-free: only this one pulls in SwiftNIO.
-    .target(
-        name: "MediaIdentifierWeb",
-        dependencies: [
-            "MediaIdentifierCore",
-            .product(name: "NIOCore", package: "swift-nio"),
-            .product(name: "NIOPosix", package: "swift-nio"),
-            .product(name: "NIOHTTP1", package: "swift-nio"),
-            .product(name: "NIOSSL", package: "swift-nio-ssl"),
-        ],
-        path: "Sources/MediaIdentifierWeb"
-    ),
-    .target(
-        name: "CMediafinTerm",
-        path: "Sources/CMediafinTerm"
-    ),
-    // The terminal interface. A third front-end over the same engine, kept
-    // in its own target so its rendering can be tested without a screen.
-    .target(
-        name: "MediaIdentifierTUI",
-        dependencies: ["MediaIdentifierCore", "CMediafinTerm"],
-        path: "Sources/MediaIdentifierTUI"
-    ),
-    .testTarget(
-        name: "MediaIdentifierTUITests",
-        dependencies: ["MediaIdentifierTUI", "MediaIdentifierCore"],
-        path: "Tests/MediaIdentifierTUITests"
-    ),
+    // Draws nothing. It exists because the schedule has to fire when the
+    // window is closed, and the timer that fires it lives inside the engine —
+    // so some process has to be holding one.
     .executableTarget(
         name: "mediafin",
-        dependencies: ["MediaIdentifierCore", "MediaIdentifierWeb",
-                       "MediaIdentifierTUI"],
+        dependencies: ["MediaIdentifierCore"],
         path: "Sources/mediafin"
-    ),
-    .testTarget(
-        name: "MediaIdentifierWebTests",
-        dependencies: [
-            "MediaIdentifierWeb",
-            .product(name: "NIOCore", package: "swift-nio"),
-            .product(name: "NIOPosix", package: "swift-nio"),
-            .product(name: "NIOSSL", package: "swift-nio-ssl"),
-        ],
-        path: "Tests/MediaIdentifierWebTests"
     ),
 ]
 
 #if os(Linux)
-// The native Linux front-end. GTK3 rather than GTK4: Mint, and every other
-// desktop Mediafin is likely to meet, is GTK3 itself, so the window inherits
-// the user's theme instead of fighting it.
+// The native Linux front-end, and now the only one. GTK3 rather than GTK4:
+// Mint, and every other desktop Mediafin is likely to meet, is GTK3 itself, so
+// the window inherits the user's theme instead of fighting it.
 //
-// Linux-only in the manifest for the same reason the SwiftUI app is
-// macOS-only: pkg-config would fail to find gtk+-3.0 on a Mac and break
-// `swift build` for everyone there.
+// Linux-only in the manifest because pkg-config would fail to find gtk+-3.0 on
+// a Mac and break `swift build` for everyone there.
 products.append(.executable(name: "mediafin-gtk", targets: ["mediafin-gtk"]))
 targets.append(contentsOf: [
     .systemLibrary(
@@ -104,33 +72,14 @@ targets.append(contentsOf: [
 ])
 #endif
 
-#if os(macOS)
-products.append(.executable(name: "MediaIdentifierApp", targets: ["MediaIdentifierApp"]))
-targets.append(
-    // SwiftUI macOS front-end. Only builds on macOS.
-    .executableTarget(
-        name: "MediaIdentifierApp",
-        dependencies: ["MediaIdentifierCore", "MediaIdentifierWeb"],
-        path: "Sources/MediaIdentifierApp",
-        // The asset catalog (app icon) is consumed by the Xcode/XcodeGen
-        // build, not by SwiftPM; exclude it so `swift build`/`swift test`
-        // don't warn about an unhandled resource.
-        exclude: ["Assets.xcassets"]
-    )
-)
-#endif
-
 let package = Package(
     name: "MediaIdentifier",
     platforms: [
         .macOS(.v13)
     ],
     products: products,
-    dependencies: [
-        // NIOSSL vendors its own BoringSSL, so TLS needs no system OpenSSL on
-        // either macOS or Linux.
-        .package(url: "https://github.com/apple/swift-nio.git", from: "2.65.0"),
-        .package(url: "https://github.com/apple/swift-nio-ssl.git", from: "2.25.0"),
-    ],
+    // None. The engine was always dependency-free; SwiftNIO came in for the
+    // web server alone and left with it.
+    dependencies: [],
     targets: targets
 )

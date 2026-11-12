@@ -5,12 +5,15 @@ import FoundationNetworking
 
 /// Carries out the commands a front-end submits.
 ///
-/// This is the engine both interfaces drive: the web UI and the native GTK
-/// window send the same `WebCommand` values here and read the same snapshot
-/// back. It lives in Core rather than beside the HTTP server because it never
-/// needed the server — only `WebServer.swift` imports SwiftNIO — and leaving
-/// it there would have meant either a second copy of this logic for the GTK
-/// front-end, or that front-end linking a web server it never starts.
+/// This is the engine. The window submits `WebCommand` values here and reads
+/// the snapshot back; the headless runner holds one so the schedule can fire
+/// with no window open.
+///
+/// It once served four front-ends — this window, a terminal interface, a local
+/// web interface and a SwiftUI app — and keeping them in step was most of the
+/// work and none of the value. The three nobody ran are gone. The `Web` prefix
+/// on `WebCommand`, `WebSettings` and `StatusSnapshot`'s file is left over
+/// from that time and means nothing now.
 ///
 /// Every command runs on one serial queue, so two scans or a scan and a rename
 /// can never interleave, and requests are never made to wait: they submit and
@@ -291,6 +294,18 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
 
     /// Waits for everything already on the queue to finish. Only for tests.
     func drainForTesting() {
+        queue.sync {}
+    }
+
+    /// Does whatever the schedule says is due, and returns once it is done.
+    ///
+    /// Public because the headless runner needs it, and it is not a test
+    /// hook: `mediafin --once` is meant for a cron line, and a cron line that
+    /// returned while the rename was still running would have the service
+    /// manager kill the work it had just started. So this waits for the queue
+    /// before giving control back.
+    public func runDueWorkNow() {
+        queue.sync { self.runIfDue() }
         queue.sync {}
     }
 
