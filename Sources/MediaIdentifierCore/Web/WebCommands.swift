@@ -13,6 +13,14 @@ public enum WebCommand: Sendable, Equatable {
     case testLocalLLMConnection
     case testJellyfinConnection
     case scanSourceFolder
+    /// Takes these files and folders as they are, and ADDS proposals for them
+    /// to what is already listed.
+    ///
+    /// Adds rather than replaces, because the gesture is "and this one too":
+    /// a drop that cleared the list would lose the twenty proposals already
+    /// being worked through. The import folder is not consulted at all — the
+    /// point is the file somebody pointed at.
+    case addFiles([URL])
     /// Applies the proposed renames. `accepting` lists the items the user
     /// ticked; nil means every proposal.
     case applyProposedRenames(accepting: Set<UUID>?)

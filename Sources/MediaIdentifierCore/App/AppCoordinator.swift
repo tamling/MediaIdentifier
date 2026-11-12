@@ -268,7 +268,7 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
              .clearHistory,
              .cancelConversions, .cancelTransfers, .cancelDownload:
             return false
-        case .scanSourceFolder, .applyProposedRenames, .undoLastRename,
+        case .scanSourceFolder, .addFiles, .applyProposedRenames, .undoLastRename,
              .findConvertible, .convertFiles, .transferFiles, .downloadURL,
              .testLocalLLMConnection, .testJellyfinConnection,
              .testRemoteConnection, .checkEverything:
@@ -321,6 +321,8 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
             testJellyfin()
         case .scanSourceFolder:
             scanSourceFolder()
+        case .addFiles(let urls):
+            addFiles(urls)
         case .applyProposedRenames(let accepting):
             applyRenames(accepting: accepting)
         case .undoLastRename:
@@ -568,36 +570,8 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
             return true
         }
 
-        var mediaFiles = scanner.scan(urls: urls)
-        if let provider = enrichmentProvider(settings) {
-            update { $0.convertStatus = "Identifying…" }
-            var enriched: [MediaFile] = []
-            for var file in mediaFiles {
-                let input = file.parsed
-                let parsed = runAndWaitReturning {
-                    await MetadataEnricher(provider: provider).enrich(input)
-                }
-                file.parsed = parsed ?? file.parsed
-                enriched.append(file)
-            }
-            mediaFiles = enriched
-        }
-
-        // The namer produces a path relative to a library root and does not
-        // prefix "Movies"/"Series", so movies and episodes need their own
-        // roots. Anything without a configured root is renamed where it is.
-        let movies = settings.moviesFolder.isEmpty
-            ? nil : URL(fileURLWithPath: settings.moviesFolder, isDirectory: true)
-        let series = settings.seriesFolder.isEmpty
-            ? nil : URL(fileURLWithPath: settings.seriesFolder, isDirectory: true)
-        let plan = planner.makePlan(for: mediaFiles, outputRoot: nil, libraryRoot: nil)
-            .map { item -> RenameItem in
-                let root = item.mediaFile.parsed.kind == .episode ? series : movies
-                guard let root else { return item }
-                var moved = item
-                moved.outputRoot = root
-                return planner.reconcile(item: moved)
-            }
+        let plan = videoProposals(for: enriching(scanner.scan(urls: urls), settings),
+                                  settings: settings)
 
         lock.lock(); _items = plan; lock.unlock()
         update {
@@ -610,6 +584,244 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         }
         refreshSnapshotCounts()
         return true
+    }
+
+    // MARK: Files handed over one at a time
+
+    /// What `addFiles` worked out from a list of URLs, before anything slow
+    /// has run. Pure, so every rule below can be tested without a disk.
+    struct HandedOver: Equatable {
+        var videos: [URL] = []
+        var audio: [URL] = []
+        /// Dropped, but neither video nor audio — a PDF, a folder of photos.
+        /// Counted so the answer can say "three of those were not media"
+        /// rather than silently ignoring them.
+        var ignored: [URL] = []
+    }
+
+    /// Sorts what was handed over, expanding folders.
+    ///
+    /// Each file goes by what it IS, not by whatever the library mode happens
+    /// to be set to: dropping an album while the mode says "films" is not a
+    /// mistake worth punishing, and the two namers are perfectly happy to run
+    /// side by side.
+    static func sorting(_ handed: [URL],
+                        isDirectory: (URL) -> Bool,
+                        videosIn: (URL) -> [URL],
+                        audioIn: (URL) -> [URL]) -> HandedOver {
+        var out = HandedOver()
+        var seen: Set<String> = []
+        func take(_ url: URL) {
+            let path = url.standardizedFileURL.path
+            guard seen.insert(path).inserted else { return }
+            if VideoFileTypes.isVideo(url) { out.videos.append(url) }
+            else if AudioFileTypes.isAudio(url) { out.audio.append(url) }
+            else { out.ignored.append(url) }
+        }
+        for url in handed {
+            if isDirectory(url) {
+                // A folder is what people drop when they mean "this series".
+                for found in videosIn(url) + audioIn(url) { take(found) }
+            } else {
+                take(url)
+            }
+        }
+        return out
+    }
+
+    /// Adds proposals for files somebody pointed at, keeping what is listed.
+    ///
+    /// The import folder is not consulted. A file dropped on the window is
+    /// the one the user means, wherever it lives — which is the whole reason
+    /// this exists beside the folder scan.
+    private func addFiles(_ handed: [URL]) {
+        let settings = self.settings
+        let manager = FileManager.default
+        let sorted = Self.sorting(
+            handed,
+            isDirectory: { url in
+                var isDir: ObjCBool = false
+                return manager.fileExists(atPath: url.path, isDirectory: &isDir)
+                    && isDir.boolValue
+            },
+            videosIn: { FolderScan.videoFiles(under: $0) },
+            audioIn: { FolderScan.audioFiles(under: $0) })
+
+        guard !sorted.videos.isEmpty || !sorted.audio.isEmpty else {
+            update {
+                $0.busy = false
+                $0.hasError = true
+                $0.lastResult = handed.isEmpty
+                    ? Text.s("Es wurde nichts übergeben.", "Nothing was handed over.")
+                    : Text.s(
+                        "Darin war keine Video- oder Musikdatei.",
+                        "There was no video or music file among those.")
+            }
+            return
+        }
+
+        // Already listed is not an error and not a second row: dropping the
+        // same folder twice is something people do, and two proposals for one
+        // file would both be ticked and race each other.
+        lock.lock(); let existing = Set(_items.map {
+            $0.mediaFile.url.standardizedFileURL.path
+        }); lock.unlock()
+        let videos = sorted.videos.filter {
+            !existing.contains($0.standardizedFileURL.path)
+        }
+        let audio = sorted.audio.filter {
+            !existing.contains($0.standardizedFileURL.path)
+        }
+        let alreadyThere = (sorted.videos.count - videos.count)
+            + (sorted.audio.count - audio.count)
+
+        update { $0.busy = true; $0.convertStatus = "Looking for media…" }
+
+        var added: [RenameItem] = []
+        if !videos.isEmpty {
+            added += videoProposals(for: enriching(scanner.scan(urls: videos), settings),
+                                    settings: settings)
+        }
+
+        var unreadable = 0
+        var missingMusicFolder = false
+        var missingFFmpeg = false
+        if !audio.isEmpty {
+            if settings.musicFolder.isEmpty {
+                missingMusicFolder = true
+            } else if let reader = AudioTagReader() {
+                let root = URL(fileURLWithPath: settings.musicFolder, isDirectory: true)
+                let read = musicProposals(for: audio, reader: reader, under: root)
+                added += read.items
+                unreadable = read.unreadable
+            } else {
+                missingFFmpeg = true
+            }
+        }
+
+        // Conflicts across the whole list, not only within what arrived: a
+        // dropped file that lands on a proposal already listed is exactly the
+        // collision worth warning about, and checking the new ones alone
+        // would miss it.
+        lock.lock()
+        _items = Self.markingConflicts(in: _items + added)
+        let total = _items.count
+        lock.unlock()
+
+        update {
+            $0.busy = false
+            $0.convertStatus = nil
+            $0.hasError = added.isEmpty
+            var parts: [String] = []
+            if added.isEmpty {
+                parts.append(Text.s("Nichts hinzugefügt.", "Nothing added."))
+            } else {
+                parts.append(Text.s(
+                    "\(added.count) hinzugefügt, \(total) in der Liste.",
+                    "\(added.count) added, \(total) in the list."))
+            }
+            if alreadyThere > 0 {
+                parts.append(Text.s("\(alreadyThere) war\(alreadyThere == 1 ? "" : "en") "
+                                        + "schon dabei.",
+                                    "\(alreadyThere) \(alreadyThere == 1 ? "was" : "were") "
+                                        + "already listed."))
+            }
+            if unreadable > 0 {
+                parts.append(Text.s(
+                    "\(unreadable) ohne ausreichende Tags übersprungen.",
+                    "\(unreadable) skipped for want of tags."))
+            }
+            if missingMusicFolder {
+                parts.append(Text.s(
+                    "Musik übersprungen: der Musikordner fehlt in den Einstellungen.",
+                    "Music skipped: the music folder is missing from the settings."))
+            }
+            if missingFFmpeg {
+                parts.append(Text.s(
+                    "Musik übersprungen: ffmpeg/ffprobe fehlen (sudo apt install ffmpeg).",
+                    "Music skipped: ffmpeg/ffprobe are missing (sudo apt install ffmpeg)."))
+            }
+            if !sorted.ignored.isEmpty {
+                parts.append(Text.s(
+                    "\(sorted.ignored.count) keine Mediendatei.",
+                    "\(sorted.ignored.count) not a media file."))
+            }
+            $0.lastResult = parts.joined(separator: " ")
+        }
+        refreshSnapshotCounts()
+    }
+
+    // MARK: The pieces a scan and a dropped file share
+
+    /// Asks the metadata provider about each file, when one is configured.
+    ///
+    /// Shared so that a file handed over one at a time is identified exactly
+    /// as a scanned one is. "It behaves differently when you drop it" is a
+    /// bug report nobody can act on.
+    private func enriching(_ mediaFiles: [MediaFile],
+                           _ settings: WebSettings) -> [MediaFile] {
+        guard let provider = enrichmentProvider(settings) else { return mediaFiles }
+        update { $0.convertStatus = "Identifying…" }
+        var enriched: [MediaFile] = []
+        for var file in mediaFiles {
+            let input = file.parsed
+            let parsed = runAndWaitReturning {
+                await MetadataEnricher(provider: provider).enrich(input)
+            }
+            file.parsed = parsed ?? file.parsed
+            enriched.append(file)
+        }
+        return enriched
+    }
+
+    /// Video files to proposals, each rooted by what it turned out to be.
+    ///
+    /// The namer produces a path relative to a library root and does not
+    /// prefix "Movies"/"Series", so movies and episodes need their own roots.
+    /// Anything without a configured root is renamed where it lies.
+    private func videoProposals(for mediaFiles: [MediaFile],
+                                settings: WebSettings) -> [RenameItem] {
+        let movies = settings.moviesFolder.isEmpty
+            ? nil : URL(fileURLWithPath: settings.moviesFolder, isDirectory: true)
+        let series = settings.seriesFolder.isEmpty
+            ? nil : URL(fileURLWithPath: settings.seriesFolder, isDirectory: true)
+        return planner.makePlan(for: mediaFiles, outputRoot: nil, libraryRoot: nil)
+            .map { item -> RenameItem in
+                let root = item.mediaFile.parsed.kind == .episode ? series : movies
+                guard let root else { return item }
+                var moved = item
+                moved.outputRoot = root
+                return planner.reconcile(item: moved)
+            }
+    }
+
+    /// Music files to proposals, from their own tags.
+    ///
+    /// Nothing is guessed: a file whose tags do not name an artist, an album
+    /// and a title gets no proposal, and is counted as unreadable instead.
+    /// Filing it somewhere plausible puts it where the user will not think to
+    /// look, which is worse than leaving it where they put it.
+    private func musicProposals(for urls: [URL], reader: AudioTagReader,
+                                under musicRoot: URL)
+        -> (items: [RenameItem], unreadable: Int) {
+        var items: [RenameItem] = []
+        var unreadable = 0
+        for url in urls {
+            guard let tags = reader.read(url),
+                  let relative = MusicNamer.relativePath(
+                    for: tags, extension: url.pathExtension) else {
+                unreadable += 1
+                continue
+            }
+            let parsed = ParsedRelease(originalFileName: url.lastPathComponent,
+                                       title: tags.title ?? url.lastPathComponent,
+                                       year: tags.year,
+                                       kind: .unknown)
+            items.append(RenameItem(mediaFile: MediaFile(url: url, parsed: parsed),
+                                    outputRoot: musicRoot,
+                                    proposedRelativePath: relative))
+        }
+        return (items, unreadable)
     }
 
     /// Proposes a place for every music file, from its own tags.
@@ -647,29 +859,13 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         let urls = FolderScan.audioFiles(under: root)
         let musicRoot = URL(fileURLWithPath: settings.musicFolder, isDirectory: true)
 
-        var plan: [RenameItem] = []
-        var unreadable = 0
-        for url in urls {
-            guard let tags = reader.read(url),
-                  let relative = MusicNamer.relativePath(
-                    for: tags, extension: url.pathExtension) else {
-                unreadable += 1
-                continue
-            }
-            let parsed = ParsedRelease(originalFileName: url.lastPathComponent,
-                                       title: tags.title ?? url.lastPathComponent,
-                                       year: tags.year,
-                                       kind: .unknown)
-            plan.append(RenameItem(mediaFile: MediaFile(url: url, parsed: parsed),
-                                   outputRoot: musicRoot,
-                                   proposedRelativePath: relative))
-        }
-
+        let read = musicProposals(for: urls, reader: reader, under: musicRoot)
         // The same detection the video path gets from RenamePlanner. Built
-        // by hand here, these items had no conflict set at all — so two
-        // copies of one album, which resolve to byte-identical paths, were
-        // shown without a warning and then handed to the conflict policy.
-        plan = Self.markingConflicts(in: plan)
+        // by hand, these items had no conflict set at all — so two copies of
+        // one album, which resolve to byte-identical paths, were shown
+        // without a warning and then handed to the conflict policy.
+        let plan = Self.markingConflicts(in: read.items)
+        let unreadable = read.unreadable
 
         lock.lock(); _items = plan; lock.unlock()
         update {
