@@ -91,8 +91,12 @@ if kill -0 "$PID" 2>/dev/null; then
 fi
 PID=""
 
-echo "==> It created its configuration directory and nothing secret world-readable"
-[ -d "$MEDIAFIN_CONFIG_DIR" ] || fail "no configuration directory was created"
+echo "==> Nothing secret is left world-readable"
+# No assertion that the configuration directory exists. The engine writes when
+# there is something to write, and with nothing configured there is nothing --
+# which for a cron line is better than creating an empty directory on every
+# run. The first version of this check asserted a promise nobody had made, and
+# the build was right to refuse it.
 for secret in "$MEDIAFIN_CONFIG_DIR/secrets.json"; do
   [ -f "$secret" ] || continue
   mode="$(stat -c '%a' "$secret" 2>/dev/null || stat -f '%Lp' "$secret")"

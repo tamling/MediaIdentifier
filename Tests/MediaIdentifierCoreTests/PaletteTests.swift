@@ -1,10 +1,18 @@
 import XCTest
 @testable import MediaIdentifierCore
 
-/// The palette is shared so the native window and the web interface look like
-/// one product. These tests exist to keep that true: the colours used to be
-/// written into the status page by hand, and nothing would have noticed if a
-/// second set had grown beside them.
+/// The palette, which the window's stylesheet is built from.
+///
+/// It was shared with a web interface that no longer exists, and two tests
+/// here went with it: they rendered the status page and insisted every colour
+/// in it came from the palette, which is the guard that would have caught a
+/// hard-coded shade growing beside the shared ones.
+///
+/// That guard is now missing, and saying so is better than quietly having less
+/// cover than it looks: the window's stylesheet lives in the mediafin-gtk
+/// target, which a Core test cannot import. What is left below checks the
+/// palette itself — that each colour is real, that none is a duplicate, and
+/// that the pairings the interface is actually made of can be read.
 final class PaletteTests: XCTestCase {
 
     private var all: [(name: String, value: String)] {
@@ -30,36 +38,6 @@ final class PaletteTests: XCTestCase {
         let values = all.map(\.value)
         XCTAssertEqual(Set(values).count, values.count,
                        "two names point at the same colour: \(values)")
-    }
-
-    /// The status page must render the palette, not its own copy of it.
-    func testTheStatusPageUsesThePalette() {
-        let html = StatusHTTP.html(StatusSnapshot())
-        XCTAssertTrue(html.contains(Palette.background))
-        XCTAssertTrue(html.contains(Palette.surface))
-        XCTAssertTrue(html.contains(Palette.text))
-        XCTAssertTrue(html.contains(Palette.textMuted))
-    }
-
-    /// The guard that matters: no colour literal may reappear in the page
-    /// outside the palette. This is what would catch a new hard-coded shade
-    /// being added next to the shared ones.
-    func testTheStatusPageContainsNoColourOutsideThePalette() {
-        let html = StatusHTTP.html(StatusSnapshot())
-        let known = Set(all.map { $0.value.lowercased() })
-        var found: Set<String> = []
-        var index = html.startIndex
-        while let hash = html[index...].firstIndex(of: "#") {
-            let after = html.index(after: hash)
-            let candidate = String(html[after...].prefix(6))
-            if candidate.count == 6, candidate.allSatisfy({ $0.isHexDigit }) {
-                found.insert("#" + candidate.lowercased())
-            }
-            index = after
-            if index >= html.endIndex { break }
-        }
-        XCTAssertTrue(found.isSubset(of: known),
-                      "colours outside the palette: \(found.subtracting(known).sorted())")
     }
 
     /// The accent is used as a background with `onAccent` on top, so the two
