@@ -289,6 +289,9 @@ case let .drop(paths):
             defer { gtk_main_quit() }
             mainWindow.refresh()
             print("proposals: \(coordinator.items.count)")
+            for destination in mainWindow.destinationTexts {
+                print("destination: \(destination)")
+            }
             print("status: \(mainWindow.statusText)")
             if coordinator.items.isEmpty {
                 Pending.failure = "the dropped files produced no proposal"

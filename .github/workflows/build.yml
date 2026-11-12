@@ -564,6 +564,16 @@ jobs:
           echo "proposals from the drop: ${got:-none}"
           test "${got:-0}" -ge 1 || {
             echo "FAIL: a dropped film produced no proposal"; exit 1; }
+          # The row has to say WHERE, absolutely. It used to read
+          # "-> Dark/Season 01/…" and say nothing about the folder that sits
+          # under, which is the difference between a library and burying the
+          # file a level deeper where it already lies. Read off the label, so
+          # this is what the window shows and not what the engine thinks.
+          grep -qE "^destination: → /" dropped.log || {
+            echo "FAIL: the row does not say where the file is going"
+            grep "^destination:" dropped.log || echo "(no destination line)"
+            exit 1
+          }
 
           echo "=== pressing Apply in the settings ==="
           applied="$(mktemp -d)"

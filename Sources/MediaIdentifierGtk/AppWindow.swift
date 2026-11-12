@@ -124,6 +124,9 @@ final class AppWindow {
     /// The rows currently on screen, kept so they can be destroyed without
     /// walking the container — which would mean another C callback.
     private var rowWidgets: [UnsafeMutablePointer<GtkWidget>] = []
+    /// The "→ …" label of each row, so what the window really says about
+    /// where a file is going can be read back rather than assumed.
+    private var rowDestinations: [UnsafeMutablePointer<GtkWidget>] = []
     /// The second line of the empty list, kept so what just happened can be
     /// said in the middle of the window rather than only in the footer.
     ///
@@ -1002,6 +1005,11 @@ final class AppWindow {
         String(cString: gtk_label_get_text(Gtk.label(resultLabel)))
     }
 
+    /// Where each row says its file is going, read off the labels.
+    var destinationTexts: [String] {
+        rowDestinations.map { String(cString: gtk_label_get_text(Gtk.label($0))) }
+    }
+
     /// What the settings panel says about the last time Apply was pressed,
     /// read back off that label.
     var appliedText: String {
@@ -1430,6 +1438,7 @@ final class AppWindow {
 
         for row in rowWidgets { gtk_widget_destroy(row) }
         rowWidgets = []
+        rowDestinations = []
         emptyDetail = nil
         rowChecks = []
 
@@ -1463,6 +1472,7 @@ final class AppWindow {
                 gtk_box_pack_start(Gtk.box(listColumn), built.row, 0, 0, 0)
                 rowWidgets.append(built.row)
                 rowChecks.append((id: item.id, check: built.check))
+                rowDestinations.append(built.destination)
             }
         }
         // New widgets start hidden; the window was already shown.
@@ -1474,7 +1484,9 @@ final class AppWindow {
     /// Nothing here says the rename has happened — the list is a preview, and
     /// the wording has to keep saying so until a button is pressed.
     private static func proposalRow(_ item: RenameItem, banded: Bool)
-        -> (row: UnsafeMutablePointer<GtkWidget>, check: UnsafeMutablePointer<GtkWidget>) {
+        -> (row: UnsafeMutablePointer<GtkWidget>,
+            destination: UnsafeMutablePointer<GtkWidget>,
+            check: UnsafeMutablePointer<GtkWidget>) {
         let row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10)!
         Styling.style(row, "mf-row")
         if banded { Styling.style(row, "mf-row-alt") }
@@ -1496,20 +1508,45 @@ final class AppWindow {
         gtk_label_set_ellipsize(Gtk.label(from), PANGO_ELLIPSIZE_MIDDLE)
         gtk_box_pack_start(Gtk.box(text), from, 0, 0, 0)
 
-        // The whole relative path, not just the new name. The folder is the
-        // half of the proposal that can be wrong in a way worth catching:
-        // "Dark - S01E01.mkv" looks right whether it is about to go into
-        // Dark/Staffel 01 or into the wrong series entirely.
-        let to = label("→ " + item.proposedRelativePath, classes: "mf-to")
+        // The whole destination, absolutely, and not just the relative path.
+        //
+        // The row used to read "→ Fargo/Season 05/Fargo - S05E10.mkv" and say
+        // nothing about where that is. Asked "where is this being moved to",
+        // the window had no answer: an episode goes under the series folder
+        // when one is set, and into the folder the file is already in when one
+        // is not — the same name, two completely different places, and the one
+        // you cannot see is the one that buries the file a level deeper where
+        // it stands.
+        //
+        // Ellipsised in the middle so a long path keeps both ends, and the
+        // whole thing is on the tooltip.
+        let destination = item.primaryDestination.path
+        let to = label("→ " + destination, classes: "mf-to")
         gtk_label_set_ellipsize(Gtk.label(to), PANGO_ELLIPSIZE_MIDDLE)
+        gtk_widget_set_tooltip_text(to, destination)
         gtk_box_pack_start(Gtk.box(text), to, 0, 0, 0)
+
+        // Said out loud when the destination is the folder the file is in
+        // already. That is what happens with no library folder set, and it is
+        // not obviously wrong from the path alone — it reads like a tidy
+        // subfolder until you notice it is under Downloads.
+        if item.outputRoot.standardizedFileURL.path
+            == item.mediaFile.url.deletingLastPathComponent()
+                .standardizedFileURL.path {
+            let here = label(
+                Text.s("Bleibt neben der Datei — kein Bibliotheksordner gesetzt",
+                       "Stays next to the file — no library folder is set"),
+                classes: "mf-warn")
+            gtk_label_set_ellipsize(Gtk.label(here), PANGO_ELLIPSIZE_END)
+            gtk_box_pack_start(Gtk.box(text), here, 0, 0, 0)
+        }
 
         if let conflict = item.conflict {
             let warning = label(conflictText(conflict), classes: "mf-warn")
             gtk_box_pack_start(Gtk.box(text), warning, 0, 0, 0)
         }
         gtk_box_pack_start(Gtk.box(row), text, 1, 1, 0)
-        return (row, check)
+        return (row, destination: to, check)
     }
 
     private static func conflictText(_ kind: ConflictKind) -> String {
