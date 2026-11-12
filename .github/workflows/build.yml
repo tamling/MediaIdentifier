@@ -63,6 +63,26 @@ jobs:
     container: swift:6.0-jammy
     steps:
       - uses: actions/checkout@v4
+      # A URLSession that is released instead of invalidated aborts the
+      # process on Linux: "_MultiHandle deallocated with non-zero retain
+      # count". That cost an evening, and the Swift test for it can only prove
+      # the process survived -- it cannot stop a new one being built somewhere
+      # else. This can.
+      - name: Only one place may build a URLSession
+        shell: bash
+        run: |
+          set -euo pipefail
+          stray="$(grep -rn "URLSession(configuration" Sources/ \
+            --include='*.swift' \
+            | grep -v "^Sources/MediaIdentifierCore/Networking/HTTPTransport.swift" \
+            || true)"
+          if [ -n "$stray" ]; then
+            echo "FAIL: a URLSession is built outside HTTPTransport.swift:"
+            echo "$stray"
+            echo "Use SharedHTTPSession.ephemeral — releasing a session aborts on Linux."
+            exit 1
+          fi
+          echo "ok: only HTTPTransport.swift builds a session"
       - name: Swift version
         run: swift --version
       # `swift build` with no product builds every target, and on Linux that

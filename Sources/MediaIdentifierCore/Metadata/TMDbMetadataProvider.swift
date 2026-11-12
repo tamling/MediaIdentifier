@@ -24,7 +24,7 @@ public struct TMDbMetadataProvider: MetadataProvider {
         self.credential = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         // Ephemeral session so a v3 key (carried in the URL query) is not
         // persisted in the shared URL cache.
-        self.session = session ?? URLSession(configuration: .ephemeral)
+        self.session = session ?? SharedHTTPSession.ephemeral
     }
 
     /// Validates the credential against TMDb's `/configuration` endpoint and
