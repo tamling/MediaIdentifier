@@ -271,11 +271,67 @@ jobs:
                 core.warning(`could not remove ${asset.name}: ${error.message}`)
               }
             }
-      - name: Publish to "latest" release
-        uses: softprops/action-gh-release@v2
+      # First, and unconditionally: a path to the binaries that nothing can
+      # refuse. The release upload below needs a permission the token has just
+      # been refused twice, and a build that produces a working .deb and then
+      # has no way to hand it over is not a release at all. Artefacts live on
+      # the run page and need no release permission.
+      - name: Keep the packages as run artefacts
+        if: always()
+        uses: actions/upload-artifact@v4
         with:
-          tag_name: latest
-          prerelease: true
-          files: |
-            mediafin-linux-x86_64.tar.gz
+          name: mediafin-linux-x86_64
+          path: |
             mediafin-linux-x86_64.deb
+            mediafin-linux-x86_64.tar.gz
+          if-no-files-found: error
+
+      # Replaces the assets on the existing "latest" release WITHOUT updating
+      # the release itself.
+      #
+      # softprops/action-gh-release used to do this, and it PATCHes the release
+      # to set its name and flags before uploading. That PATCH answered 403,
+      # "Resource not accessible by integration", on two runs having worked on
+      # the one before — so the binaries never got published although they had
+      # built and passed every check. The release's own metadata has not
+      # changed in months and does not need writing on every build; only the
+      # files do. So this deletes and re-uploads just the files, which is a
+      # different endpoint.
+      #
+      # If that is refused too, the step says so and names the setting that
+      # grants it, and the artefacts above are still there.
+      - name: Replace the packages on the "latest" release
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs')
+            const names = ['mediafin-linux-x86_64.deb', 'mediafin-linux-x86_64.tar.gz']
+            const release = await github.rest.repos.getReleaseByTag(
+              { ...context.repo, tag: 'latest' })
+            for (const name of names) {
+              const old = release.data.assets.find(a => a.name === name)
+              try {
+                if (old) {
+                  await github.rest.repos.deleteReleaseAsset(
+                    { ...context.repo, asset_id: old.id })
+                }
+                await github.rest.repos.uploadReleaseAsset({
+                  ...context.repo,
+                  release_id: release.data.id,
+                  name,
+                  headers: {
+                    'content-type': 'application/octet-stream',
+                    'content-length': fs.statSync(name).size,
+                  },
+                  data: fs.readFileSync(name),
+                })
+                core.info(`uploaded ${name}`)
+              } catch (error) {
+                core.setFailed(
+                  `could not put ${name} on the release: ${error.message}. ` +
+                  'If this is "Resource not accessible by integration", the ' +
+                  'repository needs Settings -> Actions -> General -> ' +
+                  'Workflow permissions set to "Read and write permissions". ' +
+                  'The package is on this run as an artefact either way.')
+              }
+            }
