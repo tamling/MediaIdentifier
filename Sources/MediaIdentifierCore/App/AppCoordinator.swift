@@ -585,17 +585,35 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
             return true
         }
 
-        let plan = videoProposals(for: enriching(scanner.scan(urls: urls), settings),
-                                  settings: settings)
+        let proposed = videoProposals(for: enriching(scanner.scan(urls: urls), settings),
+                                      settings: settings)
+        let plan = proposed.items
 
         lock.lock(); _items = plan; lock.unlock()
         update {
             $0.busy = false
             $0.convertStatus = nil
             $0.hasError = false
-            $0.lastResult = Text.s(
-                "\(plan.count) Datei\(plan.count == 1 ? "" : "en") bereit zum Umbenennen.",
-                "\(plan.count) file\(plan.count == 1 ? "" : "s") ready to rename.")
+            // "Nothing to do" and "nothing found" look identical as a zero,
+            // and they are not: one means the library is tidy, the other
+            // means something is wrong with the folder you chose.
+            if plan.isEmpty, proposed.alreadyFiled > 0 {
+                $0.lastResult = Text.s(
+                    "Nichts zu tun: \(proposed.alreadyFiled) Datei"
+                        + "\(proposed.alreadyFiled == 1 ? " liegt" : "en liegen") "
+                        + "schon richtig.",
+                    "Nothing to do: \(proposed.alreadyFiled) file"
+                        + "\(proposed.alreadyFiled == 1 ? " is" : "s are") "
+                        + "already filed correctly.")
+            } else {
+                $0.lastResult = Text.s(
+                    "\(plan.count) Datei\(plan.count == 1 ? "" : "en") bereit zum Umbenennen."
+                        + (proposed.alreadyFiled > 0
+                            ? " \(proposed.alreadyFiled) liegen schon richtig." : ""),
+                    "\(plan.count) file\(plan.count == 1 ? "" : "s") ready to rename."
+                        + (proposed.alreadyFiled > 0
+                            ? " \(proposed.alreadyFiled) already filed." : ""))
+            }
         }
         refreshSnapshotCounts()
         return true
@@ -693,9 +711,13 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         update { $0.busy = true; $0.convertStatus = "Looking for media…" }
 
         var added: [RenameItem] = []
+        var alreadyFiled = 0
         if !videos.isEmpty {
-            added += videoProposals(for: enriching(scanner.scan(urls: videos), settings),
-                                    settings: settings)
+            let proposed = videoProposals(
+                for: enriching(scanner.scan(urls: videos), settings),
+                settings: settings)
+            added += proposed.items
+            alreadyFiled = proposed.alreadyFiled
         }
 
         var unreadable = 0
@@ -728,7 +750,13 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
             $0.convertStatus = nil
             $0.hasError = added.isEmpty
             var parts: [String] = []
-            if added.isEmpty {
+            if added.isEmpty, alreadyFiled > 0 {
+                // Not an error: the file is where it belongs.
+                $0.hasError = false
+                parts.append(Text.s(
+                    "Nichts zu tun — liegt schon richtig.",
+                    "Nothing to do — already filed correctly."))
+            } else if added.isEmpty {
                 parts.append(Text.s("Nichts hinzugefügt.", "Nothing added."))
             } else {
                 parts.append(Text.s(
@@ -740,6 +768,10 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
                                         + "schon dabei.",
                                     "\(alreadyThere) \(alreadyThere == 1 ? "was" : "were") "
                                         + "already listed."))
+            }
+            if alreadyFiled > 0, !added.isEmpty {
+                parts.append(Text.s("\(alreadyFiled) liegen schon richtig.",
+                                    "\(alreadyFiled) already filed."))
             }
             if unreadable > 0 {
                 parts.append(Text.s(
@@ -794,20 +826,70 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
     /// The namer produces a path relative to a library root and does not
     /// prefix "Movies"/"Series", so movies and episodes need their own roots.
     /// Anything without a configured root is renamed where it lies.
+    /// - Returns: the proposals, and how many files were dropped because
+    ///   they are already filed exactly where they belong. The second number
+    ///   is the difference between "nothing to do" and "nothing found", and
+    ///   the window has to be able to say which.
     private func videoProposals(for mediaFiles: [MediaFile],
-                                settings: WebSettings) -> [RenameItem] {
+                                settings: WebSettings)
+        -> (items: [RenameItem], alreadyFiled: Int) {
         let movies = settings.moviesFolder.isEmpty
             ? nil : URL(fileURLWithPath: settings.moviesFolder, isDirectory: true)
         let series = settings.seriesFolder.isEmpty
             ? nil : URL(fileURLWithPath: settings.seriesFolder, isDirectory: true)
-        return planner.makePlan(for: mediaFiles, outputRoot: nil, libraryRoot: nil)
+        let planned = planner.makePlan(for: mediaFiles, outputRoot: nil,
+                                       libraryRoot: nil)
             .map { item -> RenameItem in
                 let root = item.mediaFile.parsed.kind == .episode ? series : movies
-                guard let root else { return item }
+                guard let root else {
+                    // No library folder for this kind, so the file is renamed
+                    // where it lies — and if it is ALREADY filed under that
+                    // name, "where it lies" is one level inside its own
+                    // proposal. See `settled`.
+                    return Self.settled(item) ?? item
+                }
                 var moved = item
                 moved.outputRoot = root
                 return planner.reconcile(item: moved)
             }
+        // A proposal that would move a file onto itself is not a proposal.
+        // Dropping it here rather than showing it keeps the list to what
+        // there is actually something to do about.
+        let worthDoing = planned.filter {
+            $0.primaryDestination.standardizedFileURL.path
+                != $0.mediaFile.url.standardizedFileURL.path
+        }
+        return (worthDoing, planned.count - worthDoing.count)
+    }
+
+    /// Re-roots an item whose file is already filed exactly where its own
+    /// proposal would put it, so the proposal becomes a no-op.
+    ///
+    /// This is the fix for files disappearing into themselves. With no
+    /// library folder set, a file is renamed beside itself: the root is the
+    /// folder it is in. Point that at a library that is already sorted and
+    /// every run digs a level deeper —
+    ///
+    ///     <Series>/Show/Season 03/Show - S03E01.mkv
+    ///  →  <Series>/Show/Season 03/Show/Season 03/Show - S03E01.mkv
+    ///  →  <Series>/Show/Season 03/Show/Season 03/Show/Season 03/…
+    ///
+    /// — and the folder you are looking at appears to empty itself, because
+    /// the files are in a subfolder with the same name. Nothing is lost and
+    /// nothing says where they went.
+    ///
+    /// So: when the file's path already ends with its own proposed relative
+    /// path, the root is the folder ABOVE that structure, which makes the
+    /// destination equal to the source. The caller then drops it.
+    static func settled(_ item: RenameItem) -> RenameItem? {
+        let source = item.mediaFile.url.standardizedFileURL.path
+        let relative = item.proposedRelativePath
+        guard !relative.isEmpty, source.hasSuffix("/" + relative) else { return nil }
+        let ancestor = String(source.dropLast(relative.count + 1))
+        var settled = item
+        settled.outputRoot = URL(fileURLWithPath: ancestor.isEmpty ? "/" : ancestor,
+                                 isDirectory: true)
+        return settled
     }
 
     /// Music files to proposals, from their own tags.

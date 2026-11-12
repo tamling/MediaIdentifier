@@ -420,6 +420,88 @@ final class AppCoordinatorTests: XCTestCase {
                         .joined(separator: ", "))
     }
 
+
+    // MARK: Files that are already filed
+
+    /// The bug this prevents made a folder look like it had emptied itself.
+    ///
+    /// With no series folder set, a file is renamed beside itself: the root is
+    /// the folder it is in. Point that at a library that is ALREADY sorted and
+    /// every run digs a level deeper, because the proposal's own folders are
+    /// appended to the folders the file is already in:
+    ///
+    ///     <Series>/Show/Season 03/Show - S03E01.mkv
+    ///  →  <Series>/Show/Season 03/Show/Season 03/Show - S03E01.mkv
+    ///
+    /// Nothing is lost and nothing says where it went, which is exactly what
+    /// "the files vanished out of the folder" looks like from the outside.
+    func testAFileAlreadyFiledIsNotProposedAgain() throws {
+        var settings = configuredSettings()
+        // The trap: no series folder, and the source folder IS the library.
+        settings.seriesFolder = ""
+        run(.saveSettings(settings))
+
+        _ = try makeFile("The Show/Season 03/The Show - S03E01.mkv")
+        run(.scanSourceFolder)
+
+        XCTAssertTrue(coordinator.items.isEmpty,
+                      "it proposed moving a file that is already in place: "
+                          + coordinator.items.map(\.primaryDestination.path)
+                            .joined(separator: ", "))
+        XCTAssertTrue(
+            (coordinator.snapshot.lastResult ?? "").contains("already filed"),
+            coordinator.snapshot.lastResult ?? "")
+        XCTAssertFalse(coordinator.snapshot.hasError)
+    }
+
+    /// Scanning the same tidy library twice must stay a no-op. The old
+    /// behaviour dug one level per run, so the second run is where it showed.
+    func testScanningATidyLibraryTwiceChangesNothing() throws {
+        var settings = configuredSettings()
+        settings.seriesFolder = ""
+        run(.saveSettings(settings))
+        let file = try makeFile("The Show/Season 03/The Show - S03E01.mkv")
+
+        for round in 1...2 {
+            run(.scanSourceFolder)
+            run(.applyProposedRenames(accepting: nil))
+            XCTAssertTrue(FileManager.default.fileExists(atPath: file.path),
+                          "the file left its place on round \(round)")
+        }
+        let buried = source.appendingPathComponent(
+            "The Show/Season 03/The Show/Season 03/The Show - S03E01.mkv")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: buried.path),
+                       "the file was buried a level deeper")
+    }
+
+    /// And the case that must keep working: a file in the import folder with
+    /// a library folder set really does move into the library, even though
+    /// its own name matches its proposal.
+    func testAFileStillMovesIntoTheLibraryWhenOneIsSet() throws {
+        run(.saveSettings(configuredSettings()))
+        _ = try makeFile("The Show/Season 03/The Show - S03E01.mkv")
+        run(.scanSourceFolder)
+
+        XCTAssertEqual(coordinator.items.count, 1,
+                       coordinator.snapshot.lastResult ?? "")
+        XCTAssertEqual(
+            coordinator.items.first?.primaryDestination.standardizedFileURL.path,
+            series.appendingPathComponent("The Show/Season 03/The Show - S03E01.mkv")
+                .standardizedFileURL.path)
+    }
+
+    /// The rule is "already at the end of its own path", not "name matches".
+    /// A file in the right folders but under a release name still moves.
+    func testAFileInTheRightFoldersWithTheWrongNameStillMoves() throws {
+        var settings = configuredSettings()
+        settings.seriesFolder = ""
+        run(.saveSettings(settings))
+        _ = try makeFile("The Show/Season 03/The.Show.S03E01.GERMAN.1080p.mkv")
+        run(.scanSourceFolder)
+        XCTAssertEqual(coordinator.items.count, 1,
+                       coordinator.snapshot.lastResult ?? "")
+    }
+
 }
 
 /// Tests the watch folder: that it starts and stops with the setting, that it

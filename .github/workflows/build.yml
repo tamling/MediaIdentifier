@@ -506,6 +506,12 @@ jobs:
           run_window "$empty" | tee empty.log
           grep -q "^scan button available: true" empty.log || {
             echo "FAIL: the scan button was not even available"; exit 1; }
+          # Sending is something you do to the list, like renaming. It was
+          # built into the server card, and when that card moved behind the
+          # menu the only way to send anything went with it — "how is this
+          # supposed to be synced, there is no button".
+          grep -q "^send button on the main surface: true" empty.log || {
+            echo "FAIL: the send button is not on the main window"; exit 1; }
           grep -qiE "^status: .*(import|Importordner)" empty.log || {
             echo "FAIL: pressing Scan did not name the missing import folder"
             exit 1

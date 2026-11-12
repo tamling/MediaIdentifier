@@ -403,20 +403,24 @@ final class AppWindow {
         Self.add(remoteTrustCheck, to: remote)
         Self.add(remoteRemoveLocalCheck, to: remote)
 
-        remoteProgress = gtk_progress_bar_new()!
-        Self.add(remoteProgress, to: remote)
-
-        let sendRow = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8)!
         // Testing the server on its own, rather than only as part of
         // "Alles prüfen": this is the one the user presses while they are
-        // still getting the address and the key right.
+        // still getting the address and the key right. It belongs beside the
+        // fields it tests, so it stays in this panel.
+        let testServerRow = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8)!
         let testServerButton = gtk_button_new_with_label(Text.s("Server testen", "Test the server"))!
-        gtk_box_pack_start(Gtk.box(sendRow), testServerButton, 0, 0, 0)
-        sendButton = gtk_button_new_with_label(Text.s("Zum Server senden", "Send to the server"))!
+        gtk_box_pack_end(Gtk.box(testServerRow), testServerButton, 0, 0, 0)
+        Self.add(testServerRow, to: remote)
+
+        // Sending, and how far it has got, are built here but belong on the
+        // main surface — see the proposals card. They were in this panel, and
+        // when the panel moved behind the menu the only way to send anything
+        // went with it: "how is this supposed to be synced, there is no
+        // button". Sending is a thing you do to the list, like renaming, not
+        // a setting.
+        remoteProgress = gtk_progress_bar_new()!
+        sendButton = gtk_button_new_with_label(Text.s("Senden", "Send"))!
         cancelSendButton = gtk_button_new_with_label(Text.s("Stopp", "Stop"))!
-        gtk_box_pack_end(Gtk.box(sendRow), sendButton, 0, 0, 0)
-        gtk_box_pack_end(Gtk.box(sendRow), cancelSendButton, 0, 0, 0)
-        Self.add(sendRow, to: remote)
 
         // MARK: Looking by itself
 
@@ -484,9 +488,17 @@ final class AppWindow {
         undoButton = gtk_button_new_with_label(Text.s("Rückgängig", "Undo"))!
         applyButton = gtk_button_new_with_label(Text.s("Umbenennen", "Rename"))!
         Styling.style(applyButton, "suggested-action")
+        // Right to left: rename, then send, then stop, then undo. Renaming is
+        // the usual one and sits furthest right; sending is the same kind of
+        // thing — something you do to what is ticked — and belongs beside it
+        // rather than behind a menu.
         gtk_box_pack_end(Gtk.box(actions), applyButton, 0, 0, 0)
+        gtk_box_pack_end(Gtk.box(actions), sendButton, 0, 0, 0)
+        gtk_box_pack_end(Gtk.box(actions), cancelSendButton, 0, 0, 0)
         gtk_box_pack_end(Gtk.box(actions), undoButton, 0, 0, 0)
         Self.add(actions, to: proposals)
+        // The transfer's progress, under the buttons that start it.
+        Self.add(remoteProgress, to: proposals)
 
         gtk_box_pack_start(Gtk.box(page), proposals, 1, 1, 0)
 
@@ -1040,6 +1052,16 @@ final class AppWindow {
         gtk_widget_get_sensitive(scanButton) != 0
     }
 
+    /// Whether Send is on the main surface at all. It was built into the
+    /// server card, and when that card moved behind the menu the only way to
+    /// send anything went with it.
+    var sendButtonIsOnTheMainSurface: Bool {
+        // Which window it ends up in is the whole question, and that is one
+        // call. The panels are toplevels of their own, so a button inside one
+        // answers with that panel rather than with the main window.
+        gtk_widget_get_toplevel(sendButton) == widget
+    }
+
     /// Presses Scan exactly as a click does -- through the signal, so the
     /// real handler runs and nothing about this path is special.
     func pressScan() {
@@ -1182,12 +1204,14 @@ final class AppWindow {
         gtk_widget_set_sensitive(applyButton, (!rowChecks.isEmpty && !state.busy) ? 1 : 0)
         gtk_widget_set_sensitive(undoButton, state.busy ? 0 : 1)
 
-        // Sending needs somewhere to send to and something to send; stopping
-        // needs something to stop. A button that would answer "nothing is
-        // configured" is better off visibly unavailable.
+        // Available whenever there is something ticked and nothing running,
+        // even with no server configured -- the same lesson as the scan
+        // button. It used to also require remoteConfigured, so on a machine
+        // with no server set up it was permanently grey and said nothing
+        // about why; the engine answers "the server is not switched on" the
+        // moment it is pressed. Stopping still needs something to stop.
         gtk_widget_set_sensitive(
-            sendButton,
-            (state.remoteConfigured && !rowChecks.isEmpty && !state.busy) ? 1 : 0)
+            sendButton, (!rowChecks.isEmpty && !state.busy) ? 1 : 0)
         gtk_widget_set_sensitive(cancelSendButton, state.transferring ? 1 : 0)
 
         gtk_widget_set_sensitive(downloadButton, (!hasSource || state.busy) ? 0 : 1)
