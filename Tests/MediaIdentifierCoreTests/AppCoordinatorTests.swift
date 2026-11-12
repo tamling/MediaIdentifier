@@ -303,6 +303,123 @@ final class AppCoordinatorTests: XCTestCase {
         let found = AppCoordinator.FolderScan.videoFiles(under: source)
         XCTAssertEqual(found.map(\.lastPathComponent), ["a.mkv", "b.mkv"])
     }
+
+    // MARK: Files handed over one at a time (drag and drop)
+
+    /// Sorting is pure, so these need no disk at all — which is the point of
+    /// having split it out: the rules are where the mistakes are.
+    func testHandedOverFilesAreSortedByWhatTheyAre() {
+        let handed = [URL(fileURLWithPath: "/x/Dark.S01E01.mkv"),
+                      URL(fileURLWithPath: "/x/01 - Song.flac"),
+                      URL(fileURLWithPath: "/x/notes.pdf")]
+        let sorted = AppCoordinator.sorting(handed, isDirectory: { _ in false },
+                                            videosIn: { _ in [] }, audioIn: { _ in [] })
+        XCTAssertEqual(sorted.videos.map(\.lastPathComponent), ["Dark.S01E01.mkv"])
+        XCTAssertEqual(sorted.audio.map(\.lastPathComponent), ["01 - Song.flac"])
+        XCTAssertEqual(sorted.ignored.map(\.lastPathComponent), ["notes.pdf"])
+    }
+
+    /// A folder is what people drop when they mean "this whole series".
+    func testAFolderIsExpanded() {
+        let folder = URL(fileURLWithPath: "/x/Dark")
+        let sorted = AppCoordinator.sorting(
+            [folder],
+            isDirectory: { $0 == folder },
+            videosIn: { _ in [URL(fileURLWithPath: "/x/Dark/e1.mkv"),
+                              URL(fileURLWithPath: "/x/Dark/e2.mkv")] },
+            audioIn: { _ in [URL(fileURLWithPath: "/x/Dark/theme.flac")] })
+        XCTAssertEqual(sorted.videos.count, 2)
+        XCTAssertEqual(sorted.audio.count, 1)
+        XCTAssertTrue(sorted.ignored.isEmpty)
+    }
+
+    /// Dropping a file and the folder it is in, together, is one file. Two
+    /// proposals for it would both be ticked and race each other into the
+    /// same destination.
+    func testTheSameFileHandedOverTwiceIsTakenOnce() {
+        let folder = URL(fileURLWithPath: "/x/Dark")
+        let file = URL(fileURLWithPath: "/x/Dark/e1.mkv")
+        let sorted = AppCoordinator.sorting(
+            [file, folder, file],
+            isDirectory: { $0 == folder },
+            videosIn: { _ in [file] }, audioIn: { _ in [] })
+        XCTAssertEqual(sorted.videos, [file])
+    }
+
+    /// Adding keeps what is already listed. A drop that cleared the list
+    /// would lose the twenty proposals being worked through.
+    func testAddingFilesKeepsWhatIsAlreadyListed() throws {
+        run(.saveSettings(configuredSettings()))
+        _ = try makeFile("Dark.S01E01.1080p.mkv")
+        run(.scanSourceFolder)
+        XCTAssertEqual(coordinator.items.count, 1)
+
+        // From somewhere the import folder knows nothing about.
+        let elsewhere = root.appendingPathComponent("elsewhere")
+        let dropped = try makeFile("Tenet.2020.1080p.mkv", in: elsewhere)
+        run(.addFiles([dropped]))
+
+        XCTAssertEqual(coordinator.items.count, 2, coordinator.snapshot.lastResult ?? "")
+        XCTAssertTrue(coordinator.items.contains { $0.mediaFile.url == dropped })
+    }
+
+    /// And it does not need the import folder at all: the file somebody
+    /// pointed at is the file they mean.
+    func testAddingFilesWorksWithNoImportFolderSet() throws {
+        var settings = configuredSettings()
+        settings.sourceFolder = ""
+        run(.saveSettings(settings))
+
+        let elsewhere = root.appendingPathComponent("elsewhere")
+        let dropped = try makeFile("Tenet.2020.1080p.mkv", in: elsewhere)
+        run(.addFiles([dropped]))
+        XCTAssertEqual(coordinator.items.count, 1, coordinator.snapshot.lastResult ?? "")
+        XCTAssertFalse(coordinator.snapshot.hasError)
+    }
+
+    func testDroppingTheSameFileTwiceDoesNotListItTwice() throws {
+        run(.saveSettings(configuredSettings()))
+        let dropped = try makeFile("Tenet.2020.1080p.mkv")
+        run(.addFiles([dropped]))
+        run(.addFiles([dropped]))
+        XCTAssertEqual(coordinator.items.count, 1)
+        XCTAssertTrue(
+            (coordinator.snapshot.lastResult ?? "").contains("already listed"),
+            coordinator.snapshot.lastResult ?? "")
+    }
+
+    /// Dropping something that is not media says so rather than appearing to
+    /// have worked.
+    func testDroppingSomethingThatIsNotMediaSaysSo() throws {
+        run(.saveSettings(configuredSettings()))
+        let text = try makeFile("notes.pdf")
+        run(.addFiles([text]))
+        XCTAssertTrue(coordinator.items.isEmpty)
+        XCTAssertTrue(coordinator.snapshot.hasError)
+        XCTAssertTrue((coordinator.snapshot.lastResult ?? "").contains("no video"),
+                      coordinator.snapshot.lastResult ?? "")
+    }
+
+    /// A dropped file that would land on a proposal already listed is the
+    /// collision worth warning about, so conflicts are recomputed across the
+    /// whole list rather than only within what just arrived.
+    func testADroppedFileCollidingWithAListedProposalIsFlagged() throws {
+        run(.saveSettings(configuredSettings()))
+        _ = try makeFile("Tenet.2020.1080p.mkv")
+        run(.scanSourceFolder)
+
+        // The same film by another release name: the planner resolves both to
+        // one destination.
+        let other = root.appendingPathComponent("elsewhere")
+        let dropped = try makeFile("Tenet.2020.720p.mkv", in: other)
+        run(.addFiles([dropped]))
+
+        XCTAssertEqual(coordinator.items.count, 2)
+        XCTAssertTrue(coordinator.items.allSatisfy { $0.conflict == .duplicateInBatch },
+                      coordinator.items.map { "\($0.newFileName) \(String(describing: $0.conflict))" }
+                        .joined(separator: ", "))
+    }
+
 }
 
 /// Tests the watch folder: that it starts and stops with the setting, that it
@@ -456,122 +573,6 @@ final class WatchFolderTests: XCTestCase {
         coordinator.executeForTesting(.saveSettings(settings(watching: true)))
         XCTAssertTrue(coordinator.isWatching)
         XCTAssertTrue(coordinator.snapshot.watchActive)
-    }
-
-    // MARK: Files handed over one at a time (drag and drop)
-
-    /// Sorting is pure, so these need no disk at all — which is the point of
-    /// having split it out: the rules are where the mistakes are.
-    func testHandedOverFilesAreSortedByWhatTheyAre() {
-        let handed = [URL(fileURLWithPath: "/x/Dark.S01E01.mkv"),
-                      URL(fileURLWithPath: "/x/01 - Song.flac"),
-                      URL(fileURLWithPath: "/x/notes.pdf")]
-        let sorted = AppCoordinator.sorting(handed, isDirectory: { _ in false },
-                                            videosIn: { _ in [] }, audioIn: { _ in [] })
-        XCTAssertEqual(sorted.videos.map(\.lastPathComponent), ["Dark.S01E01.mkv"])
-        XCTAssertEqual(sorted.audio.map(\.lastPathComponent), ["01 - Song.flac"])
-        XCTAssertEqual(sorted.ignored.map(\.lastPathComponent), ["notes.pdf"])
-    }
-
-    /// A folder is what people drop when they mean "this whole series".
-    func testAFolderIsExpanded() {
-        let folder = URL(fileURLWithPath: "/x/Dark")
-        let sorted = AppCoordinator.sorting(
-            [folder],
-            isDirectory: { $0 == folder },
-            videosIn: { _ in [URL(fileURLWithPath: "/x/Dark/e1.mkv"),
-                              URL(fileURLWithPath: "/x/Dark/e2.mkv")] },
-            audioIn: { _ in [URL(fileURLWithPath: "/x/Dark/theme.flac")] })
-        XCTAssertEqual(sorted.videos.count, 2)
-        XCTAssertEqual(sorted.audio.count, 1)
-        XCTAssertTrue(sorted.ignored.isEmpty)
-    }
-
-    /// Dropping a file and the folder it is in, together, is one file. Two
-    /// proposals for it would both be ticked and race each other into the
-    /// same destination.
-    func testTheSameFileHandedOverTwiceIsTakenOnce() {
-        let folder = URL(fileURLWithPath: "/x/Dark")
-        let file = URL(fileURLWithPath: "/x/Dark/e1.mkv")
-        let sorted = AppCoordinator.sorting(
-            [file, folder, file],
-            isDirectory: { $0 == folder },
-            videosIn: { _ in [file] }, audioIn: { _ in [] })
-        XCTAssertEqual(sorted.videos, [file])
-    }
-
-    /// Adding keeps what is already listed. A drop that cleared the list
-    /// would lose the twenty proposals being worked through.
-    func testAddingFilesKeepsWhatIsAlreadyListed() throws {
-        run(.saveSettings(configuredSettings()))
-        _ = try makeFile("Dark.S01E01.1080p.mkv")
-        run(.scanSourceFolder)
-        XCTAssertEqual(coordinator.items.count, 1)
-
-        // From somewhere the import folder knows nothing about.
-        let elsewhere = root.appendingPathComponent("elsewhere")
-        let dropped = try makeFile("Tenet.2020.1080p.mkv", in: elsewhere)
-        run(.addFiles([dropped]))
-
-        XCTAssertEqual(coordinator.items.count, 2, coordinator.snapshot.lastResult ?? "")
-        XCTAssertTrue(coordinator.items.contains { $0.mediaFile.url == dropped })
-    }
-
-    /// And it does not need the import folder at all: the file somebody
-    /// pointed at is the file they mean.
-    func testAddingFilesWorksWithNoImportFolderSet() throws {
-        var settings = configuredSettings()
-        settings.sourceFolder = ""
-        run(.saveSettings(settings))
-
-        let elsewhere = root.appendingPathComponent("elsewhere")
-        let dropped = try makeFile("Tenet.2020.1080p.mkv", in: elsewhere)
-        run(.addFiles([dropped]))
-        XCTAssertEqual(coordinator.items.count, 1, coordinator.snapshot.lastResult ?? "")
-        XCTAssertFalse(coordinator.snapshot.hasError)
-    }
-
-    func testDroppingTheSameFileTwiceDoesNotListItTwice() throws {
-        run(.saveSettings(configuredSettings()))
-        let dropped = try makeFile("Tenet.2020.1080p.mkv")
-        run(.addFiles([dropped]))
-        run(.addFiles([dropped]))
-        XCTAssertEqual(coordinator.items.count, 1)
-        XCTAssertTrue(
-            (coordinator.snapshot.lastResult ?? "").contains("already listed"),
-            coordinator.snapshot.lastResult ?? "")
-    }
-
-    /// Dropping something that is not media says so rather than appearing to
-    /// have worked.
-    func testDroppingSomethingThatIsNotMediaSaysSo() throws {
-        run(.saveSettings(configuredSettings()))
-        let text = try makeFile("notes.pdf")
-        run(.addFiles([text]))
-        XCTAssertTrue(coordinator.items.isEmpty)
-        XCTAssertTrue(coordinator.snapshot.hasError)
-        XCTAssertTrue((coordinator.snapshot.lastResult ?? "").contains("no video"),
-                      coordinator.snapshot.lastResult ?? "")
-    }
-
-    /// A dropped file that would land on a proposal already listed is the
-    /// collision worth warning about, so conflicts are recomputed across the
-    /// whole list rather than only within what just arrived.
-    func testADroppedFileCollidingWithAListedProposalIsFlagged() throws {
-        run(.saveSettings(configuredSettings()))
-        _ = try makeFile("Tenet.2020.1080p.mkv")
-        run(.scanSourceFolder)
-
-        // The same film by another release name: the planner resolves both to
-        // one destination.
-        let other = root.appendingPathComponent("elsewhere")
-        let dropped = try makeFile("Tenet.2020.720p.mkv", in: other)
-        run(.addFiles([dropped]))
-
-        XCTAssertEqual(coordinator.items.count, 2)
-        XCTAssertTrue(coordinator.items.allSatisfy { $0.conflict == .duplicateInBatch },
-                      coordinator.items.map { "\($0.newFileName) \(String(describing: $0.conflict))" }
-                        .joined(separator: ", "))
     }
 
 }

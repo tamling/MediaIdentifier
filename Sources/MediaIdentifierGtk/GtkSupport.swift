@@ -1,4 +1,5 @@
 import CGtk3
+import CMediafinGtk
 import Foundation
 
 /// The small amount of glue that direct C interop needs.
@@ -201,6 +202,37 @@ enum Gtk {
                               payload, release, GConnectFlags(rawValue: 0))
     }
 
+    /// Makes a widget accept files dragged from a file manager.
+    ///
+    /// The C side does the GTK half; this only turns the paths it reports into
+    /// URLs. Same ownership dance as `onClick`: the owner is captured in an
+    /// ordinary Swift closure and only the non-generic `Drop` crosses into C,
+    /// because a @convention(c) function has nowhere to put type metadata.
+    static func onFilesDropped<Owner: AnyObject>(
+        _ widget: UnsafeMutablePointer<GtkWidget>,
+        _ owner: Owner,
+        _ action: @escaping (Owner, [URL]) -> Void
+    ) {
+        let payload = Unmanaged.passRetained(Drop(owner: owner, action: action)).toOpaque()
+        let received: @convention(c) (UnsafePointer<UnsafePointer<CChar>?>?,
+                                      UnsafeMutableRawPointer?) -> Void = { paths, data in
+            guard let paths, let data else { return }
+            var urls: [URL] = []
+            var index = 0
+            while let path = paths[index] {
+                urls.append(URL(fileURLWithPath: String(cString: path)))
+                index += 1
+            }
+            guard !urls.isEmpty else { return }
+            Unmanaged<Drop>.fromOpaque(data).takeUnretainedValue().run(urls)
+        }
+        let release: @convention(c) (UnsafeMutableRawPointer?) -> Void = { data in
+            guard let data else { return }
+            Unmanaged<Drop>.fromOpaque(data).release()
+        }
+        mediafin_accept_file_drops(widget, received, payload, release)
+    }
+
     /// Runs `action` on `owner` every `milliseconds` for as long as the main
     /// loop runs. Used to pull the engine's current state into the window:
     /// the work happens on the coordinator's own queue, so the interface has
@@ -281,6 +313,24 @@ enum Gtk {
     /// generic type — `Unmanaged<Box<Owner>>` inside the callback is rejected
     /// even though nothing of `Owner` is used at runtime. The generic part
     /// stays outside, in the ordinary Swift closure that captures the owner.
+    /// Carries dropped files back into Swift, as `Action` does for a click.
+    /// Separate because a drop hands something over and a click does not.
+    final class Drop {
+        private let body: ([URL]) -> Void
+
+        /// Weakly, for the same reason as `Action`: a drop can still arrive
+        /// while the window is being torn down.
+        init<Owner: AnyObject>(owner: Owner,
+                               action: @escaping (Owner, [URL]) -> Void) {
+            body = { [weak owner] urls in
+                guard let owner else { return }
+                action(owner, urls)
+            }
+        }
+
+        func run(_ urls: [URL]) { body(urls) }
+    }
+
     final class Action {
         private let body: () -> Void
 

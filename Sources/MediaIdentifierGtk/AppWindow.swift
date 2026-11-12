@@ -485,6 +485,16 @@ final class AppWindow {
         Gtk.onClick(downloadButton, self) { $0.startDownload() }
         Gtk.onClick(cancelDownloadButton, self) { $0.cancelDownload() }
 
+        // On the whole window rather than on the list: a GtkBox has no window
+        // of its own, so a drop target on it is at the mercy of how GTK
+        // happens to route the event, while a toplevel certainly has one.
+        // Being able to let go anywhere is also the more forgiving target --
+        // and a text entry that wants the drop for itself still gets it,
+        // because GTK offers it to the innermost widget first. Dropping a
+        // folder on the import-folder field therefore fills the field in,
+        // which is what someone aiming there meant.
+        Gtk.onFilesDropped(window, self) { $0.addDropped($1) }
+
         // F11 toggles fullscreen and Escape leaves it — the two keys anyone
         // tries. Every other key is passed on untouched, so typing Escape in
         // a text entry still does what the entry expects.
@@ -797,6 +807,16 @@ final class AppWindow {
         coordinator.submit(.undoLastRename)
     }
 
+    /// Files let go of on the window.
+    ///
+    /// Handed straight to the engine with no filtering here: which of them
+    /// are media, which are folders to look inside, and which were already
+    /// listed is one set of rules, and it lives in one place. A window that
+    /// formed its own opinion would be a second place for the two to disagree.
+    func addDropped(_ urls: [URL]) {
+        coordinator.submit(.addFiles(urls))
+    }
+
     func setAllChecked(_ on: Bool) {
         for row in rowChecks { Gtk.setChecked(row.check, on) }
     }
@@ -894,10 +914,13 @@ final class AppWindow {
                 + "\(state.done) renamed"))
         Gtk.setText(resultLabel, state.lastResult ?? "")
 
-        // Nothing to scan without a source folder, and a button that does
-        // nothing is worse than one that is visibly unavailable.
+        // Available whenever nothing is running, even with no import folder
+        // set. It used to be greyed out without one -- and the engine has the
+        // right sentence for that case ("set the import folder first"), which
+        // a disabled button is precisely the way to never see. "The scan
+        // button does not work" is what that looks like from the outside.
         let hasSource = !coordinator.settings.sourceFolder.isEmpty
-        gtk_widget_set_sensitive(scanButton, (hasSource && !state.busy) ? 1 : 0)
+        gtk_widget_set_sensitive(scanButton, state.busy ? 0 : 1)
         gtk_widget_set_sensitive(applyButton, (!rowChecks.isEmpty && !state.busy) ? 1 : 0)
         gtk_widget_set_sensitive(undoButton, state.busy ? 0 : 1)
 
@@ -1123,11 +1146,28 @@ final class AppWindow {
         rowChecks = []
 
         if items.isEmpty {
-            let empty = Self.label(Text.s("Noch nichts durchsucht.", "Nothing scanned yet."),
-                                       classes: "mf-empty")
+            // Two sentences, because there are two ways in and the second one
+            // is invisible until somebody says so. An empty list that only
+            // said "nothing scanned yet" left dragging a file onto the window
+            // as something you had to guess at.
+            let empty = Self.label(
+                Text.s("Dateien oder Ordner hierher ziehen,",
+                       "Drag files or folders here,"),
+                classes: "mf-empty")
             gtk_label_set_xalign(Gtk.label(empty), 0.5)
             gtk_box_pack_start(Gtk.box(listColumn), empty, 0, 0, 0)
-            rowWidgets = [empty]
+            let second = Self.label(
+                coordinator.settings.sourceFolder.isEmpty
+                    ? Text.s("oder einen Importordner in den Einstellungen setzen "
+                                 + "und „Durchsuchen“ drücken.",
+                             "or set an import folder in the settings and press "
+                                 + "“Scan”.")
+                    : Text.s("oder „Durchsuchen“ drücken.", "or press “Scan”."),
+                classes: "mf-dim")
+            gtk_label_set_xalign(Gtk.label(second), 0.5)
+            gtk_label_set_line_wrap(Gtk.label(second), 1)
+            gtk_box_pack_start(Gtk.box(listColumn), second, 0, 0, 0)
+            rowWidgets = [empty, second]
         } else {
             for (index, item) in items.enumerated() {
                 let built = Self.proposalRow(item, banded: index % 2 == 1)

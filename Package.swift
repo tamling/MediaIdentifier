@@ -87,9 +87,18 @@ targets.append(contentsOf: [
         pkgConfig: "gtk+-3.0",
         providers: [.apt(["libgtk-3-dev"])]
     ),
+    // Accepting dropped files, in C. GTK hands its drag callback a
+    // GdkDragContext and a GtkSelectionData, and how those arrive in Swift
+    // depends on the module map and the GTK version. In C they are simply
+    // whatever the installed GTK says they are.
+    .target(
+        name: "CMediafinGtk",
+        dependencies: ["CGtk3"],
+        path: "Sources/CMediafinGtk"
+    ),
     .executableTarget(
         name: "mediafin-gtk",
-        dependencies: ["MediaIdentifierCore", "CGtk3"],
+        dependencies: ["MediaIdentifierCore", "CGtk3", "CMediafinGtk"],
         path: "Sources/MediaIdentifierGtk"
     ),
 ])
