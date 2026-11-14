@@ -207,28 +207,60 @@ public final class RenameExecutor {
     // MARK: Undo (FR13)
 
     /// Reverses the most recent transaction. Returns the number of files restored.
+    ///
+    /// Resumable, and that is the point. The journal entry is not removed
+    /// until the work has been attempted, and what could not be moved back
+    /// stays in it, so a second press carries on where this one stopped.
     @discardableResult
     public func undoLast() -> Int {
-        guard let transaction = journal.popLast() else { return 0 }
+        guard let transaction = journal.last else { return 0 }
         var restored = 0
+        /// Moves that did not get undone, so they stay in the journal.
+        var blocked: [RenameTransaction.Move] = []
         // Reverse order so nested moves unwind cleanly.
         for move in transaction.moves.reversed() {
             do {
                 try ensureDirectoryExists(move.from.deletingLastPathComponent())
-                if fileManager.fileExists(atPath: move.from.path) { continue }
+                if fileManager.fileExists(atPath: move.from.path) {
+                    // Two very different situations wearing the same face.
+                    // If the moved file is gone from the library, the undo
+                    // already happened and this move is finished. If it is
+                    // still there, something else has taken the old name and
+                    // moving back would overwrite it — so it is refused, and
+                    // said out loud. It used to be skipped in silence, which
+                    // is how an undo reported "0 restored" and left the user
+                    // with no idea why.
+                    if fileManager.fileExists(atPath: move.to.path) {
+                        blocked.append(move)
+                        log.append(RenameLogEntry(
+                            oldName: move.to.lastPathComponent,
+                            newName: move.from.lastPathComponent,
+                            status: .skipped,
+                            errorDescription: Text.s(
+                                "Rückgängig nicht möglich: unter dem alten Namen "
+                                    + "liegt schon wieder eine Datei.",
+                                "Cannot be undone: a file is in the way under the "
+                                    + "old name.")))
+                    }
+                    continue
+                }
                 try fileManager.moveItem(at: move.to, to: move.from)
                 restored += 1
+                // Its own status, not .success. The history's word for
+                // success is "umbenannt", and the counter in the window is
+                // the number of .success entries — so undoing eight files
+                // used to make the window say sixteen were renamed.
                 log.append(RenameLogEntry(
                     oldName: move.to.lastPathComponent,
                     newName: move.from.lastPathComponent,
-                    status: .success,
-                    errorDescription: "undo"
+                    status: .undone
                 ))
                 // Clean up now-empty directories that were created for the move.
                 for dir in move.createdDirectories.reversed() {
                     removeDirectoryIfEmpty(dir)
                 }
             } catch {
+                blocked.append(move)
                 log.append(RenameLogEntry(
                     oldName: move.to.lastPathComponent,
                     newName: move.from.lastPathComponent,
@@ -237,6 +269,9 @@ public final class RenameExecutor {
                 ))
             }
         }
+        // Only now, and only what is left. Reversed back into the order the
+        // moves were applied in, because that is the order undo reverses.
+        journal.finishUndo(of: transaction.id, leaving: blocked.reversed())
         return restored
     }
 

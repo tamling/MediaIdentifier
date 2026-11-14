@@ -18,6 +18,14 @@ public struct RenameLogEntry: Identifiable, Codable, Equatable, Sendable {
         case sent
         /// Fetched from a URL into the import folder.
         case downloaded
+        /// Moved back by an undo.
+        ///
+        /// Its own case because the history's word for `.success` is
+        /// "umbenannt" and the window's counter is the number of `.success`
+        /// entries: undoing eight files made it say sixteen were renamed.
+        /// It also used to carry the string "undo" in `errorDescription`,
+        /// which is a field for errors.
+        case undone
         /// Removed rather than renamed: the release `.nfo`, which Jellyfin
         /// would otherwise read as its own metadata sidecar. Its own case
         /// because the history must not report a deletion as a rename, and

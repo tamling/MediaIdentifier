@@ -49,13 +49,44 @@ public final class RenameJournal: @unchecked Sendable {
 
     public var canUndo: Bool { !transactions.isEmpty }
 
-    /// Pops the most recent transaction for undoing.
-    public func popLast() -> RenameTransaction? {
+    /// The transaction an undo would reverse, left in place.
+    ///
+    /// There used to be a `popLast()` here, and the executor called it
+    /// before touching a single file. An undo that then failed — the file
+    /// gone, the volume unmounted, the old name taken — had already lost the
+    /// only record of what still needed moving back, and a second press had
+    /// nothing to work from. A partial undo was worse: the files that came
+    /// back were restored, the rest stayed in the library, and nothing
+    /// anywhere remembered them.
+    ///
+    /// So the work is done first and `finishUndo` is called afterwards. That
+    /// method is the only way to remove a transaction, which is why
+    /// `popLast` is gone rather than merely unused.
+    public var last: RenameTransaction? { queue.sync { transactions.last } }
+
+    /// Records the result of an undo: drops the transaction, or keeps what
+    /// could not be moved back so a second press can carry on.
+    ///
+    /// - Parameters:
+    ///   - id: the transaction the caller worked from. If the journal has
+    ///     moved on since, nothing is changed — whatever is last now belongs
+    ///     to somebody else and must not be overwritten.
+    ///   - remaining: the moves still to undo, in their original order.
+    /// - Returns: whether it acted.
+    @discardableResult
+    public func finishUndo(of id: UUID,
+                           leaving remaining: [RenameTransaction.Move]) -> Bool {
         queue.sync {
-            guard !transactions.isEmpty else { return nil }
-            let last = transactions.removeLast()
+            guard let last = transactions.last, last.id == id else { return false }
+            transactions.removeLast()
+            // The same id, so a second partial undo still matches this
+            // transaction rather than being refused as somebody else's.
+            if !remaining.isEmpty {
+                transactions.append(RenameTransaction(id: last.id, date: last.date,
+                                                      moves: remaining))
+            }
             persist()
-            return last
+            return true
         }
     }
 

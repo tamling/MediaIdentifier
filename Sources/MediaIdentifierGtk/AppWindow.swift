@@ -1200,6 +1200,7 @@ final class AppWindow {
         case .sent: return Text.s("gesendet", "sent")
         case .downloaded: return Text.s("geladen", "fetched")
         case .deleted: return Text.s("gelöscht", "deleted")
+        case .undone: return Text.s("rückgängig", "undone")
         }
     }
 
@@ -1209,7 +1210,7 @@ final class AppWindow {
         case .failure: return "mf-fail"
         // Dim rather than green: it happened as planned, but "done" is the
         // wrong colour for a file that is gone.
-        case .skipped, .deleted: return "mf-skip"
+        case .skipped, .deleted, .undone: return "mf-skip"
         }
     }
 
