@@ -143,7 +143,10 @@ final class ReleaseNoteDeletionTests: XCTestCase {
 
         let outcome = executor.execute(plan: [item], policy: .skip)
 
-        XCTAssertEqual(outcome.skipped, 1, "the primary was not actually skipped")
+        // Two: the film, and the subtitle that now stays with it. A
+        // companion no longer walks into the library without its film.
+        XCTAssertEqual(outcome.skipped, 2,
+                       "the film and its subtitle should both have stayed")
         XCTAssertEqual(outcome.deleted, 0)
         XCTAssertTrue(fm.fileExists(atPath: note.path),
                       "the note of a release that did not move was deleted anyway")

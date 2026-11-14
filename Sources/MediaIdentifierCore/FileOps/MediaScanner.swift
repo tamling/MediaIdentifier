@@ -55,8 +55,17 @@ public struct MediaScanner {
         // subtitle was planned into two places: the first move took it and
         // the second failed with "no such file". The longer name wins,
         // because it is the one the file was actually named after.
+        //
+        // Samples are excluded from the competition: a sample is not a film,
+        // so it has no claim on anything — and because its own name is the
+        // film's name plus "-sample", counting it here made it longer than
+        // the film and left the film's own sample unlisted, so the row could
+        // no longer say where it stays.
         let longerVideoStems = entries
-            .filter { $0 != videoURL && VideoFileTypes.isVideo($0) }
+            .filter {
+                $0 != videoURL && VideoFileTypes.isVideo($0)
+                    && !VideoFileTypes.isSample($0)
+            }
             .map { $0.deletingPathExtension().lastPathComponent }
             .filter { $0.count > stem.count && $0.hasPrefix(stem) }
 
