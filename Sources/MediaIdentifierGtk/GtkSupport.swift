@@ -1,6 +1,10 @@
 import CGtk3
 import CMediafinGtk
 import Foundation
+// For PangoMarkup: the escaping lives in Core so it can be tested without a
+// display, and setStyledText below is the only thing allowed to produce
+// markup.
+import MediaIdentifierCore
 
 /// The small amount of glue that direct C interop needs.
 ///
