@@ -1153,8 +1153,14 @@ final class AppWindow {
     /// just happened", and a column that grows downwards would put that
     /// answer off the bottom of the screen after a long run.
     private func refreshLog() {
-        // Reversed once here rather than everywhere below.
-        let entries = Array(coordinator.logEntries.reversed().prefix(Self.visibleLogEntries))
+        // One read, three answers. It used to ask three times, and each ask
+        // is a `queue.sync` onto the log's own queue — so the drawing thread
+        // waited on that queue three times every 500 ms, and could wait on
+        // a file write going on there. The three snapshots could also
+        // disagree with each other: "42 entries · 43 with an error" was
+        // expressible.
+        let all = coordinator.logEntries
+        let entries = Array(all.reversed().prefix(Self.visibleLogEntries))
         let ids = entries.map(\.id)
         guard ids != renderedLogIDs else { return }
         renderedLogIDs = ids
@@ -1162,8 +1168,8 @@ final class AppWindow {
         for row in logWidgets { gtk_widget_destroy(row) }
         logWidgets = []
 
-        let total = coordinator.logEntries.count
-        let failures = coordinator.logEntries.filter { $0.status == .failure }.count
+        let total = all.count
+        let failures = all.reduce(into: 0) { $0 += $1.status == .failure ? 1 : 0 }
         Gtk.setText(logCountLabel, failures > 0
             ? Text.s("\(total) Einträge · \(failures) mit Fehler",
                      "\(total) entries · \(failures) with an error")

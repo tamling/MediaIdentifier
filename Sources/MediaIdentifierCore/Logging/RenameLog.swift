@@ -64,9 +64,35 @@ public final class RenameLog: @unchecked Sendable {
     /// test can check its permissions — it is a path, not a secret, and the
     /// file's own mode is what protects the contents.
     public let url: URL
+
+    /// How many entries are kept.
+    ///
+    /// It used to be every entry ever written, and every append rewrote the
+    /// whole file — so the program got measurably slower the longer it was
+    /// used, and a big run was quadratic in bytes written. Measured: 2,000
+    /// appends took 18.0 seconds for a 357 KB file, which is roughly 360 MB
+    /// written to produce 357 KB.
+    ///
+    /// Two thousand is a history somebody might actually read. The older
+    /// entries are not an archive anybody has ever asked for; they were the
+    /// absence of a decision.
+    public static let maximumEntries = 2_000
+
+    /// How long appends are allowed to pile up before the file is written.
+    ///
+    /// The in-memory array is updated at once, so the window — which reads
+    /// it twice a second — stays live. Only the write is coalesced, and a
+    /// trailing write always follows, so nothing is held back indefinitely.
+    static let writeInterval: TimeInterval = 0.25
+
     private let queue = DispatchQueue(label: "MediaIdentifier.RenameLog")
     /// Only ever touched inside `queue`. Reads go through `entries`.
     private var _entries: [RenameLogEntry] = []
+    /// Entries have changed since the last write.
+    private var needsWrite = false
+    /// A trailing write is already scheduled.
+    private var writeScheduled = false
+    private var lastWrite = Date.distantPast
 
     /// A snapshot, taken on the queue.
     ///
@@ -88,21 +114,51 @@ public final class RenameLog: @unchecked Sendable {
             // _entries, not entries: we are already on the queue, and the
             // accessor would sync onto it again and deadlock.
             _entries.append(entry)
-            persist()
+            trimAndScheduleWrite()
         }
     }
 
     public func append(contentsOf newEntries: [RenameLogEntry]) {
         queue.sync {
             _entries.append(contentsOf: newEntries)
-            persist()
+            trimAndScheduleWrite()
         }
     }
 
     public func clear() {
         queue.sync {
             _entries.removeAll()
+            // At once: clearing is something the user asked for and then
+            // looks at, and there is nothing to coalesce it with.
             persist()
+        }
+    }
+
+    /// Writes now if anything is waiting. For a caller that is about to
+    /// exit, and for tests that want to look at the file.
+    public func flush() {
+        queue.sync { if needsWrite { persist() } }
+    }
+
+    /// Keeps the newest `maximumEntries` and writes at most every
+    /// `writeInterval`, with a trailing write so the last append is never
+    /// the one that is lost. Must be called on `queue`.
+    private func trimAndScheduleWrite() {
+        if _entries.count > Self.maximumEntries {
+            _entries.removeFirst(_entries.count - Self.maximumEntries)
+        }
+        needsWrite = true
+        let since = Date().timeIntervalSince(lastWrite)
+        if since >= Self.writeInterval {
+            persist()
+            return
+        }
+        guard !writeScheduled else { return }
+        writeScheduled = true
+        queue.asyncAfter(deadline: .now() + (Self.writeInterval - since)) { [weak self] in
+            guard let self else { return }
+            self.writeScheduled = false
+            if self.needsWrite { self.persist() }
         }
     }
 
@@ -133,6 +189,8 @@ public final class RenameLog: @unchecked Sendable {
         // dropped file before any settings were saved left
         // ~/.config/mediafin world-readable with this file at 0644 — and
         // this file holds every path of the user's media library.
+        needsWrite = false
+        lastWrite = Date()
         do {
             try AtomicFile.write(data, to: url, permissions: 0o600)
             _lastWriteFailure = nil
