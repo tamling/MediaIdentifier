@@ -113,7 +113,21 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
     private var _runningDownload: Process?
     private var _cancelDownload = false
     private var _queuedDownloads = 0
+    /// Set by a cancel; read between files by the scan and by `enriching`.
+    ///
+    /// Deliberately not cleared when a run starts, for the same reason the
+    /// conversion flag is not: a cancel pressed while the scan was still
+    /// waiting its turn on the queue would otherwise be discarded and the
+    /// run would go ahead after the interface had already said it was
+    /// stopping.
+    private var _cancelScan = false
+    /// Scans submitted but not yet taken off the queue, so a cancel can tell
+    /// "stop the one that is coming" from "there is nothing to stop".
+    private var _queuedScans = 0
+    private var _scanRunning = false
     private var _probes: [ProbeSubject: ProbeResult] = [:]
+    /// Set only by the test hook below.
+    private var _providerOverride: MetadataProvider?
     /// The lamps, as last worked out on the queue.
     ///
     /// Cached rather than computed on demand because the only caller is the
@@ -271,6 +285,10 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
             cancelDownload()
             return
         }
+        if case .cancelScan = command {
+            cancelScan()
+            return
+        }
         // Counted here rather than when the run starts, so a cancel issued
         // while the command is still waiting its turn is not mistaken for a
         // cancel with nothing to cancel.
@@ -279,6 +297,12 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         }
         if case .downloadURL = command {
             lock.lock(); _queuedDownloads += 1; lock.unlock()
+        }
+        if case .scanSourceFolder = command {
+            lock.lock(); _queuedScans += 1; lock.unlock()
+        }
+        if case .addFiles = command {
+            lock.lock(); _queuedScans += 1; lock.unlock()
         }
         if Self.isWork(command) {
             // The count is read out while the lock is held and then used
@@ -320,7 +344,7 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         switch command {
         case .saveSettings, .setSecret, .setAllAccepted, .setAccepted,
              .clearHistory,
-             .cancelConversions, .cancelDownload:
+             .cancelConversions, .cancelDownload, .cancelScan:
             return false
         case .scanSourceFolder, .addFiles, .applyProposedRenames, .undoLastRename,
              .findConvertible, .convertFiles, .downloadURL,
@@ -380,9 +404,18 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         case .testJellyfinConnection:
             testJellyfin()
         case .scanSourceFolder:
+            // The bookkeeping lives here rather than inside the two
+            // functions, so there is one place that knows a scan is running
+            // and one place that decides when the cancel flag may be cleared.
+            startedScanning()
             scanSourceFolder()
+            reportIfScanWasCancelled()
+            finishedScanning()
         case .addFiles(let urls):
+            startedScanning()
             addFiles(urls)
+            reportIfScanWasCancelled()
+            finishedScanning()
         case .applyProposedRenames(let accepting):
             applyRenames(accepting: accepting)
         case .undoLastRename:
@@ -400,7 +433,7 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
             setAccepted(id, accepted)
         case .downloadURL(let url):
             downloadURL(url)
-        case .cancelDownload:
+        case .cancelDownload, .cancelScan:
             // Handled in `submit`, off the queue.
             break
         case .checkEverything:
@@ -852,15 +885,57 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
     /// Shared so that a file handed over one at a time is identified exactly
     /// as a scanned one is. "It behaves differently when you drop it" is a
     /// bug report nobody can act on.
+    /// How many identifications in a row may come back with nothing before
+    /// the rest of the run goes offline.
+    ///
+    /// Three attempts into a model server that has stopped answering is
+    /// information; two thousand are 30-second timeouts stacked into
+    /// sixteen hours, during which the serial queue is held and every button
+    /// in the window does nothing. The remaining files still get a proposal
+    /// — from their own names, which is what offline identification is.
+    static let identificationGiveUpAfter = 3
+
     private func enriching(_ mediaFiles: [MediaFile],
                            _ settings: WebSettings) -> [MediaFile] {
         guard let provider = enrichmentProvider(settings) else { return mediaFiles }
         update { $0.convertStatus = "Identifying…" }
         var enriched: [MediaFile] = []
-        for var file in mediaFiles {
+        var failedInARow = 0
+        var gaveUp = false
+        for (index, var file) in mediaFiles.enumerated() {
+            // Between files, never inside one: a request already sent is
+            // bounded by its own timeout and interrupting it buys nothing.
+            if scanIsCancelled {
+                // The rest keep the names they were parsed with, so a
+                // cancelled scan still shows what it had found.
+                enriched.append(contentsOf: mediaFiles[index...])
+                break
+            }
+            if gaveUp {
+                enriched.append(file)
+                continue
+            }
             let input = file.parsed
             let parsed = runAndWaitReturning {
                 await MetadataEnricher(provider: provider).enrich(input)
+            }
+            if parsed == nil || parsed == input {
+                failedInARow += 1
+                if failedInARow >= Self.identificationGiveUpAfter {
+                    gaveUp = true
+                    update {
+                        $0.hasError = true
+                        $0.lastResult = Text.s(
+                            "Die Erkennung antwortet nicht (\(failedInARow)× "
+                                + "nichts). Der Rest des Laufs benutzt nur die "
+                                + "Dateinamen.",
+                            "Identification is not answering (\(failedInARow) "
+                                + "× nothing). The rest of this run uses the file "
+                                + "names only.")
+                    }
+                }
+            } else {
+                failedInARow = 0
             }
             file.parsed = parsed ?? file.parsed
             enriched.append(file)
@@ -1446,6 +1521,68 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         refreshSnapshotCounts()
     }
 
+    /// Stops a scan, running or still queued.
+    private func cancelScan() {
+        lock.lock()
+        // Only arm the flag when there is something for it to apply to, as
+        // for conversions: a stray press while idle would otherwise sit
+        // there and kill the next scan the user actually asks for.
+        let hasTarget = _scanRunning || _queuedScans > 0
+        if hasTarget { _cancelScan = true }
+        lock.unlock()
+
+        guard hasTarget else {
+            update { $0.lastResult = Text.s("Es wird gerade nicht gesucht.",
+                                            "Nothing is being searched.") }
+            return
+        }
+        update {
+            $0.lastResult = Text.s("Stoppt vor der nächsten Datei.",
+                                   "Stopping before the next file.")
+        }
+    }
+
+    /// Says so, instead of leaving the run's own "N files ready" sentence
+    /// standing as if nothing had been interrupted.
+    private func reportIfScanWasCancelled() {
+        guard scanIsCancelled else { return }
+        update {
+            $0.busy = false
+            $0.convertStatus = nil
+            $0.lastResult = Text.s(
+                "Suche abgebrochen. Was bis dahin gefunden wurde, steht in der "
+                    + "Liste — die Namen der restlichen Dateien sind nur geparst, "
+                    + "nicht nachgeschlagen.",
+                "Search cancelled. What was found so far is in the list — the "
+                    + "remaining files' names are parsed only, not looked up.")
+        }
+    }
+
+    /// Whether a cancel is armed. Read between files, never cached.
+    private var scanIsCancelled: Bool {
+        lock.lock(); defer { lock.unlock() }; return _cancelScan
+    }
+
+    /// Marks a scan as started and clears nothing. Returns the token to pass
+    /// to `finishedScanning`.
+    private func startedScanning() {
+        lock.lock()
+        _scanRunning = true
+        _queuedScans = max(0, _queuedScans - 1)
+        lock.unlock()
+    }
+
+    /// Clears the cancel only when no further scan is waiting, so a cancel
+    /// aimed at a queued run is not consumed by the one finishing now. The
+    /// conversion path learned this the hard way and re-encoded everything
+    /// the user had just stopped.
+    private func finishedScanning() {
+        lock.lock()
+        _scanRunning = false
+        if _queuedScans == 0 { _cancelScan = false }
+        lock.unlock()
+    }
+
     private func cancelConversions() {
         lock.lock()
         // Only arm the flag when there is something it can apply to: a run in
@@ -2003,7 +2140,19 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
 
     /// The provider chain implied by the settings. Returns nil when titles are
     /// only parsed from the file name, so no lookup happens at all.
+    /// Overrides the provider the settings would choose. Only for tests:
+    /// "the model server has stopped answering" needs a server that answers
+    /// nothing, and standing one up is a slower and less exact way of saying
+    /// the same thing.
+    func setEnrichmentProviderForTesting(_ provider: MetadataProvider?) {
+        lock.lock(); _providerOverride = provider; lock.unlock()
+    }
+
     func enrichmentProvider(_ settings: WebSettings) -> MetadataProvider? {
+        lock.lock()
+        let override = _providerOverride
+        lock.unlock()
+        if let override { return override }
         switch settings.identification {
         case .offline:
             return nil

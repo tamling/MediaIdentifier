@@ -25,6 +25,11 @@ final class AppWindow {
     private let libraryModeCombo: UnsafeMutablePointer<GtkWidget>
     private let languageCombo: UnsafeMutablePointer<GtkWidget>
     private let scanButton: UnsafeMutablePointer<GtkWidget>
+    /// Beside Scan in the header, and only sensitive while something is
+    /// running. A scan with identification on is one blocking request per
+    /// file, so without this there was no way to stop a run that had turned
+    /// into hours of timeouts.
+    private let stopScanButton: UnsafeMutablePointer<GtkWidget>
     private let applyButton: UnsafeMutablePointer<GtkWidget>
     private let undoButton: UnsafeMutablePointer<GtkWidget>
     private let listColumn: UnsafeMutablePointer<GtkWidget>
@@ -166,7 +171,16 @@ final class AppWindow {
         // The theme's own accent, not a colour of ours — it follows whatever
         // the user has set.
         Styling.style(scanButton, "suggested-action")
+        stopScanButton = gtk_button_new_with_label(Text.s("Stopp", "Stop"))!
+        gtk_widget_set_tooltip_text(
+            stopScanButton,
+            Text.s("Suche vor der nächsten Datei beenden",
+                   "End the search before the next file"))
+        // Packed after Scan, so in a header's end group it sits to its left:
+        // the thing you reach for second is not in front of the thing you
+        // reach for first.
         gtk_header_bar_pack_end(Gtk.headerBar(header), scanButton)
+        gtk_header_bar_pack_end(Gtk.headerBar(header), stopScanButton)
         gtk_window_set_titlebar(Gtk.window(window), header)
 
         // Work on the left, log on the right. The log is always there rather
@@ -477,6 +491,7 @@ final class AppWindow {
         Gtk.onClick(menuButton, self) { $0.showMenu() }
         Gtk.onClick(lampButton, self) { $0.open($0.statusDialog) }
         Gtk.onClick(scanButton, self) { $0.scan() }
+        Gtk.onClick(stopScanButton, self) { $0.stopScan() }
         Gtk.onClick(applyButton, self) { $0.applySelected() }
         Gtk.onClick(undoButton, self) { $0.undoLast() }
         Gtk.onClick(allButton, self) { $0.setAllChecked(true) }
@@ -731,6 +746,13 @@ final class AppWindow {
         coordinator.submit(.applyProposedRenames(accepting: Set(ticked)))
     }
 
+    /// Stops a scan. Goes straight to the engine without saving first: the
+    /// point of pressing this is that something is already running, and
+    /// saving would queue behind it.
+    func stopScan() {
+        coordinator.submit(.cancelScan)
+    }
+
     func undoLast() {
         coordinator.submit(.undoLastRename)
     }
@@ -866,6 +888,13 @@ final class AppWindow {
         gtk_widget_get_sensitive(scanButton) != 0
     }
 
+    /// Whether Stop is on the main surface, like Scan. The send button was
+    /// once built into a panel and became unreachable when that panel moved
+    /// behind the menu; this is the same mistake waiting to be repeated.
+    var stopButtonIsOnTheMainSurface: Bool {
+        gtk_widget_get_toplevel(stopScanButton) == widget
+    }
+
     /// Presses Scan exactly as a click does -- through the signal, so the
     /// real handler runs and nothing about this path is special.
     func pressScan() {
@@ -978,6 +1007,7 @@ final class AppWindow {
         // button does not work" is what that looks like from the outside.
         let hasSource = !coordinator.settings.sourceFolder.isEmpty
         gtk_widget_set_sensitive(scanButton, state.busy ? 0 : 1)
+        gtk_widget_set_sensitive(stopScanButton, state.busy ? 1 : 0)
         gtk_widget_set_sensitive(applyButton, (!rowChecks.isEmpty && !state.busy) ? 1 : 0)
         gtk_widget_set_sensitive(undoButton, state.busy ? 0 : 1)
         gtk_widget_set_sensitive(downloadButton, (!hasSource || state.busy) ? 0 : 1)

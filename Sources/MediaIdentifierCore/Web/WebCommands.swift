@@ -13,6 +13,13 @@ public enum WebCommand: Sendable, Equatable {
     case testLocalLLMConnection
     case testJellyfinConnection
     case scanSourceFolder
+    /// Stops a scan that is running or still queued.
+    ///
+    /// Identification is one blocking HTTP round trip per file, in order, on
+    /// the serial queue — so a model server that has stopped answering turns
+    /// two thousand files into sixteen hours of 30-second timeouts during
+    /// which every other button does nothing. There was no way to stop it.
+    case cancelScan
     /// Takes these files and folders as they are, and ADDS proposals for them
     /// to what is already listed.
     ///

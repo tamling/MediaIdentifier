@@ -120,16 +120,25 @@ final class FolderInspectorTests: XCTestCase {
         release.signal()
     }
 
-    /// It heals. When the mount answers, the next call gets the truth.
+    /// It heals. The mount comes back, the stuck stat returns, and the next
+    /// call gets the truth.
+    ///
+    /// Only the FIRST probe blocks. A later call starting a fresh probe is
+    /// the design, not a bug — it is how a mount coming back is noticed at
+    /// all — so a test whose probe blocks every time proves the opposite of
+    /// what it set out to. Mine did, and the build said so.
     func testItRecoversOnceTheProbeComesBack() throws {
-        let release = DispatchSemaphore(value: 0)
+        let stuck = DispatchSemaphore(value: 0)
+        let calls = Counter()
         let inspector = FolderInspector(deadline: 0.2) { _ in
-            release.wait()
+            if calls.bump() == 1 { stuck.wait() }
             return FolderFacts(exists: true, isDirectory: true, isWritable: true)
         }
 
-        XCTAssertEqual(inspector.facts(for: ["/mnt/slow"])["/mnt/slow"], .unreachable)
-        release.signal()
+        XCTAssertEqual(inspector.facts(for: ["/mnt/slow"])["/mnt/slow"], .unreachable,
+                       "the first call did not time out, so nothing is being tested")
+        // The mount answers at last.
+        stuck.signal()
 
         // The work item lands on its own thread; wait for the cache rather
         // than for a fixed time.
@@ -137,8 +146,10 @@ final class FolderInspectorTests: XCTestCase {
         while inspector.cachedFacts(for: "/mnt/slow") == nil, Date() < deadline {
             usleep(10_000)
         }
+        XCTAssertEqual(inspector.cachedFacts(for: "/mnt/slow")?.exists, true,
+                       "the answer that did arrive never reached the cache")
         XCTAssertEqual(inspector.facts(for: ["/mnt/slow"])["/mnt/slow"]?.exists, true,
-                       "it never picked up the answer that did arrive")
+                       "a fresh probe after recovery still read as unreachable")
     }
 
     /// A path nobody has measured reads as unreachable, not as absent and
@@ -250,7 +261,10 @@ final class FolderInspectorTests: XCTestCase {
     private final class Counter: @unchecked Sendable {
         private let lock = NSLock()
         private var count = 0
-        func bump() { lock.lock(); count += 1; lock.unlock() }
+        @discardableResult
+        func bump() -> Int {
+            lock.lock(); count += 1; let now = count; lock.unlock(); return now
+        }
         var value: Int { lock.lock(); defer { lock.unlock() }; return count }
     }
 }
