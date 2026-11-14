@@ -60,11 +60,24 @@ final class PerformanceBenchmarks: XCTestCase {
     /// Sizes to measure. The default is what CI runs; set
     /// MEDIAFIN_BENCH_FULL=1 for the whole curve up to the 5,000-file
     /// ceiling the program enforces, which takes about ten seconds.
-    private var scanSizes: [Int] {
+    private static var full: Bool {
         ProcessInfo.processInfo.environment["MEDIAFIN_BENCH_FULL"] == "1"
-            ? [250, 500, 1_000, 2_500, 5_000]
-            : [250, 500, 1_000]
     }
+
+    /// Sizes to measure.
+    ///
+    /// CI stops at 500 on purpose. Most of the time here goes on creating
+    /// the files, not on measuring, and 500 is already enough to catch the
+    /// regression: the old code took 10.4 s for 500 files against 0.25 s
+    /// now, so the ceiling below has forty times the room it needs. The
+    /// whole curve to the 5,000-file ceiling is behind
+    /// MEDIAFIN_BENCH_FULL=1 and takes about ten seconds.
+    private var scanSizes: [Int] {
+        Self.full ? [250, 500, 1_000, 2_500, 5_000] : [250, 500]
+    }
+
+    /// How many files the rename and planning benchmarks use.
+    private var workloadSize: Int { Self.full ? 1_000 : 500 }
 
     /// The scan, which was quadratic twice over.
     ///
@@ -80,7 +93,7 @@ final class PerformanceBenchmarks: XCTestCase {
     /// runner cannot fail it — but a return to quadratic took 40 s and
     /// would.
     func testScanningAFlatFolderIsNotQuadratic() throws {
-        var takenForAThousand: TimeInterval = 0
+        var takenForFiveHundred: TimeInterval = 0
         for count in scanSizes {
             let folder = try populate(count, companions: true)
             var found = 0
@@ -88,27 +101,28 @@ final class PerformanceBenchmarks: XCTestCase {
             try seconds("scan \(count) videos + companions") {
                 found = MediaScanner().scan(urls: [folder]).count
             }
-            if count == 1_000 { takenForAThousand = Date().timeIntervalSince(started) }
+            if count == 500 { takenForFiveHundred = Date().timeIntervalSince(started) }
             XCTAssertEqual(found, count)
             try fm.removeItem(at: folder)
         }
-        XCTAssertLessThan(takenForAThousand, 30,
-                          "scanning 1,000 files took \(takenForAThousand)s; it was "
-                              + "40 s when companionFiles listed the folder once per "
-                              + "video, and 0.5 s after")
+        XCTAssertLessThan(takenForFiveHundred, 5,
+                          "scanning 500 files took \(takenForFiveHundred)s; it was "
+                              + "10.4 s when companionFiles listed the folder once per "
+                              + "video and asked the filesystem about every entry, and "
+                              + "0.25 s after")
     }
 
     /// Planning, which is pure computation over what the scan returned.
     func testPlanning() throws {
-        let folder = try populate(1_000, companions: true)
+        let folder = try populate(workloadSize, companions: true)
         let files = MediaScanner().scan(urls: [folder])
         let library = root.appendingPathComponent("library")
         var planned = 0
-        try seconds("plan 1000 items") {
+        try seconds("plan \(workloadSize) items") {
             planned = RenamePlanner().makePlan(for: files, outputRoot: library,
                                                libraryRoot: library).count
         }
-        XCTAssertEqual(planned, 1_000)
+        XCTAssertEqual(planned, workloadSize)
     }
 
     /// The history. Suspect: every append re-encodes and rewrites the whole
@@ -138,7 +152,7 @@ final class PerformanceBenchmarks: XCTestCase {
 
     /// The whole run, end to end, which is what the user waits for.
     func testRenamingAThousandFiles() throws {
-        let folder = try populate(1_000, companions: true)
+        let folder = try populate(workloadSize, companions: true)
         let library = root.appendingPathComponent("library")
         let files = MediaScanner().scan(urls: [folder])
         let plan = RenamePlanner().makePlan(for: files, outputRoot: library,
@@ -148,15 +162,15 @@ final class PerformanceBenchmarks: XCTestCase {
         let executor = RenameExecutor(log: log, journal: journal)
         var outcome = RenameOutcome()
         let started = Date()
-        try seconds("rename 1000 (+1000 subs, +1000 nfo)") {
+        try seconds("rename \(workloadSize) (+subs, +nfo)") {
             outcome = executor.execute(plan: plan, policy: .skip)
         }
         let renaming = Date().timeIntervalSince(started)
-        XCTAssertEqual(outcome.succeeded, 2_000, "film + subtitle each")
-        XCTAssertEqual(outcome.deleted, 1_000, "the release notes")
-        XCTAssertLessThan(renaming, 20,
-                          "renaming 1,000 files took \(renaming)s; it took 44 s when "
-                              + "each of the 3,000 history entries rewrote the whole "
-                              + "log, and 0.23 s after")
+        XCTAssertEqual(outcome.succeeded, workloadSize * 2, "film + subtitle each")
+        XCTAssertEqual(outcome.deleted, workloadSize, "the release notes")
+        XCTAssertLessThan(renaming, 5,
+                          "renaming \(workloadSize) files took \(renaming)s; 1,000 took "
+                              + "44 s when each history entry rewrote the whole log, "
+                              + "and 0.23 s after")
     }
 }
