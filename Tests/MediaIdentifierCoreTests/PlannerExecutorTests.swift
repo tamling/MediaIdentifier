@@ -20,7 +20,11 @@ final class PlannerExecutorTests: XCTestCase {
         return url
     }
 
-    // FR14 / FR15 — companions are carried along and renamed in step.
+    // FR14 / FR15 — companions are carried along and renamed in step. The
+    // release .nfo is the exception and is planned as a deletion instead:
+    // Jellyfin reads *.nfo as its own metadata sidecar, so carrying a
+    // group's ASCII art into the library is worse than leaving it behind.
+    // ReleaseNoteDeletionTests covers that on its own.
     func testPlanRenamesCompanions() throws {
         _ = try touch("Interstellar.2014.1080p.BluRay.mkv")
         _ = try touch("Interstellar.2014.1080p.BluRay.en.srt")
@@ -41,7 +45,10 @@ final class PlannerExecutorTests: XCTestCase {
         )
         let companionNames = Set(item.companionMoves.map { $0.destination.lastPathComponent })
         XCTAssertTrue(companionNames.contains("Interstellar (2014).en.srt"))
-        XCTAssertTrue(companionNames.contains("Interstellar (2014).nfo"))
+        XCTAssertFalse(companionNames.contains("Interstellar (2014).nfo"),
+                       "the release note is still being moved into the library")
+        XCTAssertEqual(item.companionDeletions.map(\.lastPathComponent),
+                       ["Interstellar.2014.1080p.BluRay.nfo"])
     }
 
     // FR7 / FR10 / FR12 — execute moves files and writes the log.

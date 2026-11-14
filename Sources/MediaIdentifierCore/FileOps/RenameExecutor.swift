@@ -5,6 +5,9 @@ public struct RenameOutcome: Sendable {
     public var succeeded: Int
     public var failed: Int
     public var skipped: Int
+    /// Release `.nfo` files removed. Counted apart from `succeeded` because
+    /// that number is read as "files renamed", and a deletion is not one.
+    public var deleted: Int
     public var transaction: RenameTransaction?
     /// Where each item's primary file now is, for the items whose primary
     /// move actually happened.
@@ -18,11 +21,13 @@ public struct RenameOutcome: Sendable {
     public var landed: [UUID: URL]
 
     public init(succeeded: Int = 0, failed: Int = 0, skipped: Int = 0,
+                deleted: Int = 0,
                 transaction: RenameTransaction? = nil,
                 landed: [UUID: URL] = [:]) {
         self.succeeded = succeeded
         self.failed = failed
         self.skipped = skipped
+        self.deleted = deleted
         self.transaction = transaction
         self.landed = landed
     }
@@ -151,7 +156,52 @@ public final class RenameExecutor {
             journal.record(transaction)
             outcome.transaction = transaction
         }
+
+        // After the moves, and only for items whose primary actually landed.
+        // A file that did not move still has its .nfo beside it, and that
+        // pair is the user's: deleting half of a release whose rename failed
+        // would leave them worse off than before they pressed anything.
+        //
+        // Not in the journal: there is nothing to move back. Undo can restore
+        // a rename; it cannot restore a deletion, and recording one as
+        // reversible would be a lie the journal then acts on.
+        for item in plan where item.isAccepted {
+            guard outcome.landed[item.id] != nil else { continue }
+            for url in item.companionDeletions {
+                outcome.deleted += deleteReleaseNote(at: url) ? 1 : 0
+            }
+        }
         return outcome
+    }
+
+    /// Deletes one release `.nfo`, or declines and says why in the history.
+    ///
+    /// Every condition is checked here rather than trusted from the plan.
+    /// This is the one call in the program that destroys a file, so the
+    /// extension is verified again, a directory is refused outright, and a
+    /// file that is already gone is not an error.
+    private func deleteReleaseNote(at url: URL) -> Bool {
+        guard url.pathExtension.lowercased() == "nfo" else { return false }
+        var isDirectory: ObjCBool = false
+        guard fileManager.fileExists(atPath: url.path, isDirectory: &isDirectory)
+        else { return false }
+        guard !isDirectory.boolValue else { return false }
+        do {
+            try fileManager.removeItem(at: url)
+            log.append(RenameLogEntry(
+                oldName: url.lastPathComponent, newName: "—", status: .deleted,
+                errorDescription: Text.s(
+                    "Release-Infodatei gelöscht — Jellyfin würde sie als eigene "
+                        + "Metadaten lesen.",
+                    "Release note deleted — Jellyfin would read it as its own "
+                        + "metadata.")))
+            return true
+        } catch {
+            log.append(RenameLogEntry(
+                oldName: url.lastPathComponent, newName: "—", status: .failure,
+                errorDescription: error.localizedDescription))
+            return false
+        }
     }
 
     // MARK: Undo (FR13)

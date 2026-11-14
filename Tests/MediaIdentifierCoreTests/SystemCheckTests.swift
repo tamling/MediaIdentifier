@@ -74,9 +74,10 @@ final class SystemCheckTests: XCTestCase {
     // (A test used to live here requiring the local library lamps to vanish
     // when a server was configured, and a "Bibliothek" lamp to be green
     // whatever the server had said. Both were wrong — renaming still writes
-    // to those folders, and that lamp reported on nothing. It had pinned
-    // the bug in place. See testTheLocalFolderLampsSurviveAServerBeing-
-    // Configured and testTheLibraryLampDoesNotClaimAServerThatIsDownIsFine.)
+    // to those folders, and that lamp reported on nothing: it had pinned the
+    // bug in place. The two tests that replaced it went with the server
+    // feature itself; what survives of the lesson is the lamp above, which
+    // reports on a folder that is not there whatever else is configured.)
 
     // MARK: Services that have to be asked
 

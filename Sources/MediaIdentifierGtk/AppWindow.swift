@@ -109,6 +109,9 @@ final class AppWindow {
     /// The "→ …" label of each row, so what the window really says about
     /// where a file is going can be read back rather than assumed.
     private var rowDestinations: [UnsafeMutablePointer<GtkWidget>] = []
+    /// The "will be deleted" label of each row that has one, so a test can
+    /// read the warning off the widget rather than off the engine.
+    private var rowDeletionNotes: [UnsafeMutablePointer<GtkWidget>] = []
     /// The second line of the empty list, kept so what just happened can be
     /// said in the middle of the window rather than only in the footer.
     ///
@@ -822,6 +825,17 @@ final class AppWindow {
         rowDestinations.map { String(cString: gtk_label_get_text(Gtk.label($0))) }
     }
 
+    /// What the rows say about files that will be deleted, read back off
+    /// those labels. Empty when nothing is going to be deleted.
+    ///
+    /// Deleting is the one thing this program does that cannot be undone, so
+    /// what matters is not that the engine knows — it is that the row says
+    /// so before the button is pressed. That is a label, so it is read as a
+    /// label.
+    var deletionTexts: [String] {
+        rowDeletionNotes.map { String(cString: gtk_label_get_text(Gtk.label($0))) }
+    }
+
     /// What the settings panel says about the last time Apply was pressed,
     /// read back off that label.
     var appliedText: String {
@@ -1185,6 +1199,7 @@ final class AppWindow {
         case .converted: return Text.s("konvertiert", "converted")
         case .sent: return Text.s("gesendet", "sent")
         case .downloaded: return Text.s("geladen", "fetched")
+        case .deleted: return Text.s("gelöscht", "deleted")
         }
     }
 
@@ -1192,7 +1207,9 @@ final class AppWindow {
         switch status {
         case .success, .converted, .sent, .downloaded: return "mf-ok"
         case .failure: return "mf-fail"
-        case .skipped: return "mf-skip"
+        // Dim rather than green: it happened as planned, but "done" is the
+        // wrong colour for a file that is gone.
+        case .skipped, .deleted: return "mf-skip"
         }
     }
 
@@ -1208,6 +1225,7 @@ final class AppWindow {
         for row in rowWidgets { gtk_widget_destroy(row) }
         rowWidgets = []
         rowDestinations = []
+        rowDeletionNotes = []
         emptyDetail = nil
         rowChecks = []
 
@@ -1242,6 +1260,7 @@ final class AppWindow {
                 rowWidgets.append(built.row)
                 rowChecks.append((id: item.id, check: built.check))
                 rowDestinations.append(built.destination)
+                if let note = built.deletionNote { rowDeletionNotes.append(note) }
             }
         }
         // New widgets start hidden; the window was already shown.
@@ -1258,7 +1277,9 @@ final class AppWindow {
     private func proposalRow(_ item: RenameItem, banded: Bool)
         -> (row: UnsafeMutablePointer<GtkWidget>,
             destination: UnsafeMutablePointer<GtkWidget>,
-            check: UnsafeMutablePointer<GtkWidget>) {
+            check: UnsafeMutablePointer<GtkWidget>,
+            deletionNote: UnsafeMutablePointer<GtkWidget>?) {
+        var deletionNote: UnsafeMutablePointer<GtkWidget>?
         let row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10)!
         Styling.style(row, "mf-row")
         if banded { Styling.style(row, "mf-row-alt") }
@@ -1313,6 +1334,24 @@ final class AppWindow {
             gtk_box_pack_start(Gtk.box(text), here, 0, 0, 0)
         }
 
+        // Said in the row, not only in the history afterwards. This is the
+        // one thing the program destroys, so it is named before the button
+        // that does it is pressed.
+        if !item.companionDeletions.isEmpty {
+            let names = item.companionDeletions.map(\.lastPathComponent)
+                .joined(separator: ", ")
+            let note = Self.label(
+                Text.s("Wird gelöscht: \(names) — Jellyfin würde die Datei als "
+                           + "eigene Metadaten lesen",
+                       "Will be deleted: \(names) — Jellyfin would read it as its "
+                           + "own metadata"),
+                classes: "mf-warn")
+            gtk_label_set_ellipsize(Gtk.label(note), PANGO_ELLIPSIZE_END)
+            gtk_widget_set_tooltip_text(note, names)
+            gtk_box_pack_start(Gtk.box(text), note, 0, 0, 0)
+            deletionNote = note
+        }
+
         if let conflict = item.conflict {
             let warning = Self.label(Self.conflictText(conflict), classes: "mf-warn")
             gtk_box_pack_start(Gtk.box(text), warning, 0, 0, 0)
@@ -1333,7 +1372,7 @@ final class AppWindow {
         Gtk.onClick(revealButton, self) { $0.reveal(folder) }
         gtk_box_pack_end(Gtk.box(row), revealButton, 0, 0, 0)
 
-        return (row, destination: to, check)
+        return (row, destination: to, check, deletionNote: deletionNote)
     }
 
     /// Hands a folder to the desktop's file manager.

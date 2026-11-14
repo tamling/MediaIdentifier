@@ -43,6 +43,20 @@ public struct RenameItem: Identifiable, Equatable, Sendable {
     /// Companion moves keyed implicitly by order; recomputed from the primary
     /// path so renaming the primary keeps companions in sync.
     public var companionMoves: [PlannedMove]
+    /// Companions that are deleted rather than moved: the release `.nfo`.
+    ///
+    /// Jellyfin reads `*.nfo` beside a film or episode as its own metadata
+    /// sidecar, in its own XML. A release `.nfo` is ASCII art and a group's
+    /// notes, so carrying one into the library does not merely clutter it:
+    /// Jellyfin finds a local sidecar it cannot parse where it expected its
+    /// own, and the item can end up with no metadata rather than the wrong
+    /// metadata.
+    ///
+    /// Named here rather than handled quietly at execution time so the
+    /// preview can say it before anybody presses Umbenennen. A program that
+    /// deletes a file it never mentioned is the program that gets accused of
+    /// sending files into the void, and rightly.
+    public var companionDeletions: [URL]
     /// Whether the user has accepted this change (FR9). Defaults to true.
     public var isAccepted: Bool
     /// Conflict detected for the primary destination, if any.
@@ -54,6 +68,7 @@ public struct RenameItem: Identifiable, Equatable, Sendable {
         outputRoot: URL,
         proposedRelativePath: String,
         companionMoves: [PlannedMove] = [],
+        companionDeletions: [URL] = [],
         isAccepted: Bool = true,
         conflict: ConflictKind? = nil
     ) {
@@ -62,6 +77,7 @@ public struct RenameItem: Identifiable, Equatable, Sendable {
         self.outputRoot = outputRoot
         self.proposedRelativePath = proposedRelativePath
         self.companionMoves = companionMoves
+        self.companionDeletions = companionDeletions
         self.isAccepted = isAccepted
         self.conflict = conflict
     }

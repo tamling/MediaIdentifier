@@ -292,6 +292,12 @@ case let .drop(paths):
             for destination in mainWindow.destinationTexts {
                 print("destination: \(destination)")
             }
+            // Read off the row's own label: what matters about a deletion is
+            // that the window said so before the button was pressed.
+            print("deletion notes: \(mainWindow.deletionTexts.count)")
+            for note in mainWindow.deletionTexts {
+                print("deletes: \(note)")
+            }
             print("status: \(mainWindow.statusText)")
             if coordinator.items.isEmpty {
                 Pending.failure = "the dropped files produced no proposal"

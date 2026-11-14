@@ -42,6 +42,7 @@ public struct RenamePlanner {
             for: item.mediaFile,
             primaryDestination: item.primaryDestination
         )
+        updated.companionDeletions = Self.companionDeletions(for: item.mediaFile)
         // Refresh the on-disk conflict state for the edited destination. Batch
         // duplicate detection is left to `makePlan`.
         let primaryPath = updated.primaryDestination.standardizedFileURL.path
@@ -79,12 +80,14 @@ public struct RenamePlanner {
         let relativePath = namer.relativePath(for: mediaFile.parsed, fileExtension: ext)
         let primaryDestination = root.appendingPathComponent(relativePath)
         let companions = companionMoves(for: mediaFile, primaryDestination: primaryDestination)
+        let deletions = Self.companionDeletions(for: mediaFile)
 
         return RenameItem(
             mediaFile: mediaFile,
             outputRoot: root,
             proposedRelativePath: relativePath,
-            companionMoves: companions
+            companionMoves: companions,
+            companionDeletions: deletions
         )
     }
 
@@ -96,8 +99,8 @@ public struct RenamePlanner {
         let oldStem = mediaFile.url.deletingPathExtension().lastPathComponent
 
         return mediaFile.companions.compactMap { companion -> PlannedMove? in
-            // Samples are kept but not renamed onto the media name to avoid
-            // Jellyfin treating them as the real episode/movie.
+            // The release .nfo is not moved anywhere: see companionDeletions.
+            guard companion.role != .nfo else { return nil }
             let ext = companion.url.pathExtension
             let companionStem = companion.url.deletingPathExtension().lastPathComponent
 
@@ -116,6 +119,18 @@ public struct RenamePlanner {
             let destination = destinationDir.appendingPathComponent(newName)
             return PlannedMove(source: companion.url, destination: destination, companionRole: companion.role)
         }
+    }
+
+    /// The companions that are deleted instead of moved.
+    ///
+    /// Only `.nfo`, and the extension is checked again here rather than
+    /// trusted from the role: this list is what the executor deletes, and a
+    /// mistake in the scanner's role table must not be able to reach
+    /// `removeItem` with a video in it.
+    static func companionDeletions(for mediaFile: MediaFile) -> [URL] {
+        mediaFile.companions
+            .filter { $0.role == .nfo && $0.url.pathExtension.lowercased() == "nfo" }
+            .map(\.url)
     }
 
     // MARK: Conflict detection (FR11)

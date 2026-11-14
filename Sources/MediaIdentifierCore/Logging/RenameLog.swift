@@ -18,6 +18,11 @@ public struct RenameLogEntry: Identifiable, Codable, Equatable, Sendable {
         case sent
         /// Fetched from a URL into the import folder.
         case downloaded
+        /// Removed rather than renamed: the release `.nfo`, which Jellyfin
+        /// would otherwise read as its own metadata sidecar. Its own case
+        /// because the history must not report a deletion as a rename, and
+        /// because undo cannot reverse it.
+        case deleted
     }
 
     public var id: UUID

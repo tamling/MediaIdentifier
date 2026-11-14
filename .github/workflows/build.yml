@@ -396,6 +396,11 @@ jobs:
           dropped="$(mktemp -d)"
           mkdir -p "$dropped/config" "$dropped/elsewhere"
           : > "$dropped/elsewhere/Dark.S01E01.GERMAN.1080p.WEB-DL.mkv"
+          # A release note beside it. Jellyfin reads *.nfo as its own
+          # metadata sidecar, so this one is deleted rather than carried
+          # into the library -- and the row has to SAY so before anybody
+          # presses Umbenennen, which is what is asserted below.
+          : > "$dropped/elsewhere/Dark.S01E01.GERMAN.1080p.WEB-DL.nfo"
           printf '{"identification":"offline","language":"en"}\n' \
             > "$dropped/config/settings.json"
           timeout 90 xvfb-run -a --server-args="-screen 0 1280x900x24" \
@@ -419,6 +424,34 @@ jobs:
             grep "^destination:" dropped.log || echo "(no destination line)"
             exit 1
           }
+          # Deleting is the one thing here that undo cannot reverse, so the
+          # window may not do it silently. Read off the row's label.
+          grep -q "^deletion notes: 1" dropped.log || {
+            echo "FAIL: the row says nothing about the .nfo it will delete"
+            grep -E "^(deletion notes|deletes):" dropped.log \
+              || echo "(no deletion line at all)"
+            exit 1
+          }
+          grep -q "^deletes: .*Dark.S01E01.GERMAN.1080p.WEB-DL.nfo" dropped.log || {
+            echo "FAIL: the row does not name the file it will delete"
+            grep "^deletes:" dropped.log || echo "(no deletes line)"
+            exit 1
+          }
+          # And it must not claim it is deleting the film. `if`, not
+          # `grep && { exit 1; }`: the step runs under `set -e`, where a
+          # grep that finds nothing makes the whole && list fail and aborts
+          # a build that was passing.
+          if grep -q "^deletes: .*mkv" dropped.log; then
+            echo "FAIL: the row says it will delete a video file"
+            grep "^deletes:" dropped.log
+            exit 1
+          fi
+          # The destination must not be an .nfo either: the note used to be
+          # planned as a companion move into the library.
+          if grep -qE "^destination: .*\.nfo$" dropped.log; then
+            echo "FAIL: an .nfo is still being moved into the library"
+            exit 1
+          fi
 
           echo "=== pressing Apply in the settings ==="
           applied="$(mktemp -d)"

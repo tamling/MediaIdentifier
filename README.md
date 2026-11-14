@@ -20,8 +20,13 @@ before anything touches the disk. One window, one engine, Linux.
   - Series → `The Last of Us/Season 01/The Last of Us - S01E01.mkv`
   - Music → `Artist/Album (1998)/01 - Title.flac`, from the file's own tags
 - You **tick, untick or hand-edit** each row, then press **Umbenennen**.
-- Subtitles and extras (`.srt`, `.ass`, `.sub`, `.nfo`, posters, samples) are
+- Subtitles and extras (`.srt`, `.ass`, `.sub`, posters, samples) are
   **renamed alongside** the video.
+- The release **`.nfo` is deleted**, not carried along. Jellyfin reads `*.nfo`
+  beside a film as its own metadata sidecar, in its own XML; a group's ASCII
+  art there does not merely clutter the library, it can leave the item with
+  no metadata at all. The row says which file will go before you press
+  **Umbenennen**, and only files whose rename actually succeeded lose theirs.
 - Optionally **re-encodes** to save space.
 - Every change is **logged** and can be **undone**.
 - Everything runs **locally**. Only a title and a year are ever sent anywhere,

@@ -497,6 +497,17 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         }
     }
 
+    /// Whatever an error can say for itself.
+    ///
+    /// It lived among the sending code and went out with it, although the
+    /// callers are the converter and the downloader — which is why removing
+    /// a feature broke two that had nothing to do with it. There is an
+    /// overload taking a download progress, so the compiler did not report a
+    /// missing function but a type mismatch two call sites away.
+    static func describe(_ error: Error) -> String {
+        (error as? LocalizedError)?.errorDescription ?? String(describing: error)
+    }
+
     /// The raw reason, including the numeric code, because a bare
     /// "could not connect" tells the user nothing they can fix. Apple's
     /// transport-security refusal (-1022) in particular looks like a network
@@ -1044,6 +1055,14 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
                 + (outcome.failed > 0
                     ? Text.s(", fehlgeschlagen \(outcome.failed)",
                              ", failed \(outcome.failed)")
+                    : "")
+                // Named in the sentence, never only in the history: the one
+                // thing here that cannot be undone has to be read out.
+                + (outcome.deleted > 0
+                    ? Text.s(", \(outcome.deleted) Release-Infodatei"
+                                 + (outcome.deleted == 1 ? "" : "en") + " gelöscht",
+                             ", \(outcome.deleted) release note"
+                                 + (outcome.deleted == 1 ? "" : "s") + " deleted")
                     : "") + "."
         }
         // Only for the files that are now in the library, and only for the
