@@ -218,6 +218,20 @@ public final class RenameExecutor {
             let transaction = RenameTransaction(moves: performed)
             journal.record(transaction)
             outcome.transaction = transaction
+            // In the history, not only in a field nobody reads: the files
+            // have moved and the record of how to move them back did not
+            // reach the disk.
+            if let unwritable = journal.lastWriteFailure {
+                log.append(RenameLogEntry(
+                    oldName: (unwritable as NSString).lastPathComponent,
+                    newName: "—", status: .failure,
+                    errorDescription: Text.s(
+                        "Das Rückgängig-Journal konnte nicht geschrieben werden. "
+                            + "Rückgängig funktioniert in dieser Sitzung, aber nicht "
+                            + "nach einem Neustart.",
+                        "The undo journal could not be written. Undo works in this "
+                            + "session but not after a restart.")))
+            }
         }
 
         // After the moves, and only for items whose primary actually landed.
@@ -581,9 +595,16 @@ public final class RenameExecutor {
         }
     }
 
+    /// Removes `url` only if it is empty, as one step.
+    ///
+    /// `rmdir(2)` and not "list it, then `removeItem`". The old pair was
+    /// check-then-act over a gap another process can use: `removeItem`
+    /// deletes a directory recursively, so a file created in that gap went
+    /// with it. rmdir refuses a non-empty directory by definition, which is
+    /// the same guarantee with no gap to lose.
     private func removeDirectoryIfEmpty(_ url: URL) {
-        guard let contents = try? fileManager.contentsOfDirectory(atPath: url.path),
-              contents.isEmpty else { return }
-        try? fileManager.removeItem(at: url)
+        _ = url.withUnsafeFileSystemRepresentation { path in
+            path.map { rmdir($0) } ?? -1
+        }
     }
 }

@@ -23,7 +23,7 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
     public struct FolderScan: Sendable {
         /// Hard limit so pointing Mediafin at a huge tree cannot exhaust
         /// memory before the user sees anything.
-        public static let maximumFiles = 5_000
+        public static let maximumFiles = MediaScanner.maximumFiles
 
         /// Music files under a folder.
         ///
@@ -213,6 +213,17 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
                         + forgotten.joined(separator: ", "),
                     "Removed credentials that are no longer used: "
                         + forgotten.joined(separator: ", "))))
+        }
+        // A journal or a log that cannot be written is worth saying once:
+        // the journal is what makes Undo a promise rather than a hope, and
+        // both used to swallow the error.
+        if let unwritable = journal.lastWriteFailure ?? log.lastWriteFailure {
+            _snapshot.hasError = true
+            _snapshot.lastResult = Text.s(
+                "\(unwritable) kann nicht geschrieben werden — Verlauf und "
+                    + "Rückgängig überleben einen Neustart nicht.",
+                "\(unwritable) cannot be written — the history and Undo will not "
+                    + "survive a restart.")
         }
         refreshSnapshotCounts()
         // Not on the queue yet, so hand it over rather than touching the timer.

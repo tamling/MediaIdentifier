@@ -60,7 +60,10 @@ public struct RenameLogEntry: Identifiable, Codable, Equatable, Sendable {
 /// Persists rename log entries as a JSON file and keeps an in-memory copy
 /// (FR12). Thread-safe for appends.
 public final class RenameLog: @unchecked Sendable {
-    private let url: URL
+    /// Where it is. Readable so a caller can name it in a message and a
+    /// test can check its permissions — it is a path, not a secret, and the
+    /// file's own mode is what protects the contents.
+    public let url: URL
     private let queue = DispatchQueue(label: "MediaIdentifier.RenameLog")
     /// Only ever touched inside `queue`. Reads go through `entries`.
     private var _entries: [RenameLogEntry] = []
@@ -120,12 +123,39 @@ public final class RenameLog: @unchecked Sendable {
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.prettyPrinted]
         guard let data = try? encoder.encode(_entries) else { return }
-        try? FileManager.default.createDirectory(
-            at: url.deletingLastPathComponent(),
-            withIntermediateDirectories: true
-        )
-        try? data.write(to: url, options: .atomic)
+        // Through AtomicFile, like settings.json and secrets.json: it
+        // creates the directory at 0700 and the file at the mode given,
+        // with the contents never briefly readable by anyone else.
+        //
+        // This used to be a bare `data.write`, with no mode and a directory
+        // created at 0755. Whichever of the four files was written first
+        // decided the directory's mode, so a first run that renamed a
+        // dropped file before any settings were saved left
+        // ~/.config/mediafin world-readable with this file at 0644 — and
+        // this file holds every path of the user's media library.
+        do {
+            try AtomicFile.write(data, to: url, permissions: 0o600)
+            _lastWriteFailure = nil
+        } catch {
+            // Kept rather than swallowed. The whole point of this file is to
+            // survive a restart, and a write that cannot happen means the
+            // offer to undo is a promise that will not be kept.
+            _lastWriteFailure = url.path
+        }
     }
+
+    /// The path of this file if the last write to it failed, else nil.
+    ///
+    /// Read once per session by the coordinator, which says so in the
+    /// footer. It used to be `try?` and therefore invisible: a full disk or
+    /// a read-only directory left the in-memory state claiming to be
+    /// recorded while the disk knew nothing.
+    ///
+    /// Through the queue, like every other read here: `persist` runs on it,
+    /// and a caller on another thread reading the raw field would be a data
+    /// race on a String — a crash rather than a stale answer.
+    public var lastWriteFailure: String? { queue.sync { _lastWriteFailure } }
+    private var _lastWriteFailure: String?
 
     static func defaultURL() -> URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first

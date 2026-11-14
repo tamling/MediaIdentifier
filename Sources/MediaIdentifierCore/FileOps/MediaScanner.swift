@@ -2,6 +2,11 @@ import Foundation
 
 /// Discovers media files and their companions on disk (FR1, FR10, FR14, FR15).
 public struct MediaScanner {
+    /// Hard ceiling on what one recursion returns, so pointing Mediafin at a
+    /// huge tree cannot exhaust memory before the user sees anything.
+    /// `AppCoordinator.FolderScan` uses the same number.
+    public static let maximumFiles = 5_000
+
     private let fileManager: FileManager
     private let parser: ReleaseNameParser
 
@@ -112,6 +117,10 @@ public struct MediaScanner {
             // somebody meant that file.
             guard !VideoFileTypes.isSample(fileURL) else { continue }
             result.append(fileURL)
+            // The same ceiling the other scanner has. One of the two used to
+            // have none, so whether a huge tree could exhaust memory before
+            // the user saw anything depended on which call path found it.
+            if result.count >= MediaScanner.maximumFiles { break }
         }
         return result.sorted { $0.path < $1.path }
     }
