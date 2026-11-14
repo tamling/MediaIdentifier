@@ -622,11 +622,24 @@ jobs:
         run: |
           set -euo pipefail
           nohup python3 tools/hostile-llm.py 18099 > hostile.log 2>&1 &
+          # Python and not curl: this container has pkg-config and GTK and
+          # not much else, and curl is genuinely absent — the step failed
+          # with "the hostile server did not come up" while the server's own
+          # first line was in the log saying it had.
+          ready() {
+            python3 - <<'PROBE'
+          import sys, urllib.request
+          try:
+              urllib.request.urlopen("http://127.0.0.1:18099/v1/models", timeout=2)
+          except Exception:
+              sys.exit(1)
+          PROBE
+          }
           for _ in $(seq 1 30); do
-            curl -fsS -m 2 http://127.0.0.1:18099/v1/models > /dev/null && break
+            if ready; then break; fi
             sleep 0.5
           done
-          curl -fsS -m 2 http://127.0.0.1:18099/v1/models > /dev/null || {
+          ready || {
             echo "FAIL: the hostile server did not come up"
             cat hostile.log || true
             exit 1
