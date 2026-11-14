@@ -25,9 +25,25 @@ final class URLSafetyTests: XCTestCase {
     func testEveryPrivateRangeIsRecognised() {
         for host in ["10.0.0.5", "10.255.255.255", "172.16.0.1", "172.31.255.1",
                      "192.168.0.1", "169.254.1.1", "127.0.0.1", "localhost",
-                     "nas.local", "server.lan", "box.home.arpa", "::1"] {
+                     "nas.local", "server.lan", "box.home.arpa", "::1",
+                     // The router domains, because this is a German home
+                     // network: a FRITZ!Box serves fritz.box, and warning
+                     // about nas.fritz.box would be the false alarm that
+                     // teaches people to ignore the lamp.
+                     "fritz.box", "nas.fritz.box", "speedport.ip"] {
             XCTAssertTrue(URLSafety.isPrivateHost(host), host)
         }
+    }
+
+    /// The known limit, stated rather than left to be discovered: the list
+    /// of router domains cannot be complete, so a host that really is local
+    /// under some other vendor's domain is flagged. That is why the lamp is
+    /// amber and says the host does not *look* local instead of asserting
+    /// that it is not.
+    func testALocalNameUnderAnUnlistedRouterDomainIsStillFlagged() {
+        XCTAssertTrue(URLSafety.sendsCredentialsInTheClear("http://nas.easybox"))
+        XCTAssertTrue(URLSafety.isPrivateHost("nas.local"),
+                      "the .local that every vendor supports still works")
     }
 
     /// 172.32 is public, and so is 11.x: the ranges have edges and an

@@ -159,12 +159,15 @@ public enum SystemChecks {
                 id: "encryption", name: name, state: .warning,
                 detail: Text.s(
                     "\(exposed.joined(separator: " und ")) wird über http:// "
-                        + "angesprochen, und der Host liegt nicht im eigenen Netz — "
-                        + "der hinterlegte Schlüssel ist unterwegs mitlesbar. "
-                        + "https:// verwenden.",
+                        + "angesprochen, und der Host sieht nicht nach einem Rechner "
+                        + "im eigenen Netz aus — dann ist der hinterlegte Schlüssel "
+                        + "unterwegs mitlesbar. https:// verwenden. (Liegt der Rechner "
+                        + "doch im eigenen Netz, ist hier nichts zu tun.)",
                     "\(exposed.joined(separator: " and ")) is addressed over http:// "
-                        + "and the host is not on your own network, so the stored key "
-                        + "is readable in transit. Use https://."))
+                        + "and the host does not look like one on your own network, in "
+                        + "which case the stored key is readable in transit. Use "
+                        + "https://. (If the machine is on your own network after all, "
+                        + "there is nothing to do here.)"))
         }
         let configured = !settings.localLLMBaseURL.isEmpty
             || !settings.jellyfinBaseURL.isEmpty

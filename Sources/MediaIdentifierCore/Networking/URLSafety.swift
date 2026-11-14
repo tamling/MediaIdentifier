@@ -31,10 +31,22 @@ public enum URLSafety {
         if name == "localhost" || name.hasSuffix(".localhost") { return true }
         // A bare name with no dot cannot be resolved outside a local network.
         if !name.contains(".") && !name.contains(":") { return true }
-        // mDNS, and the names a home router hands out.
-        for suffix in [".local", ".lan", ".home", ".internal", ".home.arpa"] {
+        // mDNS, the reserved names, and the two router domains common
+        // enough to be worth naming: a FRITZ!Box serves fritz.box and a
+        // Speedport speedport.ip, and "nas.fritz.box" is what a German home
+        // network calls its NAS.
+        //
+        // This list cannot be complete — every router vendor has its own —
+        // so a host that really is local but is not listed here gets the
+        // amber lamp. That is why the lamp says the host does not *look*
+        // like one on the local network rather than asserting that it is
+        // not, and why it is amber and not red: it is a question, and the
+        // answer is the user's.
+        for suffix in [".local", ".lan", ".home", ".internal", ".home.arpa",
+                       ".fritz.box", ".speedport.ip"] {
             if name.hasSuffix(suffix) { return true }
         }
+        if name == "fritz.box" || name == "speedport.ip" { return true }
         if name == "::1" { return true }
         if name.hasPrefix("fe80:") || name.hasPrefix("fc") || name.hasPrefix("fd") {
             // Link-local and unique-local IPv6. "fc"/"fd" would also match a
