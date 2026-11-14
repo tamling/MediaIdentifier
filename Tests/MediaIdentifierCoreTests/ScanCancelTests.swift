@@ -50,7 +50,14 @@ final class ScanCancelTests: XCTestCase {
 
     private func makeCoordinator() -> AppCoordinator {
         // No lamp timer: a timer firing mid-test is noise, not a test.
-        AppCoordinator(configDirectory: config, lampInterval: 0)
+        let coordinator = AppCoordinator(configDirectory: config, lampInterval: 0)
+        // After construction, not before. The coordinator's init calls
+        // Text.start, which follows the environment whenever the stored
+        // settings name no language — and CI's environment is English. A
+        // setUp that pins the language before this is overruled by it, which
+        // is how three of these tests first failed against English strings.
+        Text.language = .german
+        return coordinator
     }
 
     // MARK: Stopping one

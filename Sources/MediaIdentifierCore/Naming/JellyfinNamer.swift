@@ -118,16 +118,73 @@ public struct JellyfinNamer {
             .joined(separator: "/")
     }
 
+    /// How many bytes one path component may use.
+    ///
+    /// 200 and not 255: what goes through here is a stem, and the caller
+    /// wraps it — " (2014)" on a film, " - S05E10" on an episode, the
+    /// extension on both — so the component that reaches the filesystem is
+    /// longer than what this returns. ext4, XFS, APFS and SMB all stop at
+    /// 255 **bytes**, and `ENAMETOOLONG` is where the slack goes.
+    public static let componentByteLimit = 200
+
     /// Removes characters that are illegal or problematic in file names on
-    /// macOS / SMB shares (`/` and `:` in particular).
+    /// macOS / SMB shares (`/` and `:` in particular), strips control
+    /// characters, and keeps the result inside one component's byte budget.
+    ///
+    /// The length and the control characters were missing while
+    /// `MusicNamer.clean` had both — the same job, two rules, and the video
+    /// path was the one without. The title that arrives here comes from TMDb
+    /// or from a local model, and the only check on it is "not empty":
+    ///
+    /// A 240-character title makes a component that fits as a folder and
+    /// not as a file, because the file carries the extension as well. So
+    /// `ensureParentDirectory` creates the folder, the move into it fails
+    /// with `ENAMETOOLONG`, and the library keeps an empty 240-character
+    /// folder that nothing cleans up — undo has no entry for an operation
+    /// that failed.
+    ///
+    /// A title with a newline in it makes a file name with a newline in it:
+    /// legal on Linux, awkward for the user in a shell for ever, and
+    /// straight into the systemd journal from `mediafin --once`.
     public static func sanitize(_ name: String) -> String {
-        let illegal = CharacterSet(charactersIn: "/\\:*?\"<>|\u{0}")
+        let illegal = CharacterSet(charactersIn: "/\\:*?\"<>|")
         let cleaned = name
             .components(separatedBy: illegal)
             .joined(separator: " ")
+        // Control characters, including the newline a broken tagger or a
+        // talkative model can leave in a title. DEL too, which is above the
+        // C0 range and just as unwelcome in a file name.
+        let printable = String(cleaned.unicodeScalars.filter {
+            $0.value >= 0x20 && $0.value != 0x7F
+        })
         // Collapse the whitespace that sanitising may introduce and trim dots /
         // spaces from the ends (trailing dots are problematic on some shares).
-        let collapsed = cleaned.split(whereSeparator: { $0 == " " }).joined(separator: " ")
-        return collapsed.trimmingCharacters(in: CharacterSet(charactersIn: " ."))
+        let collapsed = printable.split(whereSeparator: { $0 == " " })
+            .joined(separator: " ")
+        let bounded = truncating(collapsed, toBytes: componentByteLimit)
+        // After the cut, not before: cutting can leave a trailing dot or
+        // space, and a component may not end in either.
+        return bounded.trimmingCharacters(in: CharacterSet(charactersIn: " ."))
+    }
+
+    /// Cuts `text` to at most `limit` bytes, never through the middle of a
+    /// character.
+    ///
+    /// Counted in bytes and stepped by `Character`: the limit a filesystem
+    /// enforces is a byte count, a Japanese title is three bytes a
+    /// character, and stepping by UTF-8 index instead would leave half a
+    /// grapheme cluster — a broken flag or a family emoji missing a member.
+    static func truncating(_ text: String, toBytes limit: Int) -> String {
+        guard limit > 0 else { return "" }
+        guard text.utf8.count > limit else { return text }
+        var kept = ""
+        var used = 0
+        for character in text {
+            let size = String(character).utf8.count
+            if used + size > limit { break }
+            kept.append(character)
+            used += size
+        }
+        return kept
     }
 }

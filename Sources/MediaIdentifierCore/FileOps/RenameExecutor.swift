@@ -425,8 +425,10 @@ public final class RenameExecutor {
         case .replace:
             return Resolution(destination: move.destination, replacesExisting: true)
         case .rename:
-            return Resolution(destination: uniqueURL(for: move.destination),
-                              replacesExisting: false)
+            // nil means a thousand names were taken. Skipping says so and
+            // leaves the file where it is, which beats spinning.
+            guard let free = uniqueURL(for: move.destination) else { return nil }
+            return Resolution(destination: free, replacesExisting: false)
         }
     }
 
@@ -528,19 +530,29 @@ public final class RenameExecutor {
         #endif
     }
 
-    private func uniqueURL(for url: URL) -> URL {
+    /// How far " (1)", " (2)", … is tried before the move is refused.
+    ///
+    /// A thousand copies of one film is not a library, it is a fault
+    /// somewhere else. The loop used to be `while true`, which is fine while
+    /// the filesystem is answering truthfully and is an endless spin when
+    /// another process is creating names as fast as they are tested.
+    static let renameAttemptLimit = 1_000
+
+    /// A free name beside `url`, or nil when there is none worth having.
+    private func uniqueURL(for url: URL) -> URL? {
         let dir = url.deletingLastPathComponent()
         let stem = url.deletingPathExtension().lastPathComponent
         let ext = url.pathExtension
-        var counter = 1
-        while true {
-            let candidateName = ext.isEmpty ? "\(stem) (\(counter))" : "\(stem) (\(counter)).\(ext)"
+        for counter in 1...Self.renameAttemptLimit {
+            let candidateName = ext.isEmpty
+                ? "\(stem) (\(counter))"
+                : "\(stem) (\(counter)).\(ext)"
             let candidate = dir.appendingPathComponent(candidateName)
             if !fileManager.fileExists(atPath: candidate.path) {
                 return candidate
             }
-            counter += 1
         }
+        return nil
     }
 
     /// Creates the parent directory chain for `url`, returning the directories it

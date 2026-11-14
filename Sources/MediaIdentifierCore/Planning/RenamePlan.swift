@@ -38,8 +38,34 @@ public struct RenameItem: Identifiable, Equatable, Sendable {
     public var mediaFile: MediaFile
     /// The destination root the relative path is resolved against.
     public var outputRoot: URL
-    /// Editable Jellyfin relative path for the primary file (FR9 manual adjust).
-    public var proposedRelativePath: String
+    /// Editable Jellyfin relative path for the primary file (FR9 manual
+    /// adjust), sanitised on the way in.
+    ///
+    /// The invariant — "this cannot climb out of `outputRoot`, and every
+    /// component is a legal file name" — is enforced here, at the one place
+    /// the value enters, rather than left to the discipline of whoever
+    /// assigns it.
+    ///
+    /// `JellyfinNamer.sanitizeRelativePath` had three passing tests for
+    /// `../../etc/passwd` and no call site in `Sources` at all: it was
+    /// called by the form of a web interface that no longer exists. The
+    /// traversal defence was green in CI and absent from the program —
+    /// this project's recurring failure, where a check that cannot run looks
+    /// exactly like a check that passes. Nothing was broken, because every
+    /// producer happened to sanitise its own output; the next producer would
+    /// not have inherited that and would not have broken a test either.
+    ///
+    /// Sanitising on the way in rather than inside `primaryDestination`
+    /// matters: the two must never disagree. `settled(_:)` and the
+    /// already-filed check both compare a file's own path against this
+    /// string, and `MusicNamer` leaves through characters that `sanitize`
+    /// removes — so cleaning only at the destination would have the row
+    /// showing one path while the file went to another.
+    public var proposedRelativePath: String {
+        get { storedRelativePath }
+        set { storedRelativePath = JellyfinNamer.sanitizeRelativePath(newValue) }
+    }
+    private var storedRelativePath: String
     /// Companion moves keyed implicitly by order; recomputed from the primary
     /// path so renaming the primary keeps companions in sync.
     public var companionMoves: [PlannedMove]
@@ -75,7 +101,8 @@ public struct RenameItem: Identifiable, Equatable, Sendable {
         self.id = id
         self.mediaFile = mediaFile
         self.outputRoot = outputRoot
-        self.proposedRelativePath = proposedRelativePath
+        self.storedRelativePath =
+            JellyfinNamer.sanitizeRelativePath(proposedRelativePath)
         self.companionMoves = companionMoves
         self.companionDeletions = companionDeletions
         self.isAccepted = isAccepted
@@ -83,8 +110,21 @@ public struct RenameItem: Identifiable, Equatable, Sendable {
     }
 
     /// Absolute destination URL for the primary file.
+    ///
+    /// Sanitised here, at the one point where a string becomes a path, and
+    /// not left to the discipline of whoever set `proposedRelativePath`.
+    ///
+    /// `JellyfinNamer.sanitizeRelativePath` had three passing tests for
+    /// `../../etc/passwd` and no call site in `Sources` at all: it was
+    /// called by the form of a web interface that no longer exists. So the
+    /// traversal defence was green in CI and absent from the program, which
+    /// is this project's recurring failure — a check that cannot run looks
+    /// exactly like a check that passes. Every producer happened to sanitise
+    /// its own output, so nothing was broken; the next producer would not
+    /// have inherited that and would not have broken a test either.
     public var primaryDestination: URL {
-        outputRoot.appendingPathComponent(proposedRelativePath)
+        // Already clean: see `proposedRelativePath`.
+        outputRoot.appendingPathComponent(storedRelativePath)
     }
 
     /// The primary move plus all companion moves.

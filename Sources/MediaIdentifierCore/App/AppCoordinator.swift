@@ -128,6 +128,9 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
     private var _probes: [ProbeSubject: ProbeResult] = [:]
     /// Set only by the test hook below.
     private var _providerOverride: MetadataProvider?
+    /// Something `enriching` needs to tell the user, carried to the end of
+    /// the run so the closing sentence can include it rather than replace it.
+    private var _identificationNote: String?
     /// The lamps, as last worked out on the queue.
     ///
     /// Cached rather than computed on demand because the only caller is the
@@ -670,10 +673,12 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         let plan = proposed.items
 
         lock.lock(); _items = plan; lock.unlock()
+        // Read out before `update`, which takes the same non-recursive lock.
+        let identification = takeIdentificationNote()
         update {
             $0.busy = false
             $0.convertStatus = nil
-            $0.hasError = false
+            $0.hasError = !identification.isEmpty
             // "Nothing to do" and "nothing found" look identical as a zero,
             // and they are not: one means the library is tidy, the other
             // means something is wrong with the folder you chose.
@@ -694,6 +699,9 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
                         + (proposed.alreadyFiled > 0
                             ? " \(proposed.alreadyFiled) already filed." : ""))
             }
+            // Appended rather than replacing: both sentences matter, and
+            // this one is the reason the names may be worse than usual.
+            $0.lastResult = ($0.lastResult ?? "") + identification
         }
         refreshSnapshotCounts()
         return true
@@ -825,10 +833,12 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         let total = _items.count
         lock.unlock()
 
+        // Read out before `update`, which takes the same non-recursive lock.
+        let identification = takeIdentificationNote()
         update {
             $0.busy = false
             $0.convertStatus = nil
-            $0.hasError = added.isEmpty
+            $0.hasError = added.isEmpty || !identification.isEmpty
             var parts: [String] = []
             if added.isEmpty, alreadyFiled > 0 {
                 // Not an error: the file is where it belongs.
@@ -872,6 +882,11 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
                 parts.append(Text.s(
                     "\(sorted.ignored.count) keine Mediendatei.",
                     "\(sorted.ignored.count) not a media file."))
+            }
+            // Last, and appended rather than replacing: it is the reason the
+            // names in this batch may be worse than usual.
+            if !identification.isEmpty {
+                parts.append(identification.trimmingCharacters(in: .whitespaces))
             }
             $0.lastResult = parts.joined(separator: " ")
         }
@@ -923,16 +938,20 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
                 failedInARow += 1
                 if failedInARow >= Self.identificationGiveUpAfter {
                     gaveUp = true
-                    update {
-                        $0.hasError = true
-                        $0.lastResult = Text.s(
-                            "Die Erkennung antwortet nicht (\(failedInARow)× "
-                                + "nichts). Der Rest des Laufs benutzt nur die "
-                                + "Dateinamen.",
-                            "Identification is not answering (\(failedInARow) "
-                                + "× nothing). The rest of this run uses the file "
-                                + "names only.")
-                    }
+                    // Stored, not written into lastResult. The run composes
+                    // its own closing sentence afterwards and would
+                    // overwrite this one — which is exactly what happened,
+                    // and the test that asked for the warning got "8 files
+                    // ready to rename" instead. A warning the user cannot
+                    // see is the same as no warning.
+                    lock.lock()
+                    _identificationNote = Text.s(
+                        "Die Erkennung antwortet nicht (\(failedInARow)× nichts) — "
+                            + "der Rest des Laufs benutzt nur die Dateinamen.",
+                        "Identification is not answering (\(failedInARow) × "
+                            + "nothing) — the rest of this run used the file names "
+                            + "only.")
+                    lock.unlock()
                 }
             } else {
                 failedInARow = 0
@@ -1542,6 +1561,16 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         }
     }
 
+    /// The note `enriching` left, cleared as it is taken.
+    private func takeIdentificationNote() -> String {
+        lock.lock()
+        let note = _identificationNote
+        _identificationNote = nil
+        lock.unlock()
+        guard let note else { return "" }
+        return " " + note
+    }
+
     /// Says so, instead of leaving the run's own "N files ready" sentence
     /// standing as if nothing had been interrupted.
     private func reportIfScanWasCancelled() {
@@ -1569,6 +1598,8 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         lock.lock()
         _scanRunning = true
         _queuedScans = max(0, _queuedScans - 1)
+        // A note from the previous run must not be attached to this one.
+        _identificationNote = nil
         lock.unlock()
     }
 
