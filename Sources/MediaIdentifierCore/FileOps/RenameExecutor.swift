@@ -76,19 +76,74 @@ public final class RenameExecutor {
         var completed = 0
         var outcome = RenameOutcome()
         var performed: [RenameTransaction.Move] = []
+        /// What each item's primary move did, so its companions can follow.
+        ///
+        /// Each move used to be resolved on its own, and under the "rename"
+        /// policy that pulled a release apart. The film hit an existing
+        /// "Tenet (2020).mkv" and became "Tenet (2020) (1).mkv"; the subtitle
+        /// found "Tenet (2020).en.srt" free and kept that name — so it landed
+        /// beside the film that was already in the library, and the rip that
+        /// had just arrived had no subtitles at all. Under "skip" it was the
+        /// same shape: the film stayed in Downloads and its subtitle walked
+        /// into the library on its own.
+        ///
+        /// `allMoves` puts an item's primary first, so by the time a
+        /// companion is reached its primary's fate is known.
+        var fates: [UUID: PrimaryFate] = [:]
+        /// Sources already moved in this run.
+        ///
+        /// The backstop under the scanner's "longest name wins" rule: if one
+        /// file ever reaches this loop as two items' companion again, the
+        /// second attempt is refused instead of failing with "no such file"
+        /// after the first has already taken it.
+        var movedSources: Set<String> = []
         progress?(0)
 
-        for (owner, isPrimary, move) in moves {
+        for (owner, isPrimary, plannedMove) in moves {
+            var move = plannedMove
             defer {
                 completed += 1
                 progress?(total == 0 ? 1 : Double(completed) / Double(total))
+            }
+
+            if !isPrimary {
+                guard case .landed(let actual, let planned) = fates[owner] else {
+                    // The film did not move, so nothing of it moves. A
+                    // subtitle in the library beside somebody else's film is
+                    // worse than a subtitle left in Downloads.
+                    outcome.skipped += 1
+                    log.append(RenameLogEntry(
+                        oldName: move.source.lastPathComponent,
+                        newName: "—", status: .skipped,
+                        errorDescription: Text.s(
+                            "Bleibt bei der Datei, die nicht umbenannt wurde.",
+                            "Left with the file that was not renamed.")))
+                    continue
+                }
+                move = Self.following(move, primaryPlanned: planned,
+                                      primaryActual: actual)
+                if movedSources.contains(move.source.standardizedFileURL.path) {
+                    outcome.skipped += 1
+                    log.append(RenameLogEntry(
+                        oldName: move.source.lastPathComponent,
+                        newName: "—", status: .skipped,
+                        errorDescription: Text.s(
+                            "Gehört zu mehreren Dateien und wurde schon "
+                                + "mitverschoben.",
+                            "Belongs to more than one file and has already been "
+                                + "moved with one of them.")))
+                    continue
+                }
             }
 
             // No-op: source already at destination.
             if move.source.standardizedFileURL == move.destination.standardizedFileURL {
                 // Nothing moved, but the file is at the destination, which is
                 // what `landed` is asked about.
-                if isPrimary { outcome.landed[owner] = move.destination }
+                if isPrimary {
+                    outcome.landed[owner] = move.destination
+                    fates[owner] = .landed(move.destination, planned: move.destination)
+                }
                 continue
             }
 
@@ -104,6 +159,7 @@ public final class RenameExecutor {
                     // still where it was, and a caller that goes on to send or
                     // delete it must not be told otherwise.
                     outcome.skipped += 1
+                    if isPrimary { fates[owner] = .stayed }
                     log.append(RenameLogEntry(
                         oldName: move.source.lastPathComponent,
                         newName: move.destination.lastPathComponent,
@@ -131,9 +187,15 @@ public final class RenameExecutor {
                 }
 
                 performed.append(.init(from: move.source, to: resolution.destination, createdDirectories: createdDirs))
+                movedSources.insert(move.source.standardizedFileURL.path)
                 // The resolved destination, not the planned one: under the
-                // "rename" policy the file is now "… (1).mkv".
-                if isPrimary { outcome.landed[owner] = resolution.destination }
+                // "rename" policy the file is now "… (1).mkv" — and that is
+                // the name the companions are rebuilt from.
+                if isPrimary {
+                    outcome.landed[owner] = resolution.destination
+                    fates[owner] = .landed(resolution.destination,
+                                           planned: move.destination)
+                }
                 outcome.succeeded += 1
                 log.append(RenameLogEntry(
                     oldName: move.source.lastPathComponent,
@@ -142,6 +204,7 @@ public final class RenameExecutor {
                 ))
             } catch {
                 outcome.failed += 1
+                if isPrimary { fates[owner] = .stayed }
                 log.append(RenameLogEntry(
                     oldName: move.source.lastPathComponent,
                     newName: move.destination.lastPathComponent,
@@ -317,6 +380,36 @@ public final class RenameExecutor {
     private struct Resolution {
         let destination: URL
         let replacesExisting: Bool
+    }
+
+    /// What an item's primary file did.
+    private enum PrimaryFate {
+        /// It is at `0` now. `planned` is the name it was going to have, so a
+        /// companion can tell whether the policy renamed it.
+        case landed(URL, planned: URL)
+        /// It did not move: skipped by the policy, or it failed.
+        case stayed
+    }
+
+    /// Rebuilds a companion's destination from the name its primary really
+    /// got, so a release does not come apart under the "rename" policy.
+    ///
+    /// The planner builds every companion name as the primary's stem plus
+    /// whatever followed it in the original — "Tenet (2020)" + ".en.srt" — so
+    /// swapping that prefix is enough, and the suffix (the language tag, the
+    /// "-poster") is carried through untouched. A name that does not start
+    /// with the planned stem is left alone rather than guessed at.
+    static func following(_ move: PlannedMove,
+                          primaryPlanned: URL, primaryActual: URL) -> PlannedMove {
+        let plannedStem = primaryPlanned.deletingPathExtension().lastPathComponent
+        let actualStem = primaryActual.deletingPathExtension().lastPathComponent
+        guard plannedStem != actualStem else { return move }
+        let name = move.destination.lastPathComponent
+        guard name.hasPrefix(plannedStem) else { return move }
+        var followed = move
+        followed.destination = primaryActual.deletingLastPathComponent()
+            .appendingPathComponent(actualStem + name.dropFirst(plannedStem.count))
+        return followed
     }
 
     /// Resolves the final destination honouring the conflict policy. Returns nil

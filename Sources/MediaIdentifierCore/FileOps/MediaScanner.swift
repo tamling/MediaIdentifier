@@ -49,6 +49,17 @@ public struct MediaScanner {
             options: [.skipsHiddenFiles]
         ) else { return [] }
 
+        // Which other videos in this folder have a longer name that starts
+        // with ours. A prefix rule alone makes "Film.Extended.en.srt" a
+        // companion of BOTH "Film.mkv" and "Film.Extended.mkv", so the same
+        // subtitle was planned into two places: the first move took it and
+        // the second failed with "no such file". The longer name wins,
+        // because it is the one the file was actually named after.
+        let longerVideoStems = entries
+            .filter { $0 != videoURL && VideoFileTypes.isVideo($0) }
+            .map { $0.deletingPathExtension().lastPathComponent }
+            .filter { $0.count > stem.count && $0.hasPrefix(stem) }
+
         var companions: [CompanionFile] = []
         for entry in entries {
             guard entry != videoURL, !isDirectory(entry) else { continue }
@@ -56,6 +67,8 @@ public struct MediaScanner {
             // Companion if its name equals the video stem or starts with it
             // (covers "Movie.en.srt", "Movie-poster.jpg", etc.).
             guard entryStem == stem || entryStem.hasPrefix(stem) else { continue }
+            guard !longerVideoStems.contains(where: { entryStem.hasPrefix($0) })
+            else { continue }
 
             let role = VideoFileTypes.role(for: entry)
             guard role != .other else { continue }
