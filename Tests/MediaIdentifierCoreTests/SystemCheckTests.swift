@@ -31,12 +31,26 @@ final class SystemCheckTests: XCTestCase {
         try super.tearDownWithError()
     }
 
+    /// Folder facts are now passed in rather than measured, so a test says
+    /// what the disk looks like instead of having to build one. The default
+    /// measures the real paths once, which is what the folder tests below
+    /// were always asking for.
     private func checks(_ settings: WebSettings,
                         ffmpeg: Bool = true,
                         secrets: Set<SecretKey> = [],
-                        probes: [ProbeSubject: ProbeResult] = [:]) -> [SystemCheck] {
-        SystemChecks.all(settings: settings, ffmpegAvailable: ffmpeg,
-                         secrets: secrets, probes: probes)
+                        probes: [ProbeSubject: ProbeResult] = [:],
+                        folders: [String: FolderFacts]? = nil) -> [SystemCheck] {
+        // reduce and not Dictionary(uniqueKeysWithValues:): two settings
+        // pointing at the same folder is an ordinary case and that
+        // initialiser traps on a duplicate key.
+        let facts = folders ?? [settings.sourceFolder, settings.moviesFolder,
+                                settings.seriesFolder]
+            .filter { !$0.isEmpty }
+            .reduce(into: [String: FolderFacts]()) { out, path in
+                out[path] = FolderFacts.measured(path)
+            }
+        return SystemChecks.all(settings: settings, ffmpegAvailable: ffmpeg,
+                                secrets: secrets, probes: probes, folders: facts)
     }
 
     private func lamp(_ list: [SystemCheck], _ id: String) -> SystemCheck? {

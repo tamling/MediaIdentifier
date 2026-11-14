@@ -114,6 +114,21 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
     private var _cancelDownload = false
     private var _queuedDownloads = 0
     private var _probes: [ProbeSubject: ProbeResult] = [:]
+    /// The lamps, as last worked out on the queue.
+    ///
+    /// Cached rather than computed on demand because the only caller is the
+    /// window's 500 ms drawing timer, and working them out means asking the
+    /// filesystem about every configured folder. On a dead network mount
+    /// that blocked the drawing thread in `stat` and froze the window — in
+    /// the state where the settings that would fix the path are unreachable.
+    private var _systemChecks: [SystemCheck] = []
+    private let folderInspector: FolderInspector
+    /// Where the lamps are worked out. Separate from `queue` so a long scan
+    /// cannot delay the lamp that says why the scan is failing.
+    private let lampQueue = DispatchQueue(label: "mediafin.lamps", qos: .utility)
+    /// Re-measures the folders even when the user does nothing, so an
+    /// unmounted drive turns the lamp red by itself.
+    private var lampTimer: DispatchSourceTimer?
     /// Commands accepted but not finished.
     ///
     /// Counted in `submit`, before the queue is even touched, because the
@@ -127,10 +142,19 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
     /// so instead of silently running on defaults.
     public let settingsProblem: String?
 
-    /// - Parameter watchInterval: how often the import folder is looked at
-    ///   when watching is on. Injectable so the tests do not wait.
-    public init(configDirectory: URL, watchInterval: TimeInterval = 15) {
+    /// - Parameters:
+    ///   - watchInterval: how often the import folder is looked at when
+    ///     watching is on. Injectable so the tests do not wait.
+    ///   - lampInterval: how often the folders behind the status lamps are
+    ///     re-measured. 0 switches the timer off, which is what the tests
+    ///     want: a timer firing mid-test is noise.
+    ///   - folderInspector: injectable so a test can make a probe block and
+    ///     prove that nothing waits for it.
+    public init(configDirectory: URL, watchInterval: TimeInterval = 15,
+                lampInterval: TimeInterval = 5,
+                folderInspector: FolderInspector = FolderInspector()) {
         self.watchInterval = max(1, watchInterval)
+        self.folderInspector = folderInspector
         self.configDirectory = configDirectory
         settingsStore = SettingsStore(directory: configDirectory)
         scheduleState = ScheduleStateStore(directory: configDirectory)
@@ -184,12 +208,33 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         queue.async { [weak self] in
             self?.updateWatchState()
             self?.updateScheduleState(.startup)
+            // The first measurement, so the panel has something true to show
+            // before anybody presses anything.
+            self?.refreshSystemChecks()
         }
+        startLampTimer(every: lampInterval)
     }
 
     deinit {
         watchTimer?.cancel()
         scheduleTimer?.cancel()
+        lampTimer?.cancel()
+    }
+
+    /// Re-measures the folders on a timer of its own.
+    ///
+    /// Its own timer and not `queue`, deliberately: a folder probe must not
+    /// queue behind a scan that is going to take an hour, or the lamp for
+    /// the drive that just went away would not turn red until the scan it is
+    /// breaking has finished. `refreshSystemChecks` only reads shared state
+    /// under the lock and writes one array under it, so it is safe here.
+    private func startLampTimer(every interval: TimeInterval) {
+        guard interval > 0 else { return }
+        let timer = DispatchSource.makeTimerSource(queue: lampQueue)
+        timer.schedule(deadline: .now() + interval, repeating: interval)
+        timer.setEventHandler { [weak self] in self?.refreshSystemChecks() }
+        timer.resume()
+        lampTimer = timer
     }
 
     // MARK: State the interface reads
@@ -249,6 +294,12 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         queue.async { [weak self] in
             guard let self else { return }
             self.execute(command)
+            // The lamps follow what just happened rather than waiting up to
+            // a whole timer period: changing the import folder and watching
+            // the lamp stay red for five seconds reads as "it did not take".
+            // On the lamp queue, so measuring a folder cannot extend the
+            // serial queue's own work.
+            self.lampQueue.async { [weak self] in self?.refreshSystemChecks() }
             if Self.isWork(command) {
                 self.lock.lock()
                 self._pendingWork = max(0, self._pendingWork - 1)
@@ -1597,25 +1648,47 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
 
     /// The lamps, worked out from what is on this machine right now plus the
     /// last answer each service gave.
+    /// The lamps. A read, never a measurement — see `_systemChecks`.
     public var systemChecks: [SystemCheck] {
+        lock.lock(); defer { lock.unlock() }
+        return _systemChecks
+    }
+
+    /// Works the lamps out and stores them. Must run on `queue` or on the
+    /// lamp timer's own tick, never on the thread that draws: it asks the
+    /// filesystem, and `FolderInspector` bounds that wait but does not
+    /// remove it.
+    private func refreshSystemChecks() {
         lock.lock()
         let probes = _probes
         let settings = _settings
         lock.unlock()
-        return SystemChecks.all(settings: settings,
-                                ffmpegAvailable: ffmpegAvailable,
-                                secrets: secretStore.configuredKeys(),
-                                probes: probes,
-                                // From the snapshot rather than recomputed:
-                                // this says whether the tick is actually
-                                // armed, which is the thing worth a lamp.
-                                nextScheduledRun: snapshot.nextScheduledRun)
+
+        let facts = folderInspector.facts(for: [
+            settings.sourceFolder, settings.moviesFolder, settings.seriesFolder,
+        ])
+        let checks = SystemChecks.all(settings: settings,
+                                      ffmpegAvailable: ffmpegAvailable,
+                                      secrets: secretStore.configuredKeys(),
+                                      probes: probes,
+                                      folders: facts,
+                                      // From the snapshot rather than
+                                      // recomputed: this says whether the
+                                      // tick is actually armed, which is the
+                                      // thing worth a lamp.
+                                      nextScheduledRun: snapshot.nextScheduledRun)
+        lock.lock(); _systemChecks = checks; lock.unlock()
     }
+
+    /// For tests: works the lamps out now, on the calling thread.
+    func refreshSystemChecksForTesting() { refreshSystemChecks() }
 
     private func record(_ subject: ProbeSubject, ok: Bool, detail: String) {
         lock.lock()
         _probes[subject] = ProbeResult(ok: ok, detail: detail)
         lock.unlock()
+        // A connection test exists to change a lamp, so the lamp changes now.
+        lampQueue.async { [weak self] in self?.refreshSystemChecks() }
     }
 
     /// Only for tests: proposals, without needing a scan and a real folder.

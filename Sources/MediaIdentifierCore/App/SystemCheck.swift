@@ -75,13 +75,25 @@ public enum ProbeSubject: String, Sendable, Equatable, CaseIterable {
 /// program: a status panel that lies is worse than no status panel.
 public enum SystemChecks {
 
+    /// - Parameter folders: what a probe found out about each configured
+    ///   path, keyed by the path. Passed in rather than measured here: this
+    ///   used to call `FileManager` directly, and the caller was the window's
+    ///   own 500 ms timer — so a dead CIFS mount blocked the drawing thread
+    ///   in `stat` for sixty seconds a go and froze the window shut. A path
+    ///   with no entry reads as unreachable, which is the truthful answer to
+    ///   "can I use this folder right now".
+    ///
+    ///   The side effect is that this function now touches nothing at all:
+    ///   no filesystem, no clock it did not get given, no settings
+    ///   singleton. Every lamp below can be produced from values, which is
+    ///   how a status panel ought to be testable.
     public static func all(
         settings: WebSettings,
         ffmpegAvailable: Bool,
         secrets: Set<SecretKey>,
         probes: [ProbeSubject: ProbeResult],
+        folders: [String: FolderFacts] = [:],
         nextScheduledRun: Date? = nil,
-        fileManager: FileManager = .default,
         now: Date = Date()
     ) -> [SystemCheck] {
         var checks: [SystemCheck] = []
@@ -94,7 +106,7 @@ public enum SystemChecks {
                                     + "durchsuchen.",
                                 "No folder chosen yet — without one there is nothing to "
                                     + "look through."),
-                             fileManager: fileManager))
+                             facts: folders[settings.sourceFolder]))
 
         // With a server configured, the local library folders are not where
         // the library lives, so demanding them would be a red lamp for a
@@ -109,14 +121,16 @@ public enum SystemChecks {
                                 "Kein Ordner gewählt — Filme werden dort umbenannt, wo "
                                     + "sie liegen.",
                                 "No folder chosen — films are renamed where they lie."),
-                             missingState: .warning, fileManager: fileManager))
+                             missingState: .warning,
+                             facts: folders[settings.moviesFolder]))
         checks.append(folder(id: "series", name: Text.s("Serien", "Series"),
                              path: settings.seriesFolder,
                              missingDetail: Text.s(
                                 "Kein Ordner gewählt — Serien werden dort umbenannt, wo "
                                     + "sie liegen.",
                                 "No folder chosen — series are renamed where they lie."),
-                             missingState: .warning, fileManager: fileManager))
+                             missingState: .warning,
+                             facts: folders[settings.seriesFolder]))
 
         checks.append(SystemCheck(
             id: "ffmpeg", name: "FFmpeg",
@@ -243,29 +257,45 @@ public enum SystemChecks {
                "Set up, but not checked yet.")
     }
 
-    private static func folder(id: String, name: String, path: String,
-                               missingDetail: String,
-                               missingState: SystemCheck.State = .failed,
-                               fileManager: FileManager) -> SystemCheck {
+    static func folder(id: String, name: String, path: String,
+                       missingDetail: String,
+                       missingState: SystemCheck.State = .failed,
+                       facts: FolderFacts?) -> SystemCheck {
         guard !path.isEmpty else {
             return SystemCheck(id: id, name: name, state: missingState,
                                detail: missingDetail)
         }
-        var isDirectory: ObjCBool = false
-        let exists = fileManager.fileExists(atPath: path, isDirectory: &isDirectory)
-        guard exists, isDirectory.boolValue else {
+        // No entry means no probe has come back for this path, which is the
+        // same situation as one that timed out: nothing is known, and a lamp
+        // that shows the last known green about a folder that went away is
+        // the failure this panel exists to prevent.
+        let facts = facts ?? .unreachable
+        guard !facts.timedOut else {
+            // Distinct from "does not exist". The drive IS mounted; it is
+            // not answering, and no setting fixes that.
+            return SystemCheck(id: id, name: name, state: .failed,
+                               detail: Text.s(
+                                "\(path) antwortet nicht. Ein eingebundenes "
+                                    + "Netzlaufwerk, das weg ist, braucht einen "
+                                    + "Neustart der Einbindung — die Oberfläche "
+                                    + "wartet nicht darauf.",
+                                "\(path) is not answering. A mounted network share "
+                                    + "that has gone away needs remounting — the "
+                                    + "interface does not wait for it."))
+        }
+        guard facts.exists, facts.isDirectory else {
             // Set but not there is always red, whatever the field: this is
             // the unmounted-drive case, and it is the one where carrying on
             // silently does real damage.
             return SystemCheck(id: id, name: name, state: .failed,
-                               detail: exists
+                               detail: facts.exists
                                    ? Text.s("\(path) ist kein Ordner.",
                                             "\(path) is not a folder.")
                                    : Text.s(
                                     "\(path) gibt es nicht — Laufwerk nicht eingebunden?",
                                     "\(path) does not exist — drive not mounted?"))
         }
-        guard fileManager.isWritableFile(atPath: path) else {
+        guard facts.isWritable else {
             return SystemCheck(id: id, name: name, state: .failed,
                                detail: Text.s("\(path) ist nicht beschreibbar.",
                                               "\(path) is not writable."))

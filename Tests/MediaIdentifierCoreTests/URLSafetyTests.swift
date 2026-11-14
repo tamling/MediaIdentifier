@@ -115,7 +115,7 @@ final class URLSafetyTests: XCTestCase {
         var settings = WebSettings(sourceFolder: FileManager.default.temporaryDirectory.path)
         settings.jellyfinBaseURL = "http://jellyfin.example.com"
         let list = SystemChecks.all(settings: settings, ffmpegAvailable: true,
-                                    secrets: [], probes: [:])
+                                    secrets: [], probes: [:], folders: [:])
         XCTAssertEqual(list.first { $0.id == "encryption" }?.state, .warning)
     }
 }
