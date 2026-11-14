@@ -101,6 +101,13 @@ public struct RenamePlanner {
         return mediaFile.companions.compactMap { companion -> PlannedMove? in
             // The release .nfo is not moved anywhere: see companionDeletions.
             guard companion.role != .nfo else { return nil }
+            // Nor is the sample. It stays where it is rather than being
+            // deleted — it is a video file, and leaving it is enough to keep
+            // it out of the library. A comment here has claimed since the
+            // beginning that samples "are kept but not renamed onto the
+            // media name"; nothing implemented it, and the file went into
+            // the library as "Fargo - S05E10.-sample.mkv".
+            guard companion.role != .sample else { return nil }
             let ext = companion.url.pathExtension
             let companionStem = companion.url.deletingPathExtension().lastPathComponent
 

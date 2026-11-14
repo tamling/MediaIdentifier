@@ -85,6 +85,10 @@ public struct MediaScanner {
 
         var result: [URL] = []
         for case let fileURL as URL in enumerator where VideoFileTypes.isVideo(fileURL) {
+            // Found by looking, not pointed at: see FolderScan.videoFiles.
+            // A sample handed over directly is still honoured, because then
+            // somebody meant that file.
+            guard !VideoFileTypes.isSample(fileURL) else { continue }
             result.append(fileURL)
         }
         return result.sorted { $0.path < $1.path }

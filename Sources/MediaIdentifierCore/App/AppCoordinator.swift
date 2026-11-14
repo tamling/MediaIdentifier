@@ -59,6 +59,10 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
             var found: [URL] = []
             for case let url as URL in enumerator {
                 guard VideoFileTypes.isVideo(url) else { continue }
+                // A release sample is an excerpt, not a film. Proposing it
+                // as one put a near-duplicate in the library and, worse,
+                // collided with the real file so that neither was renamed.
+                guard !VideoFileTypes.isSample(url) else { continue }
                 found.append(url)
                 if found.count >= maximumFiles { break }
             }

@@ -380,6 +380,16 @@ jobs:
           # A real file: the scanner reads names, not contents, but it does
           # insist the file is there.
           : > "$ready/downloads/Tenet.2020.1080p.BluRay.x264-GROUP.mkv"
+          # The release sample, and this is the one that bit. A sample is a
+          # video file, so Scan proposed it as a film of its own; its name
+          # parses to the same film, so both rows wanted one destination; the
+          # pair was refused as a duplicate and NEITHER was renamed. One
+          # proposal below, not two, is the whole assertion.
+          : > "$ready/downloads/Tenet.2020.1080p.BluRay.x264-GROUP-sample.mkv"
+          # And a film that merely has the word in its title, which must
+          # still be found: making a sample of a film is the worse mistake,
+          # because the row simply is not there and nothing says why.
+          : > "$ready/downloads/Free.Samples.2012.1080p.BluRay.x264-GROUP.mkv"
           # printf and not a heredoc: a heredoc terminator has to sit at
           # column zero, which ends the YAML block scalar it is written in.
           printf '{"sourceFolder":"%s","identification":"offline","language":"en"}\n' \
@@ -474,6 +484,24 @@ jobs:
           echo "proposals after pressing Scan: ${found:-none}"
           test "${found:-0}" -ge 1 || {
             echo "FAIL: pressing Scan found nothing in a folder with a film in it"
+            exit 1
+          }
+          # Two films and one sample in that folder: exactly two rows.
+          test "${found:-0}" -eq 2 || {
+            echo "FAIL: expected 2 proposals (Tenet and Free Samples), saw ${found:-0}"
+            echo "      3 means the sample was proposed as a film of its own;"
+            echo "      1 means Free.Samples.2012 was mistaken for a sample."
+            grep -E "^(proposals|destination):" ready.log || true
+            exit 1
+          }
+          if grep -qiE "^destination: .*sample\.mkv$" ready.log; then
+            echo "FAIL: a sample is being moved into the library"
+            grep "^destination:" ready.log
+            exit 1
+          fi
+          grep -q "Free.Samples" ready.log || {
+            echo "FAIL: a film with 'Samples' in its title was taken for a sample"
+            grep "^destination:" ready.log || true
             exit 1
           }
 

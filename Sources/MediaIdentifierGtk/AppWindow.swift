@@ -1352,6 +1352,23 @@ final class AppWindow {
             deletionNote = note
         }
 
+        // The sample is not deleted and not moved, so the row says where it
+        // stays. Computed from the companions rather than carried on the
+        // item: the engine needs nothing for a file it does not touch.
+        let samples = item.mediaFile.companions
+            .filter { $0.role == .sample }
+            .map(\.url.lastPathComponent)
+        if !samples.isEmpty {
+            let kept = Self.label(
+                Text.s("Bleibt liegen: \(samples.joined(separator: ", ")) "
+                           + "— Ausschnitt, nicht der Film",
+                       "Left where it is: \(samples.joined(separator: ", ")) "
+                           + "— an excerpt, not the film"),
+                classes: "mf-dim")
+            gtk_label_set_ellipsize(Gtk.label(kept), PANGO_ELLIPSIZE_END)
+            gtk_box_pack_start(Gtk.box(text), kept, 0, 0, 0)
+        }
+
         if let conflict = item.conflict {
             let warning = Self.label(Self.conflictText(conflict), classes: "mf-warn")
             gtk_box_pack_start(Gtk.box(text), warning, 0, 0, 0)

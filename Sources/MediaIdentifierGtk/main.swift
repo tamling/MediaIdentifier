@@ -264,6 +264,17 @@ case .pressScan:
             print("lamp bar: \(mainWindow.lampBarText)")
             print("middle: \(mainWindow.emptyListText)")
             print("proposals: \(coordinator.items.count)")
+            // Off the rows, like the drop mode does. Without these the
+            // assertions about what Scan proposed have nothing to read and
+            // pass by finding nothing, which is the failure mode this whole
+            // mode exists to stop.
+            for destination in mainWindow.destinationTexts {
+                print("destination: \(destination)")
+            }
+            print("deletion notes: \(mainWindow.deletionTexts.count)")
+            for note in mainWindow.deletionTexts {
+                print("deletes: \(note)")
+            }
             if status.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 Pending.failure = "pressing Scan left the window saying nothing"
             }
