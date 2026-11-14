@@ -25,6 +25,9 @@ jobs:
           set -euo pipefail
           python3 -c 'import yaml' 2>/dev/null || pip install --quiet pyyaml
           python3 tools/check-workflows.py .github/workflows/*.yml
+          # Pango markup is XML and the text going into it is filenames. One
+          # place may produce it, and that place escapes.
+          ./tools/check-markup.sh
 
   test:
     name: Core tests
@@ -198,6 +201,23 @@ jobs:
             echo "FAIL: expected at least 5 download tests, saw $ran"
             exit 1
           }
+      # Not a gate: it reports, it does not fail. Swift 6's strict
+      # concurrency is where the sync-over-async in the coordinator will
+      # become a real problem — `runAndWaitReturning` waits on a semaphore
+      # for a Task, which deadlocks if the cooperative pool is starved. It
+      # is stable today because the work underneath is URLSession's, on
+      # URLSession's own threads. This step is how we find out when that
+      # stops being true, rather than finding out from a hung window.
+      - name: Strict concurrency, as a report
+        shell: bash
+        continue-on-error: true
+        run: |
+          set -uo pipefail
+          swift build -Xswiftc -strict-concurrency=complete 2>&1 \
+            | tee strict.log | tail -40 || true
+          count=$(grep -cE "warning:.*(concurren|Sendable|isolated|data race)" \
+                  strict.log || true)
+          echo "strict-concurrency warnings: ${count:-0}"
       # Runs the real binary: that --once comes back, that --watch stays up
       # and stops on SIGTERM, and that a bare invocation refuses rather than
       # silently doing nothing.

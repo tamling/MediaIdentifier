@@ -607,7 +607,40 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
     /// overload taking a download progress, so the compiler did not report a
     /// missing function but a type mismatch two call sites away.
     static func describe(_ error: Error) -> String {
-        (error as? LocalizedError)?.errorDescription ?? String(describing: error)
+        let text = (error as? LocalizedError)?.errorDescription
+            ?? String(describing: error)
+        return redacting(text)
+    }
+
+    /// Strips anything that looks like a credential out of a message.
+    ///
+    /// TMDb's v3 API is designed to carry its key as a query parameter, and
+    /// `URLError` keeps the failing URL in its userInfo. Today
+    /// `errorDescription` is used first and does not include the URL — but
+    /// that is a property of URLError's LocalizedError conformance, not
+    /// something this code asked for, and the fallback branch above prints
+    /// userInfo and everything in it. The message goes into
+    /// `rename-log.json`, which is a file people paste into bug reports.
+    ///
+    /// Done by pattern and not by remembering to redact at each call site,
+    /// for the same reason the path sanitiser moved to the boundary.
+    static func redacting(_ text: String) -> String {
+        var cleaned = text
+        for name in ["api_key", "access_token", "token", "key", "password"] {
+            // name=value up to the next separator. Non-greedy and anchored
+            // on the separator set so a URL with more parameters after it
+            // keeps them.
+            cleaned = cleaned.replacingOccurrences(
+                of: "(?i)\\b\(name)=[^&\\s\"'<>)\\]]+",
+                with: "\(name)=<redacted>",
+                options: .regularExpression)
+        }
+        // A bearer token in a quoted header dump.
+        cleaned = cleaned.replacingOccurrences(
+            of: "(?i)Bearer\\s+[A-Za-z0-9._~+/-]+=*",
+            with: "Bearer <redacted>",
+            options: .regularExpression)
+        return cleaned
     }
 
     /// The raw reason, including the numeric code, because a bare
@@ -2264,6 +2297,26 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         semaphore.wait()
     }
 
+    /// Runs async work from the serial queue and waits for it.
+    ///
+    /// Sync-over-async, which is the shape Swift's cooperative pool does not
+    /// like: a `Task` that cannot get a thread while the waiter holds one is
+    /// a deadlock. It is stable here for one reason, and the reason is worth
+    /// knowing before anyone adds a caller — **every piece of work passed in
+    /// runs on URLSession's own threads, not on the cooperative pool.** The
+    /// pool is only used for the continuation.
+    ///
+    /// So: do not pass work that is itself CPU-bound `async` code, and do
+    /// not nest one of these inside another. If the coordinator ever needs
+    /// that, the answer is to make command execution async rather than to
+    /// make this cleverer. The CI step named "Strict concurrency, as a
+    /// report" is what will say when that day has come.
+    ///
+    /// Left as it is deliberately. Making the whole serial-queue
+    /// architecture async today would be a large change against a risk
+    /// nothing in this program can currently trigger — and the practical
+    /// harm that did exist (hours of uninterruptible timeouts holding the
+    /// queue) is gone, through a cancel flag and a give-up rule instead.
     private func runAndWaitReturning<T: Sendable>(
         _ work: @escaping @Sendable () async -> T
     ) -> T? {

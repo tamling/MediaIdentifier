@@ -146,8 +146,25 @@ enum Gtk {
         gtk_label_set_text(label(widget), text)
     }
 
-    static func setMarkup(_ widget: UnsafeMutablePointer<GtkWidget>, _ markup: String) {
-        gtk_label_set_markup(label(widget), markup)
+    /// Sets a label's text with emphasis, escaping the text.
+    ///
+    /// There is deliberately no function here that takes a prepared markup
+    /// string. Pango markup is XML, the text that would be interpolated into
+    /// it is filenames, and an unescaped `&` does not merely look wrong:
+    /// Pango rejects the whole string and the label renders EMPTY, losing
+    /// the one thing the row existed to show.
+    ///
+    /// The previous version was `setMarkup(widget, markup)` — unused, and
+    /// the first thing anybody wanting bold text would find. It took the
+    /// string, so the escaping was the caller's to remember. This takes the
+    /// text, so there is nothing to remember, and `tools/check-markup.sh`
+    /// fails the build if `gtk_label_set_markup` is ever called anywhere
+    /// else. A rule a script enforces beats a rule in a comment.
+    static func setStyledText(_ widget: UnsafeMutablePointer<GtkWidget>,
+                              _ text: String,
+                              weight: String? = nil, size: String? = nil) {
+        gtk_label_set_markup(label(widget),
+                             PangoMarkup.span(text, size: size, weight: weight))
     }
 
     /// The folder a chooser is showing, or "" when none is set.
