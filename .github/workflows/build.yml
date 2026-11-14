@@ -525,6 +525,174 @@ jobs:
             exit 1
           }
 
+      # DAST, the half that can be done here. The static review of these
+      # inputs was derived by reading, and reading is weaker: the only place
+      # the binary exists is this runner, so the only place it can be
+      # attacked is this runner.
+      - name: Hostile file names, through the real window
+        shell: bash
+        env:
+          NO_AT_BRIDGE: "1"
+          GTK_A11Y: none
+        run: |
+          set -euo pipefail
+          abuse="$(mktemp -d)"
+          mkdir -p "$abuse/config"
+          ./tools/abuse-filenames.sh "$abuse/downloads"
+          printf '{"sourceFolder":"%s","moviesFolder":"%s",' \
+            "$abuse/downloads" "$abuse/library" > "$abuse/config/settings.json"
+          printf '"identification":"offline","language":"en"}\n' \
+            >> "$abuse/config/settings.json"
+          mkdir -p "$abuse/library"
+
+          # Exit code first. A crash here is the whole point of the step:
+          # two releases went out before a dropped file was known to take
+          # the window down with it.
+          timeout 120 xvfb-run -a --server-args="-screen 0 1280x900x24" \
+            env MEDIAFIN_CONFIG_DIR="$abuse/config" \
+            .build/release/mediafin-gtk --press-scan 2>&1 | tee abuse.log
+          status=${PIPESTATUS[0]}
+          echo "exit status: $status"
+          test "$status" -eq 0 || {
+            echo "FAIL: the window did not survive the hostile folder"
+            exit 1
+          }
+
+          # It must propose something: a run that refuses everything looks
+          # exactly like a run that crashed early, from the outside.
+          found="$(sed -n 's/^proposals: \([0-9]*\)$/\1/p' abuse.log)"
+          echo "proposals: ${found:-none}"
+          test "${found:-0}" -ge 5 || {
+            echo "FAIL: only ${found:-0} proposals from the hostile folder;"
+            echo "      something is refusing names it should be handling"
+            exit 1
+          }
+
+          # Every destination inside the library, absolute, and no component
+          # over 255 bytes. Read off the row's label, not off the engine.
+          python3 - abuse.log "$abuse/library" <<'CHECK'
+          import sys, unicodedata
+          log, library = sys.argv[1], sys.argv[2]
+          rows = [l.split("destination: ", 1)[1].rstrip("\n")
+                  for l in open(log, encoding="utf-8", errors="replace")
+                  if l.startswith("destination: ")]
+          if not rows:
+              sys.exit("FAIL: no destination lines to check")
+          bad = []
+          for row in rows:
+              path = row.removeprefix("\u2192 ").strip()
+              if not path.startswith("/"):
+                  bad.append(("not absolute", path))
+              if ".." in path.split("/"):
+                  bad.append(("climbs out", path))
+              if not path.startswith(library + "/"):
+                  bad.append(("outside the library", path))
+              for part in path.split("/"):
+                  if len(part.encode("utf-8")) > 255:
+                      bad.append(("component over 255 bytes", part[:60]))
+                  if any(ord(c) < 0x20 or ord(c) == 0x7f for c in part):
+                      bad.append(("control character", repr(part)[:60]))
+          for why, what in bad:
+              print(f"FAIL: {why}: {what}")
+          print(f"checked {len(rows)} destinations")
+          sys.exit(1 if bad else 0)
+          CHECK
+
+          # And the same folder handed over as a drop, which is the path that
+          # has crashed before.
+          timeout 120 xvfb-run -a --server-args="-screen 0 1280x900x24" \
+            env MEDIAFIN_CONFIG_DIR="$abuse/config" \
+            .build/release/mediafin-gtk --drop "$abuse/downloads" 2>&1 \
+            | tee abuse-drop.log
+          test "${PIPESTATUS[0]}" -eq 0 || {
+            echo "FAIL: dropping the hostile folder took the window down"
+            exit 1
+          }
+
+      # A model server that answers badly on purpose: a 400-character title,
+      # a title of "../../etc", control characters, 8 MB of JSON, truncated
+      # JSON, an empty body, a Content-Length that lies, a reply after 45
+      # seconds. Everything the review said about this path was derived by
+      # reading; this is the half that runs.
+      - name: A hostile model server, through the real window
+        shell: bash
+        env:
+          NO_AT_BRIDGE: "1"
+          GTK_A11Y: none
+        run: |
+          set -euo pipefail
+          nohup python3 tools/hostile-llm.py 18099 > hostile.log 2>&1 &
+          for _ in $(seq 1 30); do
+            curl -fsS -m 2 http://127.0.0.1:18099/v1/models > /dev/null && break
+            sleep 0.5
+          done
+          curl -fsS -m 2 http://127.0.0.1:18099/v1/models > /dev/null || {
+            echo "FAIL: the hostile server did not come up"
+            cat hostile.log || true
+            exit 1
+          }
+
+          hostile="$(mktemp -d)"
+          mkdir -p "$hostile/config" "$hostile/downloads" "$hostile/library"
+          for n in 1 2 3 4 5 6 7 8 9; do
+            : > "$hostile/downloads/Film.200$n.1080p.BluRay.x264-GRP.mkv"
+          done
+          printf '{"sourceFolder":"%s","moviesFolder":"%s",' \
+            "$hostile/downloads" "$hostile/library" \
+            > "$hostile/config/settings.json"
+          printf '"identification":"localLLM",' >> "$hostile/config/settings.json"
+          printf '"localLLMBaseURL":"http://127.0.0.1:18099",' \
+            >> "$hostile/config/settings.json"
+          printf '"localLLMModel":"hostile","language":"en"}\n' \
+            >> "$hostile/config/settings.json"
+
+          # 180 s: the server sleeps 45 on one reply, and the engine's own
+          # request timeout is 30. If this needs the full timeout the run is
+          # not giving up the way M1.4 says it does.
+          timeout 180 xvfb-run -a --server-args="-screen 0 1280x900x24" \
+            env MEDIAFIN_CONFIG_DIR="$hostile/config" \
+            .build/release/mediafin-gtk --press-scan 2>&1 | tee hostile-run.log
+          status=${PIPESTATUS[0]}
+          echo "exit status: $status"
+          pkill -f hostile-llm.py || true
+          test "$status" -eq 0 || {
+            echo "FAIL: the window did not survive the hostile model server"
+            exit 1
+          }
+
+          # How many replies it actually asked for. M1.4 gives up after
+          # three in a row that say nothing, so this must not be nine.
+          asked=$(grep -c "^hostile-llm: reply" hostile.log || true)
+          echo "requests the engine made: $asked"
+          test "$asked" -le 9 || {
+            echo "FAIL: it asked $asked times for 9 files"
+            exit 1
+          }
+
+          # Nothing escaped, whatever the server said.
+          python3 - hostile-run.log "$hostile/library" <<'CHECK'
+          import sys
+          log, library = sys.argv[1], sys.argv[2]
+          rows = [l.split("destination: ", 1)[1].rstrip("\n")
+                  for l in open(log, encoding="utf-8", errors="replace")
+                  if l.startswith("destination: ")]
+          bad = []
+          for row in rows:
+              path = row.removeprefix("\u2192 ").strip()
+              if not path.startswith(library + "/"):
+                  bad.append(("outside the library", path))
+              if ".." in path.split("/"):
+                  bad.append(("climbs out", path))
+              for part in path.split("/"):
+                  if len(part.encode("utf-8")) > 255:
+                      bad.append(("component over 255 bytes", str(len(part))))
+                  if any(ord(c) < 0x20 or ord(c) == 0x7f for c in part):
+                      bad.append(("control character", repr(part)[:60]))
+          for why, what in bad:
+              print(f"FAIL: {why}: {what}")
+          print(f"checked {len(rows)} destinations against a hostile server")
+          sys.exit(1 if bad else 0)
+          CHECK
       # Before the checks that can fail: the rendered window is the most
       # useful thing this job produces, and a later failing assertion must not
       # be what stops it being readable.

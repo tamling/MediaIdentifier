@@ -11,7 +11,10 @@ So this walks the YAML with a loader that treats a duplicate key as an error,
 which is the one thing the permissive load cannot tell you.
 """
 
+import os
+import subprocess
 import sys
+import tempfile
 
 import yaml
 
@@ -39,6 +42,42 @@ StrictLoader.add_constructor(
     yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, no_duplicates)
 
 
+def shell_parses(path, document):
+    """Runs `bash -n` over every `run:` script in the file.
+
+    A workflow whose shell does not parse fails in exactly the same way as
+    one whose YAML does not: the job dies before it does anything, and the
+    only clue is in a log nobody reads until the release is late. It is
+    cheap to rule out here, where the error names the step.
+
+    The reason it is worth having: these scripts are written inside a YAML
+    block scalar, so every heredoc terminator sits at an indentation that
+    looks wrong and has to be right, and `set -e` interacts with `&&` in a
+    way that is easy to get backwards. One of those cost a red build.
+    """
+    ok = True
+    for job_name, job in (document.get("jobs") or {}).items():
+        for index, step in enumerate(job.get("steps") or []):
+            script = step.get("run")
+            if not script:
+                continue
+            name = step.get("name") or f"step {index + 1}"
+            with tempfile.NamedTemporaryFile("w", suffix=".sh",
+                                             delete=False) as handle:
+                handle.write(script)
+                temporary = handle.name
+            try:
+                result = subprocess.run(["bash", "-n", temporary],
+                                        capture_output=True, text=True)
+            finally:
+                os.unlink(temporary)
+            if result.returncode != 0:
+                detail = result.stderr.strip().replace(temporary, name)
+                print(f"FAIL  : {path}: {job_name} / {name}: {detail}")
+                ok = False
+    return ok
+
+
 def check(path):
     with open(path, encoding="utf-8") as handle:
         try:
@@ -49,7 +88,9 @@ def check(path):
     if not isinstance(document, dict) or "jobs" not in document:
         print(f"FAIL  : {path}: no jobs")
         return False
-    print(f"ok    : {path}: {len(document['jobs'])} job(s)")
+    if not shell_parses(path, document):
+        return False
+    print(f"ok    : {path}: {len(document['jobs'])} job(s), shell parses")
     return True
 
 

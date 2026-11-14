@@ -108,13 +108,16 @@ final class StateFilePermissionTests: XCTestCase {
     /// claiming to be recorded while the disk knew nothing — so Undo was
     /// offered and then was not there after a restart.
     func testAJournalThatCannotBeWrittenSaysSo() throws {
-        let readOnly = directory.appendingPathComponent("locked")
-        try fm.createDirectory(at: readOnly, withIntermediateDirectories: true)
-        try fm.setAttributes([.posixPermissions: 0o500], ofItemAtPath: readOnly.path)
-        defer { try? fm.setAttributes([.posixPermissions: 0o700],
-                                      ofItemAtPath: readOnly.path) }
+        // A FILE where the directory should be, not a read-only directory.
+        // The Linux tests run as root in a container, and root ignores mode
+        // bits — a 0500 directory is writable to it, so the first version of
+        // this test asserted a failure that never happened. ENOTDIR binds
+        // root as well.
+        let blocker = directory.appendingPathComponent("locked")
+        try fm.createDirectory(at: directory, withIntermediateDirectories: true)
+        try Data("not a directory".utf8).write(to: blocker)
 
-        let journal = RenameJournal(url: readOnly.appendingPathComponent("j.json"))
+        let journal = RenameJournal(url: blocker.appendingPathComponent("j.json"))
         XCTAssertNil(journal.lastWriteFailure, "it complained before writing anything")
         journal.record(RenameTransaction(moves: [
             .init(from: URL(fileURLWithPath: "/a"), to: URL(fileURLWithPath: "/b")),
@@ -136,17 +139,15 @@ final class StateFilePermissionTests: XCTestCase {
     /// beside the rename whose undo record just failed to reach the disk.
     func testTheHistorySaysTheUndoRecordDidNotReachTheDisk() throws {
         let work = directory.appendingPathComponent("work")
-        let locked = directory.appendingPathComponent("locked")
         try fm.createDirectory(at: work, withIntermediateDirectories: true)
-        try fm.createDirectory(at: locked, withIntermediateDirectories: true)
         let film = work.appendingPathComponent("Tenet.2020.1080p.mkv")
         try Data("x".utf8).write(to: film)
-        try fm.setAttributes([.posixPermissions: 0o500], ofItemAtPath: locked.path)
-        defer { try? fm.setAttributes([.posixPermissions: 0o700],
-                                      ofItemAtPath: locked.path) }
+        // See above: a file in the way, not a mode. Root ignores modes.
+        let blocker = directory.appendingPathComponent("locked")
+        try Data("not a directory".utf8).write(to: blocker)
 
         let log = RenameLog(url: work.appendingPathComponent("log.json"))
-        let journal = RenameJournal(url: locked.appendingPathComponent("j.json"))
+        let journal = RenameJournal(url: blocker.appendingPathComponent("j.json"))
         let plan = RenamePlanner().makePlan(
             for: [MediaScanner().mediaFile(for: film)],
             outputRoot: work, libraryRoot: work)
