@@ -308,7 +308,6 @@ case let .drop(paths):
     let handOver: @convention(c) (UnsafeMutableRawPointer?) -> gboolean = { _ in
         mainWindow.addDropped(Pending.dropPaths.map { URL(fileURLWithPath: $0) })
         let report: @convention(c) (UnsafeMutableRawPointer?) -> gboolean = { _ in
-            defer { gtk_main_quit() }
             mainWindow.refresh()
             print("proposals: \(coordinator.items.count)")
             for destination in mainWindow.destinationTexts {
@@ -328,9 +327,35 @@ case let .drop(paths):
                 print("keeps: \(note)")
             }
             print("status: \(mainWindow.statusText)")
+            // The tick box, pressed through the widget and then read back
+            // out of the engine. The ticks used to live nowhere but the
+            // widget, so an exclusion was lost the moment the list was
+            // rebuilt and the file was renamed anyway. Asserted here rather
+            // than in a unit test because only the widget can be pressed.
+            print("ticked rows: \(mainWindow.tickedRowCount)")
+            print("engine ready: \(coordinator.snapshot.ready)")
             if coordinator.items.isEmpty {
                 Pending.failure = "the dropped files produced no proposal"
             }
+            // The press, and then a second tick of the loop before reading
+            // the engine: the command goes onto the coordinator's serial
+            // queue, so reading straight afterwards reads the old answer.
+            // Which is how the first version of this check reported
+            // "ticked rows: 1, engine ready: 2" and looked like a bug.
+            mainWindow.pressRowCheck(at: 0)
+            let afterUntick: @convention(c) (UnsafeMutableRawPointer?) -> gboolean = { _ in
+                defer { gtk_main_quit() }
+                mainWindow.refresh()
+                print("after untick, ticked rows: \(mainWindow.tickedRowCount)")
+                print("after untick, engine ready: \(coordinator.snapshot.ready)")
+                if mainWindow.tickedRowCount != coordinator.snapshot.ready {
+                    Pending.failure = "the window shows "
+                        + "\(mainWindow.tickedRowCount) ticked rows and the engine "
+                        + "says \(coordinator.snapshot.ready) are ready"
+                }
+                return Gtk.sourceRemove
+            }
+            g_timeout_add(1000, afterUntick, nil)
             return Gtk.sourceRemove
         }
         g_timeout_add(4000, report, nil)

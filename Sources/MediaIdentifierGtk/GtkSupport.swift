@@ -239,6 +239,31 @@ enum Gtk {
                               payload, release, GConnectFlags(rawValue: 0))
     }
 
+    /// A tick box toggled. The same ownership dance as `onClick`; a
+    /// GtkCheckButton emits "toggled", and it emits it for a programmatic
+    /// `gtk_toggle_button_set_active` as well, which is why the caller needs
+    /// a way to tell its own seeding apart from a press.
+    static func onToggled<Owner: AnyObject>(
+        _ widget: UnsafeMutablePointer<GtkWidget>,
+        _ owner: Owner,
+        _ action: @escaping (Owner) -> Void
+    ) {
+        let payload = Unmanaged.passRetained(Action(owner: owner, action: action)).toOpaque()
+        let handler: @convention(c) (UnsafeMutablePointer<GtkWidget>?,
+                                     UnsafeMutableRawPointer?) -> Void = { _, data in
+            guard let data else { return }
+            Unmanaged<Action>.fromOpaque(data).takeUnretainedValue().run()
+        }
+        let release: @convention(c) (UnsafeMutableRawPointer?, UnsafeMutablePointer<GClosure>?)
+            -> Void = { data, _ in
+                guard let data else { return }
+                Unmanaged<Action>.fromOpaque(data).release()
+            }
+        g_signal_connect_data(object(widget), "toggled",
+                              unsafeBitCast(handler, to: GCallback.self),
+                              payload, release, GConnectFlags(rawValue: 0))
+    }
+
     /// A menu item chosen. The same ownership dance as `onClick`; menu items
     /// emit "activate" rather than "clicked".
     static func onActivate<Owner: AnyObject>(

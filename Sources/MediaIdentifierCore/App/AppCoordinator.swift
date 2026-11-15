@@ -133,6 +133,14 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
     /// scans so a Stop pressed before the run starts is not thrown away as
     /// "nothing is running".
     private var _queuedRenames = 0
+    /// The source paths the user has unticked.
+    ///
+    /// Kept by path rather than by id because a rescan builds new items with
+    /// new ids. Without this, a drop, a watch poll or a scheduled scan while
+    /// the window was open replaced the plan and every exclusion with it —
+    /// and the next press of Umbenennen moved the files the user had taken
+    /// out on purpose.
+    private var _excludedPaths: Set<String> = []
     private var _probes: [ProbeSubject: ProbeResult] = [:]
     /// Set only by the test hook below.
     private var _providerOverride: MetadataProvider?
@@ -734,7 +742,7 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
                                       settings: settings)
         let plan = proposed.items
 
-        lock.lock(); _items = plan; lock.unlock()
+        lock.lock(); _items = applyingExclusions(to: plan); lock.unlock()
         // Read out before `update`, which takes the same non-recursive lock.
         let identification = takeIdentificationNote()
         update {
@@ -893,7 +901,7 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         // collision worth warning about, and checking the new ones alone
         // would miss it.
         lock.lock()
-        _items = Self.markingConflicts(in: _items + added)
+        _items = applyingExclusions(to: Self.markingConflicts(in: _items + added))
         let total = _items.count
         lock.unlock()
 
@@ -1169,7 +1177,7 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         let plan = Self.markingConflicts(in: read.items)
         let unreadable = read.unreadable
 
-        lock.lock(); _items = plan; lock.unlock()
+        lock.lock(); _items = applyingExclusions(to: plan); lock.unlock()
         update {
             $0.busy = false
             $0.convertStatus = nil
@@ -1422,6 +1430,8 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         lock.lock()
         if let index = _items.firstIndex(where: { $0.id == id }) {
             _items[index].isAccepted = accepted
+            let path = _items[index].mediaFile.url.standardizedFileURL.path
+            if accepted { _excludedPaths.remove(path) } else { _excludedPaths.insert(path) }
         }
         lock.unlock()
         refreshSnapshotCounts()
@@ -1431,6 +1441,12 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
     private func setAllAccepted(_ accepted: Bool) {
         lock.lock()
         for index in _items.indices { _items[index].isAccepted = accepted }
+        let paths = _items.map { $0.mediaFile.url.standardizedFileURL.path }
+        if accepted {
+            for path in paths { _excludedPaths.remove(path) }
+        } else {
+            _excludedPaths.formUnion(paths)
+        }
         let count = _items.count
         lock.unlock()
         update {
@@ -1440,6 +1456,10 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
                     ? Text.s("Alle \(count) angehakt.", "All \(count) ticked.")
                     : Text.s("Alle abgehakt.", "All unticked."))
         }
+        // `setAccepted` has always done this and this one never did, so
+        // pressing "Keine" emptied every box and left the counts row saying
+        // "20 Vorschläge · 20 angehakt".
+        refreshSnapshotCounts()
     }
 
     private func undoLast() {
@@ -1695,6 +1715,24 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
     /// Whether a cancel is armed. Read between files, never cached.
     private var stopRequested: Bool {
         lock.lock(); defer { lock.unlock() }; return _stopRequested
+    }
+
+    /// Re-applies the user's exclusions to a freshly built plan, and forgets
+    /// the paths that are no longer in it so the set cannot grow for ever.
+    ///
+    /// Called with `lock` held.
+    private func applyingExclusions(to plan: [RenameItem]) -> [RenameItem] {
+        guard !_excludedPaths.isEmpty else { return plan }
+        let present = Set(plan.map { $0.mediaFile.url.standardizedFileURL.path })
+        _excludedPaths.formIntersection(present)
+        guard !_excludedPaths.isEmpty else { return plan }
+        return plan.map { item in
+            var copy = item
+            if _excludedPaths.contains(item.mediaFile.url.standardizedFileURL.path) {
+                copy.isAccepted = false
+            }
+            return copy
+        }
     }
 
     /// A submitted scan command has reached the front of the queue.

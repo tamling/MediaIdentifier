@@ -486,6 +486,24 @@ jobs:
           # so both .nfo files must still be there.
           test -s "$dropped/library/Dark - S01E02.nfo" || {
             echo "FAIL: the sidecar is gone from disk"; exit 1; }
+          # The tick box, pressed through the widget and read back out of the
+          # engine. The tick used to live nowhere but the widget, so an
+          # exclusion was discarded the moment the list was rebuilt and the
+          # file was renamed anyway -- while the counts row went on saying
+          # everything was ticked. Both numbers, because the bug was exactly
+          # that they disagreed.
+          grep -q "^after untick, ticked rows: 1" dropped.log || {
+            echo "FAIL: pressing a row's tick box did not untick it"
+            grep -E "^(ticked rows|engine ready|after untick)" dropped.log \
+              || echo "(no tick lines at all)"
+            exit 1
+          }
+          grep -q "^after untick, engine ready: 1" dropped.log || {
+            echo "FAIL: the untick never reached the engine"
+            grep -E "^(ticked rows|engine ready|after untick)" dropped.log \
+              || echo "(no tick lines at all)"
+            exit 1
+          }
           # The row has to say WHERE, absolutely. It used to read
           # "-> Dark/Season 01/…" and say nothing about the folder that sits
           # under, which is the difference between a library and burying the

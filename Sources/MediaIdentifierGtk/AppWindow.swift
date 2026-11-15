@@ -119,6 +119,9 @@ final class AppWindow {
     private var rowDeletionNotes: [UnsafeMutablePointer<GtkWidget>] = []
     /// The rows' "this one stays" labels, for the same reason.
     private var rowKeptNotes: [UnsafeMutablePointer<GtkWidget>] = []
+    /// True while the rows are being built or seeded, so the tick boxes'
+    /// own "toggled" signal is not mistaken for a press.
+    private(set) var isSeedingRows = false
     /// The second line of the empty list, kept so what just happened can be
     /// said in the middle of the window rather than only in the footer.
     ///
@@ -864,6 +867,25 @@ final class AppWindow {
     }
 
     /// What the rows say about the `.nfo` files they are leaving alone.
+    /// Presses one row's tick box, as a click does.
+    ///
+    /// For the smoke modes: the assertion worth making about a tick is that
+    /// pressing the widget changes what the engine will rename, and that can
+    /// only be checked by going through the widget.
+    @discardableResult
+    func pressRowCheck(at index: Int) -> Bool {
+        guard rowChecks.indices.contains(index) else { return false }
+        let check = rowChecks[index].check
+        gtk_toggle_button_set_active(Gtk.toggleButton(check),
+                                     Gtk.isChecked(check) ? 0 : 1)
+        return true
+    }
+
+    /// How many rows are ticked, read off the boxes.
+    var tickedRowCount: Int {
+        rowChecks.filter { Gtk.isChecked($0.check) }.count
+    }
+
     var keptNoteTexts: [String] {
         rowKeptNotes.map { String(cString: gtk_label_get_text(Gtk.label($0))) }
     }
@@ -925,7 +947,14 @@ final class AppWindow {
     }
 
     func setAllChecked(_ on: Bool) {
+        // One command instead of N: the engine has a case for exactly this,
+        // and it also says something in the footer. The widgets are set here
+        // as well so the boxes change under the cursor rather than at the
+        // next refresh, with the per-row reporting suppressed while they do.
+        isSeedingRows = true
         for row in rowChecks { Gtk.setChecked(row.check, on) }
+        isSeedingRows = false
+        coordinator.submit(.setAllAccepted(on))
     }
 
     private func loadFolders() {
@@ -1269,6 +1298,9 @@ final class AppWindow {
         guard ids != renderedItemIDs else { return }
         renderedItemIDs = ids
 
+        // Nothing built in here is a press by the user.
+        isSeedingRows = true
+        defer { isSeedingRows = false }
         for row in rowWidgets { gtk_widget_destroy(row) }
         rowWidgets = []
         rowDestinations = []
@@ -1335,15 +1367,26 @@ final class AppWindow {
         Styling.style(row, "mf-row")
         if banded { Styling.style(row, "mf-row-alt") }
 
-        // Whatever the engine says about this item. As things stand the
-        // planner never declines one — it flags a problem with `conflict`
-        // rather than by setting isAccepted to false — so in practice this
-        // is always ticked. Reading the field anyway keeps the window from
-        // disagreeing with the engine if that ever changes. (An earlier
-        // comment here claimed the planner leaves uncertain files unticked.
-        // It does not; nothing in Core ever assigns isAccepted = false.)
+        // Seeded from the engine, and reported back to it.
+        //
+        // The tick used to live nowhere but this widget. `refreshList`
+        // destroys every row whenever the id list changes — a drop, a watch
+        // poll, a scheduled scan — and re-seeded each box from `isAccepted`,
+        // which nothing could ever set to false because the two commands for
+        // it had no sender since the web front end was removed. So an
+        // exclusion was silently discarded and the next press of Umbenennen
+        // moved the files the user had taken out, while the counts row went
+        // on printing "20 proposals · 20 ticked" with three boxes clear.
         let check = gtk_check_button_new()!
+        let id = item.id
         Gtk.setChecked(check, item.isAccepted)
+        Gtk.onToggled(check, self) { window in
+            // Not while the list is being rebuilt: set_active emits
+            // "toggled" too, so seeding the boxes would report every row
+            // back to the engine as if it had just been pressed.
+            guard !window.isSeedingRows else { return }
+            window.coordinator.submit(.setAccepted(id, Gtk.isChecked(check)))
+        }
         gtk_widget_set_valign(check, GTK_ALIGN_CENTER)
         gtk_box_pack_start(Gtk.box(row), check, 0, 0, 0)
 
