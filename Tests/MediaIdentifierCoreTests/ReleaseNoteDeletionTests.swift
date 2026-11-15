@@ -233,6 +233,39 @@ final class ReleaseNoteDeletionTests: XCTestCase {
                       "the video is not in the library")
     }
 
+    /// The extension guard, with a file that is still there when the
+    /// deletion loop runs.
+    ///
+    /// The test above poisons the list with the video's and the subtitle's
+    /// SOURCE paths — and the deletion loop runs after the move loop, by
+    /// design ("After the moves, and only for items whose primary actually
+    /// landed"), so by then both have moved and `deleteReleaseNote` returns
+    /// at its `fileExists` guard without ever reaching the extension check.
+    /// `notes.txt` was never created at all. So the suite's stated "guard
+    /// that matters most" could not fail: every possible implementation of
+    /// the extension check passed it.
+    ///
+    /// This one puts a real, still-present file on the list.
+    func testAStillPresentNonNfoEntryIsRefusedByTheExtensionCheck() throws {
+        let plan = try planOneEpisode(nfoName: nil, subtitleName: nil)
+        var item = try XCTUnwrap(plan.first)
+        // In the library, where it is still there after the move.
+        let bystander = try write("Fargo - notes.txt", in: library)
+        let alsoAVideo = try write("Another.Film.2019.mkv", in: library)
+        item.companionDeletions = [bystander, alsoAVideo]
+        let (executor, log) = makeExecutor()
+
+        let outcome = executor.execute(plan: [item], policy: .skip)
+
+        XCTAssertTrue(fm.fileExists(atPath: item.primaryDestination.path),
+                      "the episode did not move, so the deletion loop never ran "
+                          + "and this test proves nothing")
+        XCTAssertEqual(outcome.deleted, 0, "a non-.nfo file was destroyed")
+        XCTAssertTrue(fm.fileExists(atPath: bystander.path))
+        XCTAssertTrue(fm.fileExists(atPath: alsoAVideo.path))
+        XCTAssertTrue(log.entries.allSatisfy { $0.status != .deleted })
+    }
+
     /// A directory called something.nfo is refused rather than removed with
     /// whatever is inside it.
     func testADirectoryNamedLikeANoteIsRefused() throws {

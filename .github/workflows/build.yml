@@ -665,6 +665,8 @@ jobs:
           for why, what in bad:
               print(f"FAIL: {why}: {what}")
           print(f"checked {len(rows)} destinations")
+          if not rows:
+              sys.exit("FAIL: no destination lines to check")
           sys.exit(1 if bad else 0)
           CHECK
 
@@ -723,7 +725,12 @@ jobs:
           printf '{"sourceFolder":"%s","moviesFolder":"%s",' \
             "$hostile/downloads" "$hostile/library" \
             > "$hostile/config/settings.json"
-          printf '"identification":"localLLM",' >> "$hostile/config/settings.json"
+          # "local-llm", not "localLLM": that is the enum's raw value. The
+          # settings decoder is deliberately lenient -- an unknown value
+          # falls back to the default -- so the wrong spelling left
+          # identification at "offline", no provider was ever built, and
+          # this whole step never contacted the model server at all.
+          printf '"identification":"local-llm",' >> "$hostile/config/settings.json"
           printf '"localLLMBaseURL":"http://127.0.0.1:18099",' \
             >> "$hostile/config/settings.json"
           printf '"localLLMModel":"hostile","language":"en"}\n' \
@@ -747,6 +754,17 @@ jobs:
           # three in a row that say nothing, so this must not be nine.
           asked=$(grep -c "^hostile-llm: reply" hostile.log || true)
           echo "requests the engine made: $asked"
+          # Both sides. `-le 9` alone passes at zero, which is exactly what
+          # this step did for as long as the settings file misspelled the
+          # identification mode: a hostile-server test that never contacted
+          # the server, green on every run.
+          test "$asked" -ge 1 || {
+            echo "FAIL: the engine never asked the model server anything, so"
+            echo "      nothing here was tested. Check identification in the"
+            echo "      settings file against the enum's raw value."
+            cat "$hostile/config/settings.json"
+            exit 1
+          }
           test "$asked" -le 9 || {
             echo "FAIL: it asked $asked times for 9 files"
             exit 1
@@ -774,6 +792,11 @@ jobs:
           for why, what in bad:
               print(f"FAIL: {why}: {what}")
           print(f"checked {len(rows)} destinations against a hostile server")
+          # Its twin two steps up has had this guard all along. Without it
+          # the check passes by finding nothing, which is what it did for as
+          # long as the identification mode was misspelled.
+          if not rows:
+              sys.exit("FAIL: no destination lines to check")
           sys.exit(1 if bad else 0)
           CHECK
       # Before the checks that can fail: the rendered window is the most

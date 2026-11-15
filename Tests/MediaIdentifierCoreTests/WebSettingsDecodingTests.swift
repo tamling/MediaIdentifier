@@ -86,4 +86,43 @@ final class WebSettingsDecodingTests: XCTestCase {
         XCTAssertThrowsError(try decode("this is not json"))
         XCTAssertThrowsError(try decode("[]"))
     }
+    // MARK: The raw values a settings file has to use
+
+    /// A settings file is hand-written in CI and by anybody configuring the
+    /// headless service, and the decoder is deliberately lenient: an unknown
+    /// value falls back to the default rather than throwing. That leniency
+    /// is right for a file somebody edited, and it means a MISSPELLED value
+    /// is silent.
+    ///
+    /// CI wrote `"identification":"localLLM"` in the step that exists to
+    /// drive a hostile model server. The raw value is `local-llm`, so
+    /// identification stayed at `offline`, no provider was ever built, and
+    /// that step never contacted the server — green on every run, for as
+    /// long as it had existed. These are the spellings; if one changes here,
+    /// every hand-written settings.json has to change with it.
+    func testTheRawValuesAreWhatAFileHasToWrite() {
+        XCTAssertEqual(IdentificationMode.offline.rawValue, "offline")
+        XCTAssertEqual(IdentificationMode.localLLM.rawValue, "local-llm")
+        XCTAssertEqual(IdentificationMode.tmdb.rawValue, "tmdb")
+        XCTAssertEqual(LibraryMode.video.rawValue, "video")
+        XCTAssertEqual(LibraryMode.music.rawValue, "music")
+        XCTAssertEqual(Language.german.rawValue, "de")
+        XCTAssertEqual(Language.english.rawValue, "en")
+    }
+
+    /// And the leniency itself, stated from the other side: a misspelling
+    /// does not throw, which is why it has to be pinned above rather than
+    /// discovered.
+    func testAMisspelledIdentificationModeFallsBackSilently() throws {
+        let data = Data("""
+            {"sourceFolder":"/srv/dl","identification":"localLLM"}
+            """.utf8)
+        let decoded = try JSONDecoder().decode(WebSettings.self, from: data)
+        XCTAssertEqual(decoded.identification, .offline,
+                       "the fallback changed — CI's hand-written settings "
+                           + "files depend on knowing what it is")
+        XCTAssertEqual(decoded.sourceFolder, "/srv/dl",
+                       "one bad value must not take the rest of the file")
+    }
+
 }

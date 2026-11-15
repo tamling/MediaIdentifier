@@ -98,17 +98,29 @@ if kill -0 "$PID" 2>/dev/null; then
 fi
 PID=""
 
-echo "==> Nothing secret is left world-readable"
-# No assertion that the configuration directory exists. The engine writes when
-# there is something to write, and with nothing configured there is nothing --
-# which for a cron line is better than creating an empty directory on every
-# run. The first version of this check asserted a promise nobody had made, and
-# the build was right to refuse it.
-for secret in "$MEDIAFIN_CONFIG_DIR/secrets.json"; do
-  [ -f "$secret" ] || continue
-  mode="$(stat -c '%a' "$secret" 2>/dev/null || stat -f '%Lp' "$secret")"
-  [ "$mode" = "600" ] || fail "$secret is mode $mode, expected 600"
-done
+echo "==> A credentials file left world-readable is tightened"
+# This used to loop over one path that is never there. The comment explaining
+# why -- "the engine writes when there is something to write, and with nothing
+# configured there is nothing" -- was correct, and it meant `[ -f ]` was
+# always false, `continue` always fired, and the stat and the mode comparison
+# never ran. The step printed "Nothing secret is left world-readable" on every
+# run while checking nothing, and it is the ONLY permission assertion in the
+# smoke test of the binary that runs as a systemd service.
+#
+# So the file is put there, deliberately readable by everyone, and the
+# assertion is about what the program does with it: AppCoordinator's init
+# calls tightenPermissionsIfNeeded, which is the defence this is for.
+install -d -m 700 "$MEDIAFIN_CONFIG_DIR"
+secret="$MEDIAFIN_CONFIG_DIR/secrets.json"
+printf '{"local-llm-api-key":"not-a-real-key"}\n' > "$secret"
+chmod 644 "$secret"
+before="$(stat -c '%a' "$secret" 2>/dev/null || stat -f '%Lp' "$secret")"
+[ "$before" = "644" ] || fail "the fixture is mode $before, so it proves nothing"
+timeout 90 "$BIN" --once >"$LOG" 2>&1 || fail "--once did not finish"
+mode="$(stat -c '%a' "$secret" 2>/dev/null || stat -f '%Lp' "$secret")"
+[ "$mode" = "600" ] || fail "$secret is still mode $mode after a run, expected 600"
+# And the key itself survived the tightening.
+grep -q "not-a-real-key" "$secret" || fail "the credentials file was rewritten"
 
 echo
 echo "All smoke tests passed."

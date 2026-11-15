@@ -69,16 +69,40 @@ final class PathBoundaryTests: XCTestCase {
     /// The row and the destination must never disagree. Reading the path
     /// back has to show what the file will actually be called, or the
     /// preview is a lie and "already filed" detection breaks.
-    func testTheStoredPathAgreesWithTheDestination() {
+    ///
+    /// Against a literal, not against the other accessor. This test used to
+    /// assert `primaryDestination.path == root.appending(proposedRelativePath)`,
+    /// and `primaryDestination` IS `outputRoot.appending(storedRelativePath)`
+    /// while `proposedRelativePath` IS `storedRelativePath` — so both sides
+    /// reduced to the same expression and the assertion held for every
+    /// possible implementation of the sanitiser, including one that does
+    /// nothing. The same shape as the defence it was written to replace.
+    func testTheStoredPathIsTheSanitisedOneAndTheDestinationMatchesIt() {
         var subject = item("Show/../Season 01/ep.mkv")
+        XCTAssertEqual(subject.proposedRelativePath, "Show/Season 01/ep.mkv")
         XCTAssertEqual(subject.primaryDestination.path,
-                       root.appendingPathComponent(subject.proposedRelativePath).path)
+                       "/library/Show/Season 01/ep.mkv")
 
         // And after an edit, too — that is what the setter is for.
         subject.proposedRelativePath = "../../somewhere/else.mkv"
+        XCTAssertEqual(subject.proposedRelativePath, "somewhere/else.mkv")
         XCTAssertEqual(subject.primaryDestination.path,
-                       root.appendingPathComponent(subject.proposedRelativePath).path)
-        assertInsideTheRoot("../../somewhere/else.mkv")
+                       "/library/somewhere/else.mkv")
+    }
+
+    /// The setter has no caller in the program: nothing under Sources
+    /// assigns `proposedRelativePath`, because editing a destination by hand
+    /// was a feature of the web front end. It is still worth sanitising —
+    /// the next editor will use it — and it is worth saying out loud that
+    /// the test above is the only thing exercising it, so that nobody reads
+    /// the coverage as proof the program is protected here. What protects
+    /// the program is the sanitising in `init`, which the first half of that
+    /// test covers.
+    func testTheInitIsWhatTheProgramActuallyReliesOn() {
+        // Built the way the planner builds it, with a path that needs
+        // cleaning, and never assigned afterwards.
+        XCTAssertEqual(item("../../etc/passwd").primaryDestination.path,
+                       "/library/etc/passwd")
     }
 
     /// An ordinary path is left exactly as it is. A sanitiser that mangles

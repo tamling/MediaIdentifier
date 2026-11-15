@@ -1,31 +1,37 @@
 #!/usr/bin/env bash
 # Pango markup is XML. The text that would go into it is filenames, and an
-# unescaped "&" makes Pango reject the whole string so the label renders
+# unescaped "&" makes Pango reject the whole string, so the label renders
 # empty — losing the one thing the row existed to show.
 #
-# So there is exactly one place allowed to call gtk_label_set_markup:
-# Gtk.setStyledText, which escapes through PangoMarkup.span and takes the
-# text rather than prepared markup. This fails the build if a second one
-# appears. A rule a script enforces beats a rule in a comment, which is the
-# lesson of a traversal defence that had three passing tests and no caller.
+# This program does not use markup at all: labels are styled with CSS
+# classes through Styling.style, which takes no text and cannot be
+# malformed. So the rule is a flat prohibition rather than "one sanctioned
+# sink", which is what it was — and that sink had no callers, while eleven
+# escaping tests and a green CI line covered a path nothing reached. The
+# version before that was an unescaped sink with no callers. Twice is enough.
+#
+# If a label ever genuinely needs markup: add one function that takes the
+# TEXT, escapes it, and is the only caller of gtk_label_set_markup, and
+# narrow this rule to that function by name — not by file, which is how the
+# previous version let anything else in GtkSupport.swift through.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-offenders=$(grep -rn "gtk_label_set_markup" --include="*.swift" Sources/ \
-  | grep -v "GtkSupport.swift:" || true)
+# Comment lines are excluded, and only comment lines: the rule is about
+# code. The first version of this flagged its own explanation, which is the
+# kind of thing that gets a check deleted rather than fixed.
+offenders=$(grep -rn "gtk_label_set_markup\|gtk_label_set_use_markup" \
+  --include="*.swift" Sources/ \
+  | grep -vE "^[^:]+:[0-9]+: *//" || true)
 
 if [ -n "$offenders" ]; then
-  echo "FAIL: gtk_label_set_markup is called outside Gtk.setStyledText."
-  echo "      Use Gtk.setStyledText(widget, text, weight:) — it escapes."
+  echo "FAIL: Pango markup is produced somewhere. The text going into it is"
+  echo "      filenames, and one unescaped '&' renders the whole label empty."
+  echo "      Style labels with Styling.style instead, or read the comment at"
+  echo "      the top of this script."
   echo "$offenders"
   exit 1
 fi
 
-# And the one allowed call must still go through the escaper.
-if ! grep -q "PangoMarkup.span" Sources/MediaIdentifierGtk/GtkSupport.swift; then
-  echo "FAIL: Gtk.setStyledText no longer escapes through PangoMarkup."
-  exit 1
-fi
-
-echo "ok    : Pango markup is only produced by PangoMarkup.span"
+echo "ok    : no Pango markup is produced anywhere in Sources"
