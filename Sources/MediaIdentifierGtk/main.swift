@@ -220,6 +220,23 @@ private var capturedProposals = 0
 
 private let options = parse(Array(CommandLine.arguments.dropFirst()))
 
+// Before the engine exists, let alone a window: the guard is about not
+// touching somebody's library, and `AppCoordinator`'s own startup reads and
+// scans the configured folders. Refusing inside the mode's branch was too
+// late to mean that.
+switch options.mode {
+case .pressConvert:
+    refuseARealLibrary("--press-convert", doing: "re-encodes real video "
+        + "files, which takes hours of CPU and fills the disk beside them")
+case .pressClearHistory:
+    refuseARealLibrary("--press-clear-history", doing: "renames everything "
+        + "a scan proposes and then destroys the undo journal")
+case .pressApply:
+    refuseARealLibrary("--press-apply", doing: "writes the settings file")
+case .interactive, .screenshot, .pressScan, .drop, .pressCheck:
+    break
+}
+
 // Before gtk_init, which reads this when it picks a theme.
 //
 // The stylesheet paints Mediafin's own dark palette, but it cannot reach
@@ -408,7 +425,6 @@ case .pressScan:
     }
 
 case .pressConvert:
-    refuseARealLibrary("--press-convert", doing: "re-encodes real video files, which takes hours of CPU and fills the disk beside them")
     // Three stages, for the reason pressScan has two: GTK has to lay the
     // panel out before a button can be pressed, the engine answers on its
     // own queue, and FFmpeg takes as long as it takes.
@@ -597,7 +613,6 @@ case .pressConvert:
     }
 
 case .pressClearHistory:
-    refuseARealLibrary("--press-clear-history", doing: "renames everything a scan proposes and then destroys the undo journal")
     // A real rename first, so there is something to lose. With an empty
     // history "unchanged after Cancel" is 0 and 0, which proves nothing --
     // the mode has to make the history it then tries to clear.
@@ -798,7 +813,6 @@ case let .drop(paths):
     }
 
 case .pressApply:
-    refuseARealLibrary("--press-apply", doing: "writes the settings file")
     let apply: @convention(c) (UnsafeMutableRawPointer?) -> gboolean = { _ in
         mainWindow.openSettings()
         // Before the first Apply: what the window made of the stored
