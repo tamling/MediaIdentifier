@@ -1354,6 +1354,28 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
                                  + (outcome.deleted == 1 ? "" : "s") + " deleted")
                     : "") + "."
         }
+        // The one live reader of this. It is set in RenameLog's own catch
+        // ("Kept rather than swallowed") and was read in exactly one place:
+        // the coordinator's init, where both it and the journal's are nil by
+        // construction, because `init` only loads and nothing has written
+        // yet. So a config directory that had filled up swallowed forty
+        // renames' worth of history — the window kept showing them, because
+        // `entries` is the in-memory array — and the next launch started
+        // with an empty history and nothing ever said why.
+        //
+        // In the footer and not in the history: the history is the thing
+        // that cannot be written.
+        if let unwritable = log.lastWriteFailure {
+            update {
+                $0.hasError = true
+                $0.lastResult = ($0.lastResult ?? "") + " " + Text.s(
+                    "Der Verlauf konnte nicht geschrieben werden (\(unwritable)) "
+                        + "— er überlebt einen Neustart nicht.",
+                    "The history could not be written (\(unwritable)) — it will "
+                        + "not survive a restart.")
+            }
+        }
+
         // Only for the files that are now in the library, and only for the
         // audio ones. Driving this off `libraryMode` instead meant a plan
         // scanned as video, applied after the user had switched the mode to
@@ -2084,14 +2106,37 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
     /// produce three complaints about services nobody asked for.
     private func checkEverything() {
         let settings = self.settings
-        if settings.identification == .localLLM { testLocalLLM() }
-        if !settings.jellyfinBaseURL.isEmpty { testJellyfin() }
+        // Kept, because these two write the one actionable sentence —
+        // "Modellserver nicht erreichbar: Could not connect to the server.
+        // [-1004]" — and the summary below used to overwrite it microseconds
+        // later. Which is a sentence the footer is redrawn from on a 500 ms
+        // timer, so it was never drawn at all.
+        var detail: [String] = []
+        if settings.identification == .localLLM {
+            testLocalLLM()
+            if let said = snapshot.lastResult { detail.append(said) }
+        }
+        if !settings.jellyfinBaseURL.isEmpty {
+            testJellyfin()
+            if let said = snapshot.lastResult { detail.append(said) }
+        }
 
+        // Recomputed here, not read from the cache. `record` stores a probe
+        // and then queues the lamp refresh onto another queue, and that
+        // refresh starts with bounded filesystem probes — so `systemChecks`
+        // was the array from before the button was pressed. The summary
+        // described the old state, `hasError` came out false with a server
+        // that had just refused the connection, and the header subtitle
+        // stayed on "Bereit" while the lamp went red a moment later.
+        refreshSystemChecks()
         let checks = systemChecks
         update {
             $0.hasError = SystemChecks.worst(checks) == .failed
             $0.lastResult = Text.s("Prüfung fertig: ", "Check finished: ")
                 + SystemChecks.summary(checks)
+                // After the summary, not instead of it: the summary says how
+                // many lamps are which colour, and this says what to do.
+                + (detail.isEmpty ? "" : " " + detail.joined(separator: " "))
         }
     }
 
