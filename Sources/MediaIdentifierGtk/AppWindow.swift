@@ -834,23 +834,46 @@ final class AppWindow {
     /// state, and a menu assembled on demand cannot drift out of step with
     /// what the window can actually do.
     func showMenu() {
-        let menu = gtk_menu_new()!
-        func entry(_ label: String, _ action: @escaping (AppWindow) -> Void) {
-            let item = gtk_menu_item_new_with_label(label)!
-            Gtk.onActivate(item, self, action)
-            gtk_menu_shell_append(Gtk.menuShell(menu), item)
+        // Built once and kept.
+        //
+        // It used to be built on every press and never destroyed: in GTK3
+        // `gtk_menu_init` parents the menu to an internal GTK_WINDOW_POPUP
+        // that ref-sinks itself into GTK's toplevel list, so only
+        // `gtk_widget_destroy` would release it — and each of the four
+        // `Gtk.onActivate` calls retains an `Action` whose matching release
+        // is the GClosureNotify that widget destruction fires. So one menu
+        // toplevel and four Swift objects leaked per open. The items are
+        // the same four every time, so the fix is to stop rebuilding them.
+        //
+        // The version label is the one thing that could change, and it
+        // cannot: it is the binary's own version.
+        if menu == nil {
+            let built = gtk_menu_new()!
+            func entry(_ label: String, _ action: @escaping (AppWindow) -> Void) {
+                let item = gtk_menu_item_new_with_label(label)!
+                Gtk.onActivate(item, self, action)
+                gtk_menu_shell_append(Gtk.menuShell(built), item)
+            }
+            entry(Text.s("Einstellungen …", "Settings…")) { $0.open($0.settingsDialog) }
+            entry(Text.s("Status …", "Status…")) { $0.open($0.statusDialog) }
+            entry(Text.s("Aus dem Netz laden …", "Fetch from a link…")) {
+                $0.open($0.fetchDialog)
+            }
+            gtk_menu_shell_append(Gtk.menuShell(built),
+                                  gtk_separator_menu_item_new())
+            entry(MediafinVersion.display) { _ in }
+            // Owned by the window, so it goes when the window does rather
+            // than outliving it in GTK's toplevel list.
+            gtk_menu_attach_to_widget(Gtk.menu(built), widget, nil)
+            menu = built
         }
-        entry(Text.s("Einstellungen …", "Settings…")) { $0.open($0.settingsDialog) }
-        entry(Text.s("Status …", "Status…")) { $0.open($0.statusDialog) }
-        entry(Text.s("Aus dem Netz laden …", "Fetch from a link…")) {
-            $0.open($0.fetchDialog)
-        }
-        gtk_menu_shell_append(Gtk.menuShell(menu),
-                              gtk_separator_menu_item_new())
-        entry(MediafinVersion.display) { _ in }
+        guard let menu else { return }
         gtk_widget_show_all(menu)
         gtk_menu_popup_at_pointer(Gtk.menu(menu), nil)
     }
+
+    /// The menu, built on first use. See `showMenu`.
+    private var menu: UnsafeMutablePointer<GtkWidget>?
 
     // MARK: Driven from outside, so CI can press a button
 

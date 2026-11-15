@@ -88,6 +88,62 @@ final class SilentFailureTests: XCTestCase {
         XCTAssertFalse(coordinator.snapshot.hasError, said)
     }
 
+    // MARK: Two rips of one film
+
+    /// The preview must say so, because the apply step certainly will.
+    ///
+    /// `makePlan` ran its duplicate detection over destinations rooted at
+    /// each file's OWN parent directory, because outputRoot was nil, and
+    /// `videoProposals` then replaced every root and called `reconcile` —
+    /// which refreshes only `.existingFile` and says outright that "batch
+    /// duplicate detection is left to makePlan", the pass that had just run
+    /// on the paths that were thrown away. So two rips of one film in
+    /// separate release folders came up as two clean proposals, both ticked;
+    /// pressing Umbenennen then refused the pair and named them, with
+    /// nothing having warned beforehand. The drop path and the music path
+    /// both re-detect; only the video scan did not, under a comment claiming
+    /// it was covered.
+    func testTwoRipsOfOneFilmAreFlaggedByAScan() throws {
+        for (folder, name) in [("Tenet.2020.1080p-GRP", "Tenet.2020.1080p.mkv"),
+                               ("Tenet.2020.2160p-OTHER", "Tenet.2020.2160p.mkv")] {
+            let directory = source.appendingPathComponent(folder)
+            try fm.createDirectory(at: directory, withIntermediateDirectories: true)
+            try Data("x".utf8).write(to: directory.appendingPathComponent(name))
+        }
+        let coordinator = AppCoordinator(configDirectory: config, lampInterval: 0)
+        Text.language = .german
+        coordinator.executeForTesting(.saveSettings(configured()))
+
+        coordinator.executeForTesting(.scanSourceFolder)
+
+        XCTAssertEqual(coordinator.items.count, 2)
+        // Both land on <Movies>/Tenet (2020)/Tenet (2020).mkv.
+        XCTAssertEqual(Set(coordinator.items.map {
+            $0.primaryDestination.standardizedFileURL.path
+        }).count, 1, "the two rips do not actually collide, so this proves nothing")
+        for item in coordinator.items {
+            XCTAssertEqual(item.conflict, .duplicateInBatch,
+                           "\(item.originalFileName) came up as a clean proposal")
+        }
+    }
+
+    /// And a scan of files that do not collide must stay clean, or every
+    /// row would carry a warning and the badge would mean nothing.
+    func testAnOrdinaryScanFlagsNothing() throws {
+        for name in ["Tenet.2020.1080p.mkv", "Arrival.2016.1080p.mkv"] {
+            try Data("x".utf8).write(to: source.appendingPathComponent(name))
+        }
+        let coordinator = AppCoordinator(configDirectory: config, lampInterval: 0)
+        Text.language = .german
+        coordinator.executeForTesting(.saveSettings(configured()))
+
+        coordinator.executeForTesting(.scanSourceFolder)
+
+        XCTAssertEqual(coordinator.items.count, 2)
+        XCTAssertTrue(coordinator.items.allSatisfy { $0.conflict == nil },
+                      "a clean scan flagged a conflict")
+    }
+
     // MARK: "Alles prüfen"
 
     /// `record` stores a probe and queues the lamp refresh onto another

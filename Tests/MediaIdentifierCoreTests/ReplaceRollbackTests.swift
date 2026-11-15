@@ -309,7 +309,81 @@ final class ReplaceRollbackTests: XCTestCase {
         XCTAssertEqual(executor.execute(plan: plan, policy: .skip).succeeded, 1)
     }
 
+    // MARK: Wreckage from a half-finished move
+
+    /// Downloads on one disk and the library on another is the normal
+    /// arrangement, and across filesystems `moveItem` copies — a copy that
+    /// dies part way leaves the bytes it managed at the destination. The
+    /// failure path wrote one history line and did nothing else: nothing
+    /// swept that path, and the next run read the partial file as "already
+    /// filed" under exactly the right name.
+    ///
+    /// The failure is injected, because a move that dies half way cannot be
+    /// arranged on demand; what is tested is what the executor does once it
+    /// has one.
+    func testAPartialCopyAtTheDestinationIsClearedAway() throws {
+        let incoming = source.appendingPathComponent("Tenet.2020.2160p.mkv")
+        try Data("the whole film".utf8).write(to: incoming)
+        let plan = RenamePlanner().makePlan(
+            for: MediaScanner().scan(urls: [incoming]), outputRoot: library)
+        let destination = try XCTUnwrap(plan.first).primaryDestination
+        let halfCopying = HalfCopyingFileManager()
+        halfCopying.leaveBehind = "the first few bytes"
+        let (executor, log, _) = makeExecutor(fileManager: halfCopying)
+
+        let outcome = executor.execute(plan: plan, policy: .skip)
+
+        XCTAssertEqual(outcome.failed, 1)
+        XCTAssertTrue(halfCopying.failed, "nothing was injected, so nothing is tested")
+        XCTAssertFalse(fm.fileExists(atPath: destination.path),
+                       "a partial copy is sitting in the library under the right "
+                           + "name, where the next run will read it as already filed")
+        XCTAssertEqual(try Data(contentsOf: incoming), Data("the whole film".utf8),
+                       "the file in the import folder was touched")
+        let said = try XCTUnwrap(log.entries.first { $0.status == .failure })
+            .errorDescription ?? ""
+        XCTAssertTrue(said.contains("unvollständige Kopie"), said)
+    }
+
+    /// And if the source is gone, whatever is at the destination is the only
+    /// copy left — however incomplete it looks, it is not ours to delete.
+    func testAPartialCopyIsKeptWhenTheSourceIsGone() throws {
+        let incoming = source.appendingPathComponent("Tenet.2020.2160p.mkv")
+        try Data("x".utf8).write(to: incoming)
+        let plan = RenamePlanner().makePlan(
+            for: MediaScanner().scan(urls: [incoming]), outputRoot: library)
+        let destination = try XCTUnwrap(plan.first).primaryDestination
+        let halfCopying = HalfCopyingFileManager()
+        halfCopying.leaveBehind = "all that is left"
+        halfCopying.alsoRemoveTheSource = true
+        let (executor, _, _) = makeExecutor(fileManager: halfCopying)
+
+        _ = executor.execute(plan: plan, policy: .skip)
+
+        XCTAssertTrue(halfCopying.failed)
+        XCTAssertEqual(try Data(contentsOf: destination), Data("all that is left".utf8),
+                       "the only copy left of the user's file was deleted")
+    }
+
     // MARK: Helpers
+
+    /// A move that leaves part of the file at the destination and then
+    /// fails, which is what a cross-filesystem copy does when it dies.
+    private final class HalfCopyingFileManager: FileManager, @unchecked Sendable {
+        var leaveBehind: String?
+        var alsoRemoveTheSource = false
+        private(set) var failed = false
+
+        override func moveItem(at srcURL: URL, to dstURL: URL) throws {
+            if let leaveBehind {
+                try? Data(leaveBehind.utf8).write(to: dstURL)
+                if alsoRemoveTheSource { try? removeItem(at: srcURL) }
+                failed = true
+                throw CocoaError(.fileWriteUnknown)
+            }
+            try super.moveItem(at: srcURL, to: dstURL)
+        }
+    }
 
     /// Refuses to move anything whose destination name contains a given
     /// string, so a step that "cannot fail" can be made to.

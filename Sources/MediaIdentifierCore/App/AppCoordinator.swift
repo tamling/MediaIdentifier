@@ -1139,7 +1139,22 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
             $0.primaryDestination.standardizedFileURL.path
                 != $0.mediaFile.url.standardizedFileURL.path
         }
-        return (worthDoing, planned.count - worthDoing.count)
+        // Conflicts against the destinations that survived the re-rooting,
+        // which is the second time they are computed and the first time the
+        // answer is about the paths the files will actually take.
+        //
+        // `makePlan` ran `detectConflicts` over destinations rooted at each
+        // file's OWN parent directory, because outputRoot was nil, and the
+        // map above then replaced every root. `reconcile` refreshes only
+        // `.existingFile` and says so outright — "Batch duplicate detection
+        // is left to makePlan" — which is the pass that ran on the paths
+        // that were thrown away. So two rips of one film in separate release
+        // folders came up as two clean proposals, both ticked, and the apply
+        // step then refused the pair and named them, after the preview had
+        // said nothing. The drop path and the music path both do this; only
+        // the video scan did not, under a comment claiming it was covered.
+        return (Self.markingConflicts(in: worthDoing),
+                planned.count - worthDoing.count)
     }
 
     /// Re-roots an item whose file is already filed exactly where its own

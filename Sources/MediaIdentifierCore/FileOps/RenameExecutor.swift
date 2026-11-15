@@ -262,6 +262,9 @@ public final class RenameExecutor {
                 return policy
             }()
 
+            // Held outside the `do` so the catch can see where the move was
+            // going: that is the path a half-finished copy left bytes at.
+            var resolved: Resolution?
             do {
                 guard let resolution = resolveDestination(for: move, policy: effectivePolicy) else {
                     // Deliberately not recorded in `landed`: a skipped file is
@@ -277,6 +280,7 @@ public final class RenameExecutor {
                     continue
                 }
 
+                resolved = resolution
                 let createdDirs = try ensureParentDirectory(for: resolution.destination)
                 if resolution.replacesExisting {
                     // The incoming file arrives before the library's own copy
@@ -316,11 +320,12 @@ public final class RenameExecutor {
             } catch {
                 outcome.failed += 1
                 if isPrimary { fates[owner] = .stayed }
+                let debris = clearingDebris(of: move, after: resolved)
                 log.append(RenameLogEntry(
                     oldName: move.source.lastPathComponent,
                     newName: move.destination.lastPathComponent,
                     status: .failure,
-                    errorDescription: error.localizedDescription
+                    errorDescription: error.localizedDescription + debris
                 ))
             }
         }
@@ -710,6 +715,56 @@ public final class RenameExecutor {
             throw failure
         }
         return backup
+    }
+
+    /// Removes what a half-finished move left at the destination.
+    ///
+    /// Downloads on one disk and the library on another is the normal
+    /// arrangement here, and across filesystems `moveItem` copies — a copy
+    /// that dies part way leaves the bytes it managed at the destination.
+    /// The failure path recorded one history line and did nothing else:
+    /// `createdDirectories` was dropped on the floor, nothing swept the
+    /// path, and the next run read the partial file as "already filed" under
+    /// the right name. The download path stages into a hidden folder and
+    /// sweeps it; the rename path wrote straight into the library and owned
+    /// none of its own wreckage.
+    ///
+    /// Only when the source is still there. If the source is gone, whatever
+    /// is at the destination is the only copy left of the user's file and
+    /// must not be touched, however incomplete it looks.
+    ///
+    /// - Returns: a sentence for the history, or "" when there was nothing
+    ///   to clear.
+    private func clearingDebris(of move: PlannedMove,
+                                after resolution: Resolution?) -> String {
+        guard let resolution else { return "" }
+        // Never on the replace path. There, `replace` owns the rollback and
+        // has just put the LIBRARY's own copy back at this very path — so
+        // the first version of this deleted it, and the two tests from the
+        // replace work said so immediately: "the library lost its own copy".
+        guard !resolution.replacesExisting else { return "" }
+        let destination = resolution.destination
+        guard fileManager.fileExists(atPath: move.source.path),
+              fileManager.fileExists(atPath: destination.path)
+        else { return "" }
+        // Never a directory: that is somebody's folder, not our leftovers.
+        var isDirectory: ObjCBool = false
+        _ = fileManager.fileExists(atPath: destination.path, isDirectory: &isDirectory)
+        guard !isDirectory.boolValue else { return "" }
+        guard (try? fileManager.removeItem(at: destination)) != nil else {
+            return " " + Text.s(
+                "Am Ziel liegt eine unvollständige Kopie, die nicht entfernt "
+                    + "werden konnte: \(destination.path)",
+                "An incomplete copy is at the destination and could not be "
+                    + "removed: \(destination.path)")
+        }
+        // And the folders this move created for it, if they are now empty.
+        removeDirectoryIfEmpty(destination.deletingLastPathComponent())
+        return " " + Text.s(
+            "Die unvollständige Kopie am Ziel wurde entfernt; die Datei liegt "
+                + "unverändert im Importordner.",
+            "The incomplete copy at the destination was removed; the file is "
+                + "untouched in the import folder.")
     }
 
     /// Moves a staged file back to where it came from, taking the next free
