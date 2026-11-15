@@ -259,6 +259,36 @@ private let configDirectory = demoLayout
     .map { $0.root.appendingPathComponent("config", isDirectory: true) }
     ?? MediafinPaths.configDirectory()
 
+/// The smoke modes that move or re-encode real files refuse to run against
+/// a real configuration.
+///
+/// `--press-clear-history` scans, renames everything the scan proposed, and
+/// then clears the undo journal while answering its own confirmation
+/// dialog "yes" from inside the process. It ships in the release binary and
+/// it is in `--help`, so somebody reading that help could point it at their
+/// own library and lose both the arrangement and the only record that could
+/// put it back. CI already runs every one of these under a throwaway
+/// MEDIAFIN_CONFIG_DIR, so asking for one costs the checks nothing and is
+/// the whole difference for a curious user.
+/// The engine's stored conversion settings, in one line, for the smoke
+/// modes. Deliberately the engine's copy and not the widgets': the question
+/// these checks ask is what reached the settings file.
+private func describeConversion(_ c: WebConversionSettings) -> String {
+    "codec=\(c.videoCodec.rawValue) quality=\(c.quality) "
+        + "preset=\(c.preset.rawValue) "
+        + "height=\(c.targetHeight.map(String.init) ?? "source") "
+        + "ffmpeg=\(c.ffmpegPath)"
+}
+
+private func refuseARealLibrary(_ flag: String, doing what: String) {
+    if options.demo { return }
+    let chosen = ProcessInfo.processInfo.environment["MEDIAFIN_CONFIG_DIR"] ?? ""
+    guard chosen.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+    fail(flag + " " + what + ". Point it at a throwaway library first: "
+            + "set MEDIAFIN_CONFIG_DIR to a directory you do not mind "
+            + "losing, or add --demo.", code: 64)
+}
+
 private let coordinator = AppCoordinator(configDirectory: configDirectory)
 
 // The demo scan runs here, before the window exists, and this thread waits
@@ -373,6 +403,7 @@ case .pressScan:
     }
 
 case .pressConvert:
+    refuseARealLibrary("--press-convert", doing: "re-encodes real video files, which takes hours of CPU and fills the disk beside them")
     // Three stages, for the reason pressScan has two: GTK has to lay the
     // panel out before a button can be pressed, the engine answers on its
     // own queue, and FFmpeg takes as long as it takes.
@@ -394,11 +425,14 @@ case .pressConvert:
         // next run the user asks for" -- and a rule with no caller is a
         // rule nobody has watched work. The conversion below must still
         // happen after this press.
+        // Read before the press, because the press is through the widget
+        // now and `gtk_button_clicked` fires whether the button is grey or
+        // not -- so the sensitivity is the part worth printing. Nothing is
+        // converting here, so the panel's Stopp must be grey; during the
+        // run below it must not be. The line this replaces said "pressed
+        // stop while idle: yes" and said it unconditionally.
+        print("stop pressable while idle: \(mainWindow.convertStopIsPressable)")
         mainWindow.pressStopConverting()
-        // Not read back as a message: the search below answers on the same
-        // queue a moment later and overwrites it. What proves the rule is
-        // that the conversion still runs, which is asserted at the end.
-        print("pressed stop while idle: yes")
         mainWindow.pressFindConvertible()
 
         let tick: @convention(c) (UnsafeMutableRawPointer?) -> gboolean = { _ in
@@ -442,6 +476,12 @@ case .pressConvert:
                 let state = coordinator.snapshot
                 if state.converting {
                     print("converting: \(mainWindow.convertBarText)")
+                    // The other direction of the same gate: a Stopp that is
+                    // grey while a 40-minute encode runs is the fault that
+                    // matters, and "grey while idle" alone cannot tell it
+                    // apart from a button that is never pressable.
+                    print("stop pressable while converting: "
+                              + "\(mainWindow.convertStopIsPressable)")
                     return Gtk.sourceContinue
                 }
                 // Not merely "not converting": that is also true in the
@@ -482,6 +522,7 @@ case .pressConvert:
     }
 
 case .pressClearHistory:
+    refuseARealLibrary("--press-clear-history", doing: "renames everything a scan proposes and then destroys the undo journal")
     // A real rename first, so there is something to lose. With an empty
     // history "unchanged after Cancel" is 0 and 0, which proves nothing --
     // the mode has to make the history it then tries to clear.
@@ -568,7 +609,20 @@ case .pressCheck:
         mainWindow.refresh()
         print("idle subtitle: \(mainWindow.subtitleText)")
         print("idle undo pressable: \(mainWindow.undoButtonIsPressable)")
+        print("idle clear-history pressable: "
+                  + "\(mainWindow.clearHistoryIsPressable)")
         mainWindow.pressCheckEverything()
+        // Read with no refresh of our own in between, which is the whole
+        // point. The gate lives in `refresh()`, and `refresh()` is called
+        // by a 500 ms timer -- so until the press handler closed the gate
+        // itself, every gated button stayed live for up to half a second
+        // after the press that started the work. That window is where the
+        // Rückgängig double-click landed, and the old check could not see
+        // it because it called `refresh()` before looking.
+        print("undo pressable straight after the press: "
+                  + "\(mainWindow.undoButtonIsPressable)")
+        print("clear-history pressable straight after the press: "
+                  + "\(mainWindow.clearHistoryIsPressable)")
 
         // Read while the probe is still in flight. The engine's request
         // timeout is 30 seconds and Alles prüfen runs two probes, so a
@@ -581,6 +635,8 @@ case .pressCheck:
             print("during queued: \(state.queuedWork)")
             print("during subtitle: \(mainWindow.subtitleText)")
             print("during undo pressable: \(mainWindow.undoButtonIsPressable)")
+            print("during clear-history pressable: "
+                      + "\(mainWindow.clearHistoryIsPressable)")
             print("during scan pressable: \(mainWindow.scanButtonIsAvailable)")
             // If the probe has already finished, the run proves nothing and
             // must not pass: the whole point is to look at the window while
@@ -667,6 +723,7 @@ case let .drop(paths):
     }
 
 case .pressApply:
+    refuseARealLibrary("--press-apply", doing: "writes the settings file")
     let apply: @convention(c) (UnsafeMutableRawPointer?) -> gboolean = { _ in
         mainWindow.openSettings()
         // Before the first Apply: what the window made of the stored
@@ -680,12 +737,55 @@ case .pressApply:
         // label has text -- it is whether pressing again is visibly a second
         // press, which is the thing a fixed "Saved." cannot show.
         let again: @convention(c) (UnsafeMutableRawPointer?) -> gboolean = { _ in
-            defer { gtk_main_quit() }
             mainWindow.pressApply()
             print("applied twice: \(mainWindow.appliedText)")
             // After two saves: still what was stored. Apply must hand back
             // what it was given, not a default it invented along the way.
             print("conversion after apply: \(mainWindow.conversionText)")
+
+            // Now the refused Apply, which had two faults sitting in it.
+            //
+            // Two edits in one press: a codec the user means to keep, and a
+            // quality with a typo in it. The engine refuses the WHOLE write
+            // when anything is wrong, and the window used to carry on
+            // regardless -- it printed "Übernommen um HH:MM:SS" for a save
+            // that never happened, and it advanced its merge baseline to
+            // the values it had just failed to write. The merge writes back
+            // only fields whose widget differs from that baseline, so on
+            // the corrected retry the codec compared equal to the baseline
+            // and was silently dropped: one typo lost the other edit made
+            // in the same breath. The engine kept h265.
+            guard mainWindow.chooseCodecRow(1) else {
+                Pending.failure = "the codec combo has no second row"
+                gtk_main_quit()
+                return Gtk.sourceRemove
+            }
+            mainWindow.typeQuality("24p")
+            mainWindow.refresh()
+            print("estimate with a typo: \(mainWindow.estimateText)")
+            mainWindow.pressApply()
+            print("refused apply says: \(mainWindow.appliedText)")
+
+            let corrected: @convention(c) (UnsafeMutableRawPointer?)
+                -> gboolean = { _ in
+                print("engine after the refusal: "
+                          + "\(describeConversion(coordinator.settings.conversion))")
+                // Correct only the quality. The codec must survive.
+                mainWindow.typeQuality("24")
+                mainWindow.pressApply()
+                print("corrected apply says: \(mainWindow.appliedText)")
+
+                let settled: @convention(c) (UnsafeMutableRawPointer?)
+                    -> gboolean = { _ in
+                    defer { gtk_main_quit() }
+                    print("engine after the retry: "
+                              + "\(describeConversion(coordinator.settings.conversion))")
+                    return Gtk.sourceRemove
+                }
+                g_timeout_add(900, settled, nil)
+                return Gtk.sourceRemove
+            }
+            g_timeout_add(900, corrected, nil)
             return Gtk.sourceRemove
         }
         g_timeout_add(1200, again, nil)

@@ -27,3 +27,7 @@ dist/
 # every build, so keeping them would only add weight and go stale.
 gtk-window.png
 window.png
+
+# Python bytecode from the checks in tools/.
+__pycache__/
+*.pyc

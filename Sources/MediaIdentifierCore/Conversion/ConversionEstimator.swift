@@ -13,9 +13,11 @@ public enum ConversionEstimator {
     /// source height there is nothing to compute. The default of 1080 used
     /// to be the only value anybody passed, and it made the whole setting
     /// look inert — at h265 and quality 21, "keep the source resolution",
-    /// 2160p and 1080p all come out at 62 %, because none of those is
+    /// 2160p and 1080p all came out at 62 %, because none of those is
     /// *less than* 1080. A user with 4K files picking 1080p was told the
-    /// downscale saved nothing, when it saves three quarters.
+    /// downscale saved nothing, when it saves three quarters; a user with
+    /// 1080p files picking 4K was told the same 62 %, for a run that writes
+    /// a bigger file than it reads.
     ///
     /// Nothing can probe the source at the moment the settings are shown —
     /// no file has been chosen yet — so the caller's job is to name the
@@ -34,11 +36,27 @@ public enum ConversionEstimator {
         }
         // Each ~6 RF roughly halves/doubles the bitrate; RF 22 is the baseline.
         let rfFactor = pow(2.0, (22.0 - Double(options.quality)) / 6.0)
-        // Downscaling reduces by area.
+        // Scaling changes the size by area, in both directions.
+        //
+        // This used to be clipped at 1.0 by a `height < assumedSourceHeight`
+        // guard, which left two of the five offered resolutions saying the
+        // same thing: for a 1080p source, "2160p (4K)" and "keep the source
+        // resolution" came out identical, so the window collapsed them to
+        // one number and told a user who had just chosen 4K that the run
+        // would save 38 %. The engine scales unconditionally -- `-vf
+        // scale=-2:2160` with no `min(ih, …)` -- so that run really does
+        // upscale 1080p to four times the pixels and write a file BIGGER
+        // than the original. Modelling the upscale is what makes the
+        // window's two-number line fire for it and read above 100 %.
         var resFactor = 1.0
-        if let height = options.targetHeight, height < assumedSourceHeight {
+        if let height = options.targetHeight {
             resFactor = pow(Double(height) / Double(assumedSourceHeight), 2)
         }
+        // The 1.5 ceiling is deliberate and not a mistake about upscaling:
+        // an encoder given upscaled input compresses the invented detail
+        // far better than native 4K, so the honest ceiling for a rough
+        // estimate is "half again as big", not the 2.5× the pixel count
+        // alone suggests. What matters is that it is above 100 %.
         return min(1.5, max(0.05, codecFactor * rfFactor * resFactor))
     }
 

@@ -1619,9 +1619,26 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
     }
 
     private func clearHistory() {
+        // Counted here, where it is true. The window names the cost in its
+        // question, but it reads that number at press time and this runs
+        // later on the serial queue -- so a rename that finished in between
+        // would make the question's "nothing to undo" a false promise. The
+        // button is gated now, which closes that for a press; the scheduled
+        // unattended run can still record a transaction while the question
+        // is on screen, and then this sentence is the only place the loss
+        // is stated. Silence was the problem.
+        let steps = journal.transactionCount
         log.clear()
         journal.clear()
-        update { $0.lastResult = Text.s("Verlauf geleert.", "History cleared.") }
+        update { $0.lastResult = steps == 0
+            ? Text.s("Verlauf geleert.", "History cleared.")
+            : Text.s(steps == 1
+                         ? "Verlauf geleert. 1 Rückgängig-Schritt ist weg."
+                         : "Verlauf geleert. \(steps) Rückgängig-Schritte "
+                             + "sind weg.",
+                     steps == 1
+                         ? "History cleared. 1 undo step is gone."
+                         : "History cleared. \(steps) undo steps are gone.") }
         refreshSnapshotCounts()
     }
 

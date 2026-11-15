@@ -81,16 +81,46 @@ final class ConversionEstimatorTests: XCTestCase {
     }
 
     /// Upscaling is not a saving, and must not be reported as one.
-    func testATargetAboveTheSourceChangesNothing() {
+    ///
+    /// This test used to assert the bug. Its name said "changes nothing"
+    /// and its body asserted that 2160p-from-1080p equals keep-the-source,
+    /// i.e. that an upscale IS reported as the same 38 % saving — directly
+    /// against the sentence above it. The guard it was built on is gone.
+    func testATargetAboveTheSourceIsNotReportedAsASaving() {
+        let upscale = ConversionEstimator.sizeFraction(
+            options: ConversionOptions(videoCodec: .h265, quality: 21,
+                                       targetHeight: 2160),
+            assumedSourceHeight: 1080)
+        let keep = ConversionEstimator.sizeFraction(
+            options: ConversionOptions(videoCodec: .h265, quality: 21),
+            assumedSourceHeight: 1080)
+
+        XCTAssertGreaterThan(upscale, keep,
+                             "four times the pixels cannot be smaller than "
+                                 + "leaving the resolution alone")
+        XCTAssertGreaterThan(upscale, 1.0,
+                             "an upscale writes a bigger file, so the "
+                                 + "estimate has to read above 100 %")
+    }
+
+    /// And the window must have two different numbers to print for it.
+    ///
+    /// The line collapses to one number when both probes agree, which is
+    /// the window's way of saying "this choice is source-independent".
+    /// That was true for "keep the source resolution" and false for 4K,
+    /// where it hid the upscale.
+    func testFourKIsNotSourceIndependent() {
         let options = ConversionOptions(videoCodec: .h265, quality: 21,
                                         targetHeight: 2160)
 
-        XCTAssertEqual(ConversionEstimator.sizeFraction(options: options,
-                                                        assumedSourceHeight: 1080),
-                       ConversionEstimator.sizeFraction(
-                           options: ConversionOptions(videoCodec: .h265, quality: 21),
-                           assumedSourceHeight: 1080),
-                       accuracy: 0.001)
+        XCTAssertNotEqual(
+            ConversionEstimator.sizeFraction(options: options,
+                                             assumedSourceHeight: 1080),
+            ConversionEstimator.sizeFraction(options: options,
+                                             assumedSourceHeight: 2160),
+            accuracy: 0.001,
+            "if these are equal the window prints one number for 4K and "
+                + "the upscale is invisible again")
     }
 
     /// The words beside the number. "21" means nothing on its own, and the
