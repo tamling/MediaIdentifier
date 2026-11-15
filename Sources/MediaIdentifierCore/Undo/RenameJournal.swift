@@ -220,11 +220,26 @@ public final class RenameJournal: @unchecked Sendable {
             // it is about to write properly and delete the file it is
             // appending to.
             if let pid = Int32(pidText), pid != ProcessInfo.processInfo.processIdentifier,
-               kill(pid, 0) == 0 {
+               Self.processIsRunning(pid) {
                 continue
             }
             recover(fileAt: directory.appendingPathComponent(name))
         }
+    }
+
+    /// Whether a process id belongs to something still running.
+    ///
+    /// `kill(pid, 0) == 0` is not the test. A process that exists but
+    /// belongs to another user answers -1 with EPERM, and reading that as
+    /// "gone" would take its in-flight record away while it is still
+    /// appending to it. The CI container runs everything as root, where
+    /// EPERM never happens, so this only showed up on the macOS runner —
+    /// the same shape as the test that made a directory read-only and found
+    /// that root ignores the mode bits.
+    private static func processIsRunning(_ pid: Int32) -> Bool {
+        guard pid > 0 else { return false }
+        if kill(pid, 0) == 0 { return true }
+        return errno == EPERM
     }
 
     private func recover(fileAt inFlight: URL) {

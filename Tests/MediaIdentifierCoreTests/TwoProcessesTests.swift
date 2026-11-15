@@ -262,6 +262,10 @@ final class TwoProcessesTests: XCTestCase {
 
         let journal = RenameJournal(url: journalURL)
 
+        // pid 1 is always running, and on a machine where this test is not
+        // run as root `kill(1, 0)` answers -1 with EPERM — which is what
+        // made the first version of this pass in the root-only CI container
+        // and fail on the macOS runner.
         XCTAssertTrue(fm.fileExists(atPath: alive.path),
                       "pid 1 is running, and its record was taken anyway")
         XCTAssertFalse(journal.canUndo)
