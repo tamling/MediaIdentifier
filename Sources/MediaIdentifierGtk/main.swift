@@ -522,6 +522,18 @@ case .pressConvert:
                 }
                 print("convert bar after: \(mainWindow.convertBarText)")
                 print("convertible left: \(coordinator.convertible.count)")
+                // The library as it stands between the two runs, because
+                // that is the only moment "the file taken out of the run
+                // was left alone" is true: the second run below converts it
+                // on purpose, so a check made after the process exits reads
+                // the wrong state. The shell assertion that did exactly
+                // that is what failed CI run 194.
+                let folder = coordinator.settings.moviesFolder
+                let held = (try? FileManager.default
+                    .contentsOfDirectory(atPath: folder)) ?? []
+                for name in held.sorted() {
+                    print("after the first run, library holds: \(name)")
+                }
                 if !finished {
                     Pending.failure = "the conversion never finished: " + status
                     gtk_main_quit()

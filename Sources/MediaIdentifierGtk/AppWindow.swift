@@ -126,21 +126,25 @@ final class AppWindow {
     /// no "Noch nichts gesucht" in it. nil cannot equal any real list, so
     /// the first draw always happens.
     private var renderedConvertIDs: [UUID]?
-    /// Whether Suchen has been pressed in this sitting.
+    /// What an empty conversion list means, which the list itself cannot say.
     ///
-    /// An empty list meant exactly one sentence -- "Noch nichts gesucht —
-    /// „Suchen" drücken." -- and three different states drew it: never
-    /// searched, searched and found nothing, and converted everything (the
-    /// engine drops each converted file off its candidate list, so a
-    /// finished run empties the panel). A user who pressed Suchen on a
-    /// library with nothing to convert saw a panel identical to the one
-    /// they had opened, telling them to press the button they had just
-    /// pressed. This is the inverse of the fault 695a4e7 fixed, in the same
-    /// panel: "it looked exactly like a working one that had searched and
-    /// found nothing".
-    private var hasSearchedConvertible = false
-    /// Whether a conversion has run since the last search.
-    private var hasRunConversion = false
+    /// An empty list drew exactly one sentence -- "Noch nichts gesucht —
+    /// „Suchen" drücken." -- and FOUR different states reach it: never
+    /// searched, searching, searched and found nothing, and converted
+    /// everything (the engine drops each converted file off its candidate
+    /// list, so a finished run empties the panel). A user who pressed
+    /// Suchen on a library with nothing to convert saw a panel identical to
+    /// the one they had opened, telling them to press the button they had
+    /// just pressed. This is the inverse of the fault 695a4e7 fixed, in the
+    /// same panel: "it looked exactly like a working one that had searched
+    /// and found nothing".
+    ///
+    /// The ids cannot carry this: an empty library gives the same empty id
+    /// list before the search, during it and after it.
+    private enum ConvertListState {
+        case fresh, searching, searched, converted
+    }
+    private var convertListState: ConvertListState = .fresh
     /// The "… und N weitere" label, kept so its text can follow the ticks.
     private var convertMoreNote: UnsafeMutablePointer<GtkWidget>?
     /// Settings, status and fetching live in windows of their own, opened from
@@ -1763,8 +1767,7 @@ final class AppWindow {
     /// window beats searching the ones stored when it opened.
     private func findConvertible() {
         saveFolders()
-        hasSearchedConvertible = true
-        hasRunConversion = false
+        convertListState = .searching
         // So the empty state is redrawn with the new sentence even when the
         // list is empty both before and after: the guard in
         // `refreshConvertList` compares ids, and [] equals [].
@@ -1781,8 +1784,11 @@ final class AppWindow {
         //
         // The engine says "nothing was ticked" for an empty set, which is
         // the right message, so this is not guarded here.
-        hasRunConversion = true
-        start(.convertFiles(accepting: tickedConvertIDs))
+        let ticked = tickedConvertIDs
+        // Only when something really is going to be converted, so an empty
+        // list cannot end up claiming a run finished.
+        if !ticked.isEmpty { convertListState = .converted }
+        start(.convertFiles(accepting: ticked))
     }
 
     /// The ticked candidates, worked out from the engine's list and the
@@ -1814,13 +1820,20 @@ final class AppWindow {
     /// are rebuilt only when the ids actually differ, or every refresh would
     /// destroy the widget under the user's cursor twice a second.
     private func refreshConvertList() {
+        // A search finishing is a change the id list cannot show, so the
+        // redraw has to be forced. Without this the panel would sit on
+        // "Wird gesucht …" for as long as it stayed open, because the ids
+        // are equal before and after a search of an empty library.
+        if convertListState == .searching, !coordinator.snapshot.isWorking {
+            convertListState = .searched
+            renderedConvertIDs = nil
+        }
         let candidates = coordinator.convertible
         let ids = candidates.map(\.id)
         guard ids != renderedConvertIDs else {
             refreshConvertCounts()
             return
         }
-        let hadRows = !(renderedConvertIDs ?? []).isEmpty
         renderedConvertIDs = ids
         // Exclusions are kept only for files the engine is still offering.
         //
@@ -1841,25 +1854,30 @@ final class AppWindow {
         convertRowWidgets = []
         convertNotes = []
         convertRows = []
-
+        // Nil'd with the arrays, not after: the destroy loop above has just
+        // freed whatever it pointed at.
         convertMoreNote = nil
 
         if candidates.isEmpty {
-            // Which of the three empty states this is. They used to share
-            // one sentence, so "found nothing" and "converted everything"
-            // both read as "you have not searched yet".
+            // Which of the four empty states this is. They used to share
+            // one sentence, so "still searching", "found nothing" and
+            // "converted everything" all read as "you have not searched
+            // yet".
             let sentence: String
-            if hasRunConversion, hadRows {
+            switch convertListState {
+            case .searching:
+                sentence = Text.s("Wird gesucht …", "Looking for files…")
+            case .converted:
                 sentence = Text.s(
                     "Fertig. Die neuen Dateien liegen neben den Originalen; "
                         + "zu konvertieren ist nichts mehr da.",
                     "Done. The new files are beside the originals; there is "
                         + "nothing left to convert.")
-            } else if hasSearchedConvertible {
+            case .searched:
                 sentence = Text.s(
                     "Keine Dateien zum Konvertieren gefunden.",
                     "No files to convert were found.")
-            } else {
+            case .fresh:
                 sentence = Text.s(
                     "Noch nichts gesucht — „Suchen“ drücken.",
                     "Nothing looked for yet — press “Look for files”.")

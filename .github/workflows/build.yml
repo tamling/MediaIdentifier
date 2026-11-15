@@ -942,10 +942,19 @@ jobs:
             echo "      touch it, because re-encoding cannot be undone"
             exit 1
           }
-          test ! -e "$conv/movies/Film A (2020).x264.mkv" || {
-            echo "FAIL: the file taken out of the run was converted anyway"
+          # Read between the two runs, from the listing the mode printed
+          # there. On disk after the process exits this is the wrong
+          # question: the second run converts that file on purpose.
+          grep -q "^after the first run, library holds: Film B (2020).x264.mkv$" \
+            convert.log || {
+            echo "FAIL: the first run did not write the file it was asked to"
             exit 1
           }
+          if grep -q "^after the first run, library holds: Film A (2020).x264.mkv$" \
+               convert.log; then
+            echo "FAIL: the file taken out of the run was converted anyway"
+            exit 1
+          fi
 
           # The second run, with everything ticked, which empties the list.
           #
