@@ -372,6 +372,11 @@ case let .drop(paths):
 case .pressApply:
     let apply: @convention(c) (UnsafeMutableRawPointer?) -> gboolean = { _ in
         mainWindow.openSettings()
+        // Before the first Apply: what the window made of the stored
+        // settings. A card wired to nothing prints the defaults here.
+        print("conversion read: \(mainWindow.conversionText)")
+        print("media server read: \(mainWindow.mediaServerText)")
+        print("estimate: \(mainWindow.estimateText)")
         mainWindow.pressApply()
         print("applied once: \(mainWindow.appliedText)")
         // A second press a second later. The question is not whether the
@@ -381,6 +386,9 @@ case .pressApply:
             defer { gtk_main_quit() }
             mainWindow.pressApply()
             print("applied twice: \(mainWindow.appliedText)")
+            // After two saves: still what was stored. Apply must hand back
+            // what it was given, not a default it invented along the way.
+            print("conversion after apply: \(mainWindow.conversionText)")
             return Gtk.sourceRemove
         }
         g_timeout_add(1200, again, nil)

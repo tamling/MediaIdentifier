@@ -14,13 +14,9 @@
 
 # Removed web front-end: these built strings for a page that no longer exists.
 detectedTitle
-estimatedSizePercent
 formField
-heightLabel
 isWorking
 newFileName
-offeredHeights
-readableSize
 seasonEpisodeDescription
 
 # The file-type table's smaller helpers. Their tests pin the table, which is
@@ -28,11 +24,12 @@ seasonEpisodeDescription
 isImage
 isSubtitle
 
+# Shown by the conversion list, which is the next block: the settings for a
+# conversion are in the window now, the panel that starts one is not.
+readableSize
+
 # Accessors that exist for the tests but are not named *ForTesting.
 isWatching
 pendingWorkCount
 stopButtonIsOnTheMainSurface
 cachedFacts
-
-# The converter's quality suggestion, which the window does not offer yet.
-suggestedQuality

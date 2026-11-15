@@ -144,4 +144,59 @@ final class SettingsMergeTests: XCTestCase {
 
         XCTAssertEqual(merged.language, .english)
     }
+
+    /// The conversion settings, field by field.
+    ///
+    /// They used to be merged as one struct, which is the bug the schedule
+    /// had: change the quality in this window while somebody else changes
+    /// the codec, press Apply, and their codec goes back to what this
+    /// window saw when it opened. Nothing says a codec was touched.
+    func testOnlyTheChangedConversionFieldIsWritten() {
+        var loaded = base()
+        loaded.conversion.quality = 21
+        loaded.conversion.videoCodec = .h265
+        // What this window reads now: the user only typed a new quality.
+        var typed = loaded
+        typed.conversion.quality = 26
+        // What is on disk now: somebody else changed the codec.
+        var stored = loaded
+        stored.conversion.videoCodec = .av1
+
+        let merged = SettingsMerge.applying(typed: typed, loaded: loaded, to: stored)
+
+        XCTAssertEqual(merged.conversion.quality, 26, "the typed quality is written")
+        XCTAssertEqual(merged.conversion.videoCodec, .av1,
+                       "the codec this window never touched survives")
+    }
+
+    /// And the other way: a conversion field the user did change must
+    /// actually land, or the card is decoration.
+    func testEveryConversionFieldReachesTheStore() {
+        let loaded = base()
+        var typed = loaded
+        typed.conversion.videoCodec = .av1
+        typed.conversion.quality = 30
+        typed.conversion.preset = .veryfast
+        typed.conversion.targetHeight = 720
+        typed.conversion.audioMode = .opus
+        typed.conversion.stripSubtitles = true
+        typed.conversion.ffmpegPath = "/opt/ffmpeg/bin/ffmpeg"
+
+        let merged = SettingsMerge.applying(typed: typed, loaded: loaded, to: loaded)
+
+        XCTAssertEqual(merged.conversion, typed.conversion)
+    }
+
+    /// The media server address, which had no field in the window at all
+    /// until the conversion panel was built: the setting existed, the merge
+    /// handled it, the engine read it, and nothing could type it in.
+    func testTheMediaServerAddressIsMerged() {
+        let loaded = base()
+        var typed = loaded
+        typed.jellyfinBaseURL = "http://192.168.3.9:8096"
+
+        let merged = SettingsMerge.applying(typed: typed, loaded: loaded, to: loaded)
+
+        XCTAssertEqual(merged.jellyfinBaseURL, "http://192.168.3.9:8096")
+    }
 }

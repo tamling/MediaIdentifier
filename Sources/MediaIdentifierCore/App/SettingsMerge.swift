@@ -44,7 +44,23 @@ public enum SettingsMerge {
         apply(typed.conflictPolicy, loaded.conflictPolicy, &result.conflictPolicy)
         apply(typed.watchSourceFolder, loaded.watchSourceFolder,
               &result.watchSourceFolder)
-        apply(typed.conversion, loaded.conversion, &result.conversion)
+        // Field by field, for the same reason the schedule is: a window that
+        // only changed the quality must not also write back a codec somebody
+        // else changed in the meantime.
+        apply(typed.conversion.videoCodec, loaded.conversion.videoCodec,
+              &result.conversion.videoCodec)
+        apply(typed.conversion.quality, loaded.conversion.quality,
+              &result.conversion.quality)
+        apply(typed.conversion.preset, loaded.conversion.preset,
+              &result.conversion.preset)
+        apply(typed.conversion.targetHeight, loaded.conversion.targetHeight,
+              &result.conversion.targetHeight)
+        apply(typed.conversion.audioMode, loaded.conversion.audioMode,
+              &result.conversion.audioMode)
+        apply(typed.conversion.stripSubtitles, loaded.conversion.stripSubtitles,
+              &result.conversion.stripSubtitles)
+        apply(typed.conversion.ffmpegPath, loaded.conversion.ffmpegPath,
+              &result.conversion.ffmpegPath)
         // Field by field rather than whole, because the schedule has five of
         // them and a window that only changed the time must not also write
         // back a stale "enabled".

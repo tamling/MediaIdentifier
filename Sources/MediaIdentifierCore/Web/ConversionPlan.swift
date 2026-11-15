@@ -205,29 +205,47 @@ public struct WebConversionSettings: Codable, Sendable, Equatable {
 
     public func problems() -> [WebSettings.Problem] {
         var found: [WebSettings.Problem] = []
+        // The memberwise initialiser clamps this, so a value out of range
+        // can only come from a window that set the field directly — which
+        // the settings window does, deliberately, to keep "that was not a
+        // number" tellable from "the user typed 0". Without this rule the
+        // impossible value was simply clamped on the way to FFmpeg and the
+        // user got a quality they never asked for.
+        if !(0...51).contains(quality) {
+            found.append(.init(field: "quality",
+                               message: Text.s("Die Qualität muss eine Zahl "
+                                                   + "zwischen 0 und 51 sein.",
+                                               "The quality must be a number "
+                                                   + "between 0 and 51.")))
+        }
         if targetHeightWasUnreadable {
             found.append(.init(field: "targetHeight",
-                               message: "The height must be a number, or empty to keep the "
-                                   + "source resolution."))
+                               message: Text.s("Die Höhe muss eine Zahl sein, oder leer, "
+                                                   + "um die Auflösung der Quelle zu behalten.",
+                                               "The height must be a number, or empty to keep "
+                                                   + "the source resolution.")))
         }
         if let height = targetHeight, height < 120 || height > 8192 {
             found.append(.init(field: "targetHeight",
-                               message: "The height must be between 120 and 8192."))
+                               message: Text.s("Die Höhe muss zwischen 120 und 8192 liegen.",
+                                               "The height must be between 120 and 8192.")))
         }
         if !ffmpegPath.isEmpty, !ffmpegPath.hasPrefix("/") {
             found.append(.init(field: "ffmpegPath",
-                               message: "The FFmpeg path must be absolute."))
+                               message: Text.s("Der Pfad zu FFmpeg muss mit / beginnen.",
+                                               "The FFmpeg path must be absolute.")))
         }
         return found
     }
 
-    /// Heights offered in the form. `nil` keeps the source resolution.
+    /// Heights offered in the interface. `nil` keeps the source resolution.
     public static let offeredHeights: [Int?] = [nil, 2160, 1440, 1080, 720]
 
     public static func heightLabel(_ height: Int?) -> String {
         switch height {
-        case nil: return "Keep the source resolution"
-        case 2160?: return "2160p (4K)"
+        case nil: return Text.s("Auflösung der Quelle behalten",
+                                "Keep the source resolution")
+        case 2160?: return Text.s("2160p (4K)", "2160p (4K)")
         case let value?: return "\(value)p"
         }
     }

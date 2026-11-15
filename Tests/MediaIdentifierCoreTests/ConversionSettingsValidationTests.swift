@@ -106,4 +106,61 @@ final class ConversionSettingsValidationTests: XCTestCase {
                                                  current: WebConversionSettings())
         XCTAssertEqual(low.quality, 0)
     }
+
+    // MARK: What the settings window can hand over
+
+    /// The window writes the quality field straight onto the struct, as an
+    /// impossible number when it is not a number at all — the same trick
+    /// the schedule uses for an hour that is not an hour. That is only
+    /// honest if `problems()` catches it: otherwise the engine clamps it on
+    /// the way to FFmpeg and the user gets a quality they never typed.
+    func testAnImpossibleQualityIsReported() {
+        var settings = WebConversionSettings()
+        settings.quality = -1
+
+        let fields = settings.problems().map(\.field)
+
+        XCTAssertTrue(fields.contains("quality"), "got \(fields)")
+    }
+
+    func testAQualityAboveTheRangeIsReported() {
+        var settings = WebConversionSettings()
+        settings.quality = 52
+
+        XCTAssertTrue(settings.problems().map(\.field).contains("quality"))
+    }
+
+    func testTheWholeRangeIsAccepted() {
+        for quality in [0, 21, 51] {
+            var settings = WebConversionSettings()
+            settings.quality = quality
+            XCTAssertFalse(settings.problems().map(\.field).contains("quality"),
+                           "quality \(quality) should be allowed")
+        }
+    }
+
+    /// Every choice the window offers needs a label, and two choices must
+    /// not read the same: a list of three identical lines cannot be chosen
+    /// from. The labels are new — the enums had none, because only the web
+    /// front-end ever listed them and it printed the raw values.
+    func testEveryConversionChoiceHasItsOwnLabel() {
+        let codecs = ConversionOptions.VideoCodec.allCases.map(\.label)
+        let presets = ConversionOptions.Preset.allCases.map(\.label)
+        let audio = ConversionOptions.AudioMode.allCases.map(\.label)
+        for labels in [codecs, presets, audio] {
+            XCTAssertFalse(labels.contains(where: \.isEmpty))
+            XCTAssertEqual(Set(labels).count, labels.count, "duplicate in \(labels)")
+        }
+    }
+
+    /// The heights the window lists, and their labels. `nil` has to be in
+    /// the list: it is how "leave the resolution alone" is chosen, and a
+    /// list without it cannot express the default.
+    func testTheOfferedHeightsIncludeKeepingTheSource() {
+        XCTAssertTrue(WebConversionSettings.offeredHeights.contains(nil))
+        let labels = WebConversionSettings.offeredHeights
+            .map(WebConversionSettings.heightLabel)
+        XCTAssertEqual(Set(labels).count, labels.count, "duplicate in \(labels)")
+        XCTAssertFalse(labels.contains(where: \.isEmpty))
+    }
 }

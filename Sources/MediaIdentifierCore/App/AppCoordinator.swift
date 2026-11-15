@@ -768,7 +768,7 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
             return scanForMusic(under: root, settings: settings)
         }
 
-        update { $0.busy = true; $0.convertStatus = "Looking for media…" }
+        update { $0.busy = true; $0.convertStatus = Text.s("Wird gesucht …", "Looking for media…") }
         let urls = FolderScan.videoFiles(under: root)
         guard !urls.isEmpty else {
             lock.lock(); _items = []; lock.unlock()
@@ -913,7 +913,7 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         let alreadyThere = (sorted.videos.count - videos.count)
             + (sorted.audio.count - audio.count)
 
-        update { $0.busy = true; $0.convertStatus = "Looking for media…" }
+        update { $0.busy = true; $0.convertStatus = Text.s("Wird gesucht …", "Looking for media…") }
 
         var added: [RenameItem] = []
         var alreadyFiled = 0
@@ -1053,7 +1053,7 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
     private func enriching(_ mediaFiles: [MediaFile],
                            _ settings: WebSettings) -> [MediaFile] {
         guard let provider = enrichmentProvider(settings) else { return mediaFiles }
-        update { $0.convertStatus = "Identifying…" }
+        update { $0.convertStatus = Text.s("Wird erkannt …", "Identifying…") }
         var enriched: [MediaFile] = []
         var failedInARow = 0
         var gaveUp = false
@@ -1638,7 +1638,7 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
             return
         }
 
-        update { $0.busy = true; $0.convertStatus = "Looking for files…" }
+        update { $0.busy = true; $0.convertStatus = Text.s("Wird gesucht …", "Looking for files…") }
         var found: [ConversionCandidate] = []
         var seen: Set<String> = []
         for root in roots {

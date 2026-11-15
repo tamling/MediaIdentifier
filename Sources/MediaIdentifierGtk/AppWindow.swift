@@ -51,6 +51,30 @@ final class AppWindow {
     private let scheduleSummary: UnsafeMutablePointer<GtkWidget>
     private let checksColumn: UnsafeMutablePointer<GtkWidget>
     private let checksExpander: UnsafeMutablePointer<GtkWidget>
+    /// Where the media server is, so a rename can tell it to look again.
+    ///
+    /// The field was missing for as long as the window has existed: the
+    /// setting is in `WebSettings`, `SettingsMerge` writes it back, the
+    /// engine uses it — and nothing could ever type it in. The web
+    /// front-end had the field and the web front-end is gone.
+    private let jellyfinURLEntry: UnsafeMutablePointer<GtkWidget>
+    // MARK: Converting
+    //
+    // The whole conversion feature was reachable from the web front-end
+    // only, so when that went, FFmpeg driving, progress, cancelling and
+    // size estimation stayed in the binary with no way to ask for them.
+    // These are the switches that decide what a conversion does.
+    private let convertCodecCombo: UnsafeMutablePointer<GtkWidget>
+    private let convertQualityEntry: UnsafeMutablePointer<GtkWidget>
+    private let convertPresetCombo: UnsafeMutablePointer<GtkWidget>
+    private let convertHeightCombo: UnsafeMutablePointer<GtkWidget>
+    private let convertAudioCombo: UnsafeMutablePointer<GtkWidget>
+    private let convertSubtitlesCheck: UnsafeMutablePointer<GtkWidget>
+    private let ffmpegPathEntry: UnsafeMutablePointer<GtkWidget>
+    /// What the settings above will roughly do to the file size, recomputed
+    /// from the widgets on every refresh so it answers before the run rather
+    /// than after it.
+    private let convertEstimate: UnsafeMutablePointer<GtkWidget>
     /// Settings, status and fetching live in windows of their own, opened from
     /// the header's menu.
     ///
@@ -377,6 +401,88 @@ final class AppWindow {
         gtk_container_add(Gtk.container(scheduleExpander), scheduleCard)
         gtk_box_pack_start(Gtk.box(settingsPage), scheduleExpander, 0, 0, 0)
 
+        // MARK: Converting
+        //
+        // Collapsed, like the detection card: most people never convert
+        // anything, and an open card of eight encoder switches is the first
+        // thing they would see on opening the settings.
+        convertCodecCombo = gtk_combo_box_text_new()!
+        for codec in ConversionOptions.VideoCodec.allCases {
+            gtk_combo_box_text_append_text(Gtk.comboBoxText(convertCodecCombo),
+                                           codec.label)
+        }
+        convertQualityEntry = Self.entry(placeholder: "21")
+        convertPresetCombo = gtk_combo_box_text_new()!
+        for preset in ConversionOptions.Preset.allCases {
+            gtk_combo_box_text_append_text(Gtk.comboBoxText(convertPresetCombo),
+                                           preset.label)
+        }
+        convertHeightCombo = gtk_combo_box_text_new()!
+        for height in WebConversionSettings.offeredHeights {
+            gtk_combo_box_text_append_text(Gtk.comboBoxText(convertHeightCombo),
+                                           WebConversionSettings.heightLabel(height))
+        }
+        convertAudioCombo = gtk_combo_box_text_new()!
+        for mode in ConversionOptions.AudioMode.allCases {
+            gtk_combo_box_text_append_text(Gtk.comboBoxText(convertAudioCombo),
+                                           mode.label)
+        }
+        convertSubtitlesCheck = gtk_check_button_new_with_label(
+            Text.s("Untertitel nicht mitnehmen", "Leave the subtitles out"))!
+        ffmpegPathEntry = Self.entry(placeholder: "/usr/bin/ffmpeg")
+        convertEstimate = Self.label("", classes: "mf-dim")
+        gtk_label_set_line_wrap(Gtk.label(convertEstimate), 1)
+
+        let conversionCard = Self.card()
+        Self.add(Self.row(Text.s("Verfahren", "Codec"), convertCodecCombo),
+                 to: conversionCard)
+        Self.add(Self.row(Text.s("Qualität", "Quality"), convertQualityEntry),
+                 to: conversionCard)
+        Self.add(Self.row(Text.s("Tempo", "Speed"), convertPresetCombo),
+                 to: conversionCard)
+        Self.add(Self.row(Text.s("Auflösung", "Resolution"), convertHeightCombo),
+                 to: conversionCard)
+        Self.add(Self.row(Text.s("Ton", "Audio"), convertAudioCombo),
+                 to: conversionCard)
+        Self.add(convertSubtitlesCheck, to: conversionCard)
+        Self.add(Self.row(Text.s("FFmpeg", "FFmpeg"), ffmpegPathEntry),
+                 to: conversionCard)
+        Self.add(convertEstimate, to: conversionCard)
+        Self.add(Self.label(Text.s(
+                    "Die neue Datei wird neben die alte gelegt; die alte bleibt "
+                        + "liegen. Angefangen wird im Menü, unter Konvertieren.",
+                    "The new file is written beside the old one and the old one "
+                        + "stays. A run is started from the Convert panel in the "
+                        + "menu."), classes: "mf-dim"),
+                 to: conversionCard)
+
+        let conversionExpander = gtk_expander_new(
+            Text.s("Konvertieren", "Converting"))!
+        gtk_container_add(Gtk.container(conversionExpander), conversionCard)
+        gtk_box_pack_start(Gtk.box(settingsPage), conversionExpander, 0, 0, 0)
+
+        // MARK: The media server
+
+        jellyfinURLEntry = Self.entry(placeholder: "http://192.168.1.2:8096")
+        let jellyfinCard = Self.card()
+        Self.add(Self.row(Text.s("Server", "Server"), jellyfinURLEntry), to: jellyfinCard)
+        let jellyfinRow = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8)!
+        let jellyfinTestButton = gtk_button_new_with_label(
+            Text.s("Verbindung testen", "Test the connection"))!
+        gtk_box_pack_end(Gtk.box(jellyfinRow), jellyfinTestButton, 0, 0, 0)
+        Self.add(jellyfinRow, to: jellyfinCard)
+        Self.add(Self.label(Text.s(
+                    "Nach dem Umbenennen wird dem Server gesagt, dass er neu "
+                        + "einlesen soll. Leer lassen, wenn keiner da ist.",
+                    "After renaming, the server is told to scan again. Leave it "
+                        + "empty if there is none."), classes: "mf-dim"),
+                 to: jellyfinCard)
+
+        let jellyfinExpander = gtk_expander_new(
+            Text.s("Medienserver", "Media server"))!
+        gtk_container_add(Gtk.container(jellyfinExpander), jellyfinCard)
+        gtk_box_pack_start(Gtk.box(settingsPage), jellyfinExpander, 0, 0, 0)
+
         // MARK: Proposals
 
         let proposals = Self.card(titled: Text.s("Vorschläge", "Proposals"))
@@ -505,6 +611,7 @@ final class AppWindow {
         Gtk.onClick(allButton, self) { $0.setAllChecked(true) }
         Gtk.onClick(noneButton, self) { $0.setAllChecked(false) }
         Gtk.onClick(testButton, self) { $0.testModelServer() }
+        Gtk.onClick(jellyfinTestButton, self) { $0.testMediaServer() }
         Gtk.onClick(checkButton, self) { $0.checkEverything() }
         Gtk.onClick(downloadButton, self) { $0.startDownload() }
         Gtk.onClick(cancelDownloadButton, self) { $0.cancelDownload() }
@@ -655,6 +762,9 @@ final class AppWindow {
             settings.libraryMode = LibraryMode.allCases[library]
         }
         settings.schedule = readScheduleFields(from: settings.schedule)
+        settings.conversion = readConversionFields(from: settings.conversion)
+        settings.jellyfinBaseURL =
+            Gtk.text(of: jellyfinURLEntry).trimmingCharacters(in: .whitespacesAndNewlines)
         settings = SettingsMerge.applying(typed: settings, loaded: loadedSettings,
                                           to: stored)
         coordinator.submit(.saveSettings(settings))
@@ -940,6 +1050,56 @@ final class AppWindow {
     /// Presses Apply in the settings panel.
     func pressApply() { saveFolders() }
 
+    /// The conversion settings as the *widgets* hold them, for the smoke
+    /// modes.
+    ///
+    /// Read off the widgets and not out of `coordinator.settings`, for the
+    /// same reason `statusText` is read off its label: the question is
+    /// whether the window shows the stored settings and hands them back
+    /// unchanged, and asking the engine what it stored would agree with
+    /// itself and prove nothing. This is how a card that is on screen but
+    /// wired to nothing is told from one that works.
+    ///
+    /// Deliberately *not* via `readConversionFields`, which is the saving
+    /// path and falls back to the stored value for a field left blank — the
+    /// right rule for Apply and a useless one for a probe. Built this way
+    /// the first time, it printed a correct-looking `quality=28` with the
+    /// line that fills that box deleted. An empty widget prints as empty
+    /// here, and an unselected list as `none`.
+    var conversionText: String {
+        func selection<T>(_ combo: UnsafeMutablePointer<GtkWidget>,
+                          _ cases: [T], _ name: (T) -> String) -> String {
+            let row = Int(gtk_combo_box_get_active(Gtk.comboBox(combo)))
+            guard cases.indices.contains(row) else { return "none" }
+            return name(cases[row])
+        }
+        let codec = selection(convertCodecCombo,
+                              ConversionOptions.VideoCodec.allCases) { $0.rawValue }
+        let preset = selection(convertPresetCombo,
+                               ConversionOptions.Preset.allCases) { $0.rawValue }
+        let audio = selection(convertAudioCombo,
+                              ConversionOptions.AudioMode.allCases) { $0.rawValue }
+        let height = selection(convertHeightCombo,
+                               WebConversionSettings.offeredHeights) {
+            $0.map(String.init) ?? "source"
+        }
+        return "codec=\(codec) quality=\(Gtk.text(of: convertQualityEntry)) "
+            + "preset=\(preset) height=\(height) "
+            + "audio=\(audio) "
+            + "subtitles=\(Gtk.isChecked(convertSubtitlesCheck)) "
+            + "ffmpeg=\(Gtk.text(of: ffmpegPathEntry))"
+    }
+
+    /// The media-server address as the widget reads it, for the smoke modes.
+    var mediaServerText: String {
+        Gtk.text(of: jellyfinURLEntry)
+    }
+
+    /// The estimate line under the conversion settings, read off the label.
+    var estimateText: String {
+        String(cString: gtk_label_get_text(Gtk.label(convertEstimate)))
+    }
+
     /// What the middle of the window says while the list is empty, read back
     /// off that label. Empty when the list has rows.
     ///
@@ -1036,6 +1196,110 @@ final class AppWindow {
             gtk_combo_box_set_active(Gtk.comboBox(scheduleCadenceCombo), Int32(index))
         }
         Gtk.setText(scheduleSummary, ScheduleLine.describe(schedule, coordinator.snapshot))
+
+        Gtk.setText(of: jellyfinURLEntry, settings.jellyfinBaseURL)
+
+        let conversion = settings.conversion
+        if let index = ConversionOptions.VideoCodec.allCases
+            .firstIndex(of: conversion.videoCodec) {
+            gtk_combo_box_set_active(Gtk.comboBox(convertCodecCombo), Int32(index))
+        }
+        Gtk.setText(of: convertQualityEntry, String(conversion.quality))
+        if let index = ConversionOptions.Preset.allCases
+            .firstIndex(of: conversion.preset) {
+            gtk_combo_box_set_active(Gtk.comboBox(convertPresetCombo), Int32(index))
+        }
+        // A stored height the list does not offer — hand-edited, or from a
+        // version that offered more — selects nothing rather than silently
+        // becoming one of the five. Saving then leaves it alone, because the
+        // merge only writes a field the widget actually changed.
+        if let index = WebConversionSettings.offeredHeights
+            .firstIndex(of: conversion.targetHeight) {
+            gtk_combo_box_set_active(Gtk.comboBox(convertHeightCombo), Int32(index))
+        }
+        if let index = ConversionOptions.AudioMode.allCases
+            .firstIndex(of: conversion.audioMode) {
+            gtk_combo_box_set_active(Gtk.comboBox(convertAudioCombo), Int32(index))
+        }
+        Gtk.setChecked(convertSubtitlesCheck, conversion.stripSubtitles)
+        Gtk.setText(of: ffmpegPathEntry, conversion.ffmpegPath)
+    }
+
+    /// Reads the conversion fields back out of the widgets.
+    ///
+    /// A quality that is not a number is kept as an impossible one rather
+    /// than quietly becoming the default, for the same reason the schedule
+    /// keeps an impossible hour: `problems()` then says so, and the user
+    /// learns why nothing was saved instead of finding a number they never
+    /// typed.
+    private func readConversionFields(from current: WebConversionSettings)
+        -> WebConversionSettings {
+        var conversion = current
+        conversion.stripSubtitles = Gtk.isChecked(convertSubtitlesCheck)
+        conversion.ffmpegPath =
+            Gtk.text(of: ffmpegPathEntry).trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let codec = Int(gtk_combo_box_get_active(Gtk.comboBox(convertCodecCombo)))
+        if codec >= 0, codec < ConversionOptions.VideoCodec.allCases.count {
+            conversion.videoCodec = ConversionOptions.VideoCodec.allCases[codec]
+        }
+        let preset = Int(gtk_combo_box_get_active(Gtk.comboBox(convertPresetCombo)))
+        if preset >= 0, preset < ConversionOptions.Preset.allCases.count {
+            conversion.preset = ConversionOptions.Preset.allCases[preset]
+        }
+        let audio = Int(gtk_combo_box_get_active(Gtk.comboBox(convertAudioCombo)))
+        if audio >= 0, audio < ConversionOptions.AudioMode.allCases.count {
+            conversion.audioMode = ConversionOptions.AudioMode.allCases[audio]
+        }
+        let height = Int(gtk_combo_box_get_active(Gtk.comboBox(convertHeightCombo)))
+        if height >= 0, height < WebConversionSettings.offeredHeights.count {
+            conversion.targetHeight = WebConversionSettings.offeredHeights[height]
+        }
+
+        let typed = Gtk.text(of: convertQualityEntry)
+            .trimmingCharacters(in: .whitespaces)
+        if !typed.isEmpty {
+            // Out of range on purpose when it is not a number: the engine
+            // clamps 0...51, so -1 arrives as 0 and is visibly wrong rather
+            // than invisibly plausible.
+            conversion.quality = Int(typed) ?? -1
+        }
+        return conversion
+    }
+
+    /// The estimate line under the conversion settings.
+    ///
+    /// Built from the widgets rather than from the saved settings, so it
+    /// answers "what will this do" before Apply is pressed. Recomputed on
+    /// the refresh timer, which is cheap enough: four reads and a format.
+    private func refreshConversionEstimate() {
+        let typed = readConversionFields(from: coordinator.settings.conversion)
+        // Through the initialiser, so the percentage is the one the engine
+        // would really use: it clamps the quality the same way.
+        let effective = WebConversionSettings(videoCodec: typed.videoCodec,
+                                              quality: typed.quality,
+                                              preset: typed.preset,
+                                              targetHeight: typed.targetHeight,
+                                              audioMode: typed.audioMode,
+                                              stripSubtitles: typed.stripSubtitles)
+        let percent = effective.estimatedSizePercent
+        let usual = ConversionOptions.suggestedQuality(forHeight: effective.targetHeight)
+        Gtk.setText(convertEstimate, Text.s(
+            "Schätzung: etwa \(percent) % der ursprünglichen Größe. "
+                + "Bei dieser Auflösung ist \(usual) der übliche Qualitätswert; "
+                + "kleiner heißt besser und größer.",
+            "Estimate: about \(percent) % of the original size. At this "
+                + "resolution \(usual) is the usual quality value; lower means "
+                + "better and bigger."))
+    }
+
+    /// Asks the media server whether it is there.
+    private func testMediaServer() {
+        // Saved first, so the test uses the address in the field rather than
+        // whatever was stored when the window opened. The same reason
+        // `startDownload` saves first.
+        saveFolders()
+        coordinator.submit(.testJellyfinConnection)
     }
 
     // MARK: Reading the engine back
@@ -1115,6 +1379,7 @@ final class AppWindow {
         // were last loaded.
         Gtk.setText(scheduleSummary,
                     ScheduleLine.describe(coordinator.settings.schedule, state))
+        refreshConversionEstimate()
 
         refreshList()
         refreshLog()

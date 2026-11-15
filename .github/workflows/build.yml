@@ -555,6 +555,30 @@ jobs:
 
           echo "=== pressing Apply in the settings ==="
           applied="$(mktemp -d)"
+          # Settings the window has to show and hand back. Every value is
+          # deliberately NOT the default, so a card that is on screen but
+          # wired to nothing prints the defaults and fails below. This is
+          # the whole conversion feature's only route into the program: it
+          # was reachable from the removed web front-end and from nothing
+          # else for as long as the GTK window has existed.
+          cat > "$applied/settings.json" <<'SETTINGS'
+          {
+            "sourceFolder": "", "moviesFolder": "", "seriesFolder": "",
+            "musicFolder": "", "libraryMode": "video",
+            "identification": "offline",
+            "localLLMBaseURL": "", "localLLMModel": "",
+            "jellyfinBaseURL": "http://192.168.3.9:8096",
+            "conflictPolicy": "skip", "watchSourceFolder": false,
+            "conversion": {
+              "videoCodec": "av1", "quality": 28, "preset": "veryfast",
+              "targetHeight": 720, "audioMode": "opus",
+              "stripSubtitles": true, "ffmpegPath": "/opt/ffmpeg/bin/ffmpeg"
+            },
+            "schedule": {"isEnabled": false, "alsoRename": false,
+                         "cadence": "daily", "hour": 3, "minute": 0,
+                         "everyHours": 6}
+          }
+          SETTINGS
           timeout 90 xvfb-run -a --server-args="-screen 0 1280x900x24" \
             env MEDIAFIN_CONFIG_DIR="$applied" \
             .build/release/mediafin-gtk --press-apply | tee applied.log
@@ -567,6 +591,56 @@ jobs:
             echo "FAIL: the second Apply looked exactly like the first"
             exit 1
           }
+
+          # The conversion card, read off the widgets themselves.
+          expected="codec=av1 quality=28 preset=veryfast height=720 audio=opus subtitles=true ffmpeg=/opt/ffmpeg/bin/ffmpeg"
+          shown="$(sed -n 's/^conversion read: //p' applied.log)"
+          kept="$(sed -n 's/^conversion after apply: //p' applied.log)"
+          echo "conversion shown: ${shown:-nothing}"
+          test "$shown" = "$expected" || {
+            echo "FAIL: the conversion card does not show the stored settings"
+            echo "  wanted: $expected"
+            echo "  got   : ${shown:-nothing}"
+            exit 1
+          }
+          test "$kept" = "$expected" || {
+            echo "FAIL: Apply changed the conversion settings it was handed"
+            echo "  wanted: $expected"
+            echo "  got   : ${kept:-nothing}"
+            exit 1
+          }
+          server="$(sed -n 's/^media server read: //p' applied.log)"
+          test "$server" = "http://192.168.3.9:8096" || {
+            echo "FAIL: the media server field does not show the stored address"
+            echo "  got: ${server:-nothing}"
+            exit 1
+          }
+          # And what the file says afterwards: two Applies must not have
+          # rewritten a field the user never touched.
+          python3 - "$applied/settings.json" <<'CHECK'
+          import json, sys
+          stored = json.load(open(sys.argv[1]))
+          want = {"videoCodec": "av1", "quality": 28, "preset": "veryfast",
+                  "targetHeight": 720, "audioMode": "opus",
+                  "stripSubtitles": True, "ffmpegPath": "/opt/ffmpeg/bin/ffmpeg"}
+          for key, value in want.items():
+              got = stored["conversion"].get(key)
+              if got != value:
+                  sys.exit(f"FAIL: Apply wrote conversion.{key}={got!r}, "
+                           f"wanted {value!r}")
+          if stored["jellyfinBaseURL"] != "http://192.168.3.9:8096":
+              sys.exit("FAIL: Apply wiped jellyfinBaseURL: "
+                       + repr(stored["jellyfinBaseURL"]))
+          print("settings.json kept every conversion field and the server address")
+          CHECK
+          # The estimate line, which is the only thing that says what the
+          # chosen settings will do before a run starts.
+          estimate="$(sed -n 's/^estimate: //p' applied.log)"
+          echo "estimate: ${estimate:-nothing}"
+          case "$estimate" in
+            *%*) : ;;
+            *) echo "FAIL: no size estimate under the conversion settings"; exit 1 ;;
+          esac
 
           echo "=== with one film to find ==="
           run_window "$ready/config" | tee ready.log
