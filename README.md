@@ -27,7 +27,10 @@ before anything touches the disk. One window, one engine, Linux.
   art there does not merely clutter the library, it can leave the item with
   no metadata at all. The row says which file will go before you press
   **Umbenennen**, and only files whose rename actually succeeded lose theirs.
-- Optionally **re-encodes** to save space.
+- Optionally **re-encodes** to save space — menu, **Konvertieren …**. The new
+  file is written *beside* the old one and the old one is never touched: a
+  re-encode is lossy and slow, so a bad result has to be undoable by deleting
+  the new file.
 - Every change is **logged** and can be **undone**.
 - Everything runs **locally**. Only a title and a year are ever sent anywhere,
   and only if you switch online identification on.
@@ -51,14 +54,34 @@ Everything that is not the list lives behind the **menu button** in the header:
 
 | Menu entry | |
 |---|---|
-| **Einstellungen …** | Library folders, identification, schedule — all in one window, with one **Übernehmen** button at the bottom that says `Übernommen um 14:52:31`. The time is there so a second press is visibly a second press. |
+| **Einstellungen …** | Library folders, identification, schedule, conversion and the media server — all in one window, with one **Übernehmen** button pinned to the bottom edge that says `Übernommen um 14:52:31`. The time is there so a second press is visibly a second press. |
 | **Status …** | The traffic light: one lamp per thing that can be wrong, each carrying the sentence that says what to do about it. |
 | **Aus dem Netz laden …** | Fetch a video from a link with `yt-dlp`. |
+| **Konvertieren …** | Find files worth re-encoding, tick the ones you want, watch it run, stop it. |
 
 The main surface is the list, its buttons, and a footer with the last thing
 that happened and the version. While the list is empty, that same sentence is
 repeated in the middle of the window, because the middle is where you are
 looking when you are wondering what happened.
+
+**Umbenennen**, **Rückgängig** and **Stopp** stay on that surface and are never
+behind the menu: they are what you reach for when something is going wrong, and
+they go grey while the engine is working, so a second press cannot land on the
+wrong thing. The history on the right has a **Leeren** that asks first, because
+it takes the undo steps with it and says how many.
+
+### Converting
+
+The settings say what a conversion produces — codec, quality, speed,
+resolution, audio, subtitles, where FFmpeg is — and a line under them says
+roughly what that does to the file size. It names the source it assumes:
+"etwa 27 % bei einer 1080p-Quelle, etwa 7 % bei einer 4K-Quelle", because the
+saving from a downscale is the *difference* between source and target, and
+nothing can look at your files while a settings window is open.
+
+The **Konvertieren** panel is where a run is started. **Suchen** lists what
+could be converted, with each file's size and the total of what is ticked; the
+originals stay where they are.
 
 ## Running by itself
 
