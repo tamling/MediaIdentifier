@@ -80,18 +80,34 @@ public struct RenamePlanner {
         }
         let ext = mediaFile.url.pathExtension
         let relativePath = namer.relativePath(for: mediaFile.parsed, fileExtension: ext)
-        let primaryDestination = root.appendingPathComponent(relativePath)
-        let companions = companionMoves(for: mediaFile, primaryDestination: primaryDestination)
         let notes = Self.companionNotes(for: mediaFile)
 
-        return RenameItem(
+        // The item first, because its init is what sanitises the path, and
+        // then the companions from the item's own destination.
+        //
+        // They used to be built from the namer's RAW output while the
+        // primary kept the sanitised one, so whenever the two differed the
+        // film and its subtitle were planned into two different folders. A
+        // title of "?" sanitises to nothing, so the raw path was
+        // " (2019)/ (2019).mkv" and the stored one "(2019)/(2019).mkv":
+        // after pressing Umbenennen there were two sibling folders that look
+        // identical in a file manager, the film in one and its subtitle in
+        // the other. A local model answering `{"title": ":"}` does the same
+        // to an ordinary film, and the preview shows only the primary's
+        // path, so nothing on screen said so.
+        //
+        // `reconcile` repaired it, but only on the branch where a library
+        // folder is configured — and no library folder is the default.
+        var item = RenameItem(
             mediaFile: mediaFile,
             outputRoot: root,
             proposedRelativePath: relativePath,
-            companionMoves: companions,
             companionDeletions: notes.delete,
             companionKeptNotes: notes.keep
         )
+        item.companionMoves = companionMoves(for: mediaFile,
+                                            primaryDestination: item.primaryDestination)
+        return item
     }
 
     /// Computes companion destinations next to the renamed primary, preserving

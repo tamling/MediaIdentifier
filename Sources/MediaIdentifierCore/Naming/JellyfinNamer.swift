@@ -58,7 +58,7 @@ public struct JellyfinNamer {
     }
 
     private func movieStem(for parsed: ParsedRelease) -> String {
-        let title = Self.sanitize(parsed.title.isEmpty ? "Unknown" : parsed.title)
+        let title = Self.titleComponent(for: parsed)
         if let year = parsed.year {
             return "\(title) (\(year))"
         }
@@ -71,16 +71,13 @@ public struct JellyfinNamer {
         let showName = seriesFolderName(for: parsed)
         let season = parsed.season ?? 1
         let seasonFolder = "Season " + pad(season)
-        let stem = episodeStem(showTitle: Self.sanitize(showTitleOnly(parsed)), parsed: parsed)
+        let stem = episodeStem(showTitle: Self.titleComponent(for: parsed),
+                               parsed: parsed)
         return "\(showName)/\(seasonFolder)/\(stem)\(ext)"
     }
 
-    private func showTitleOnly(_ parsed: ParsedRelease) -> String {
-        parsed.title.isEmpty ? "Unknown" : parsed.title
-    }
-
     private func seriesFolderName(for parsed: ParsedRelease) -> String {
-        let title = Self.sanitize(showTitleOnly(parsed))
+        let title = Self.titleComponent(for: parsed)
         if options.includeSeriesYear, let year = parsed.year {
             return "\(title) (\(year))"
         }
@@ -126,6 +123,30 @@ public struct JellyfinNamer {
     /// longer than what this returns. ext4, XFS, APFS and SMB all stop at
     /// 255 **bytes**, and `ENAMETOOLONG` is where the slack goes.
     public static let componentByteLimit = 200
+
+    /// The title as a path component, and never empty.
+    ///
+    /// `parsed.title.isEmpty ? "Unknown" : title` covered an empty title and
+    /// not a title that *sanitises* to empty — and "?" and ":" both do, as
+    /// does any title made only of the characters this program strips. The
+    /// result was a film at "(2019)/(2019).mkv", or, with no year to fall
+    /// back on, a relative path with no component at all: the destination
+    /// then **was** the library root, and the move onto a directory failed.
+    /// A local model answering `{"title": ":"}` is enough to get there,
+    /// since the only check on its answer is "not empty".
+    ///
+    /// The file's own name is the fallback: it is real, it is what the user
+    /// sees now, and it cannot be worse than a folder called "(2019)".
+    static func titleComponent(for parsed: ParsedRelease) -> String {
+        let fromTitle = sanitize(parsed.title)
+        if !fromTitle.isEmpty { return fromTitle }
+        let fromFile = sanitize((parsed.originalFileName as NSString)
+            .deletingPathExtension)
+        if !fromFile.isEmpty { return fromFile }
+        // Deliberately not translated: this ends up in a path, and a file
+        // must not change its name because the interface language changed.
+        return "Unbenannt"
+    }
 
     /// Removes characters that are illegal or problematic in file names on
     /// macOS / SMB shares (`/` and `:` in particular), strips control
