@@ -93,23 +93,57 @@ final class PerformanceBenchmarks: XCTestCase {
     /// runner cannot fail it — but a return to quadratic took 40 s and
     /// would.
     func testScanningAFlatFolderIsNotQuadratic() throws {
-        var takenForFiveHundred: TimeInterval = 0
+        var scanned: TimeInterval = 0
+        var written: TimeInterval = 0
         for count in scanSizes {
+            let before = Date()
             let folder = try populate(count, companions: true)
+            let writing = Date().timeIntervalSince(before)
             var found = 0
             let started = Date()
             try seconds("scan \(count) videos + companions") {
                 found = MediaScanner().scan(urls: [folder]).count
             }
-            if count == 500 { takenForFiveHundred = Date().timeIntervalSince(started) }
+            if count == 500 {
+                scanned = Date().timeIntervalSince(started)
+                written = writing
+            }
             XCTAssertEqual(found, count)
             try fm.removeItem(at: folder)
         }
-        XCTAssertLessThan(takenForFiveHundred, 5,
-                          "scanning 500 files took \(takenForFiveHundred)s; it was "
-                              + "10.4 s when companionFiles listed the folder once per "
-                              + "video and asked the filesystem about every entry, and "
-                              + "0.25 s after")
+        // Measured against the same disk, not against the clock.
+        //
+        // A ceiling in seconds measures the runner. This one was 5 s, which
+        // held here (0.25 s) and on the Linux container, and failed on the
+        // macOS runner at 5.93 s — where creating the fixture is about
+        // twenty times slower than here. A guard that flakes teaches people
+        // to press the button again, which is the same thing as no guard.
+        //
+        // So the baseline is the cost of writing the 1,500 files the scan
+        // then reads, on whatever disk the test is running on. Linear, the
+        // scan is of that order; quadratic, it was seventy times it.
+        // Five times, not eight: eight put the ceiling at 8.8 s here, and
+        // the quadratic version took 10.4 s — an 18% margin for catching
+        // the thing this test exists to catch. Five gives 5.5 s here
+        // (thirteen times the measured 0.42 s) and still fails the old code
+        // by a factor of two. The ratio of scan to write is about 0.4 on
+        // this container; the printed numbers below say what it is on
+        // whatever machine ran it.
+        let ceiling = max(3, written * 5)
+        // Printed so a future reader can see the margin on their machine
+        // rather than guess at it. On this container the ratio is about 0.5;
+        // quadratic it was about 70.
+        print("BENCH write 1,500 files                    "
+              + String(format: "%.3f s", written))
+        print("BENCH scan ceiling (5x the write)         "
+              + String(format: "%.3f s", ceiling))
+        XCTAssertLessThan(
+            scanned, ceiling,
+            "scanning 500 files took \(scanned)s against a ceiling of "
+                + "\(ceiling)s (writing the 1,500 files took \(written)s). It was "
+                + "10.4 s here when companionFiles listed the folder once per video "
+                + "and asked the filesystem about every entry, against 0.25 s after "
+                + "— about seventy times the cost of writing them.")
     }
 
     /// Planning, which is pure computation over what the scan returned.
