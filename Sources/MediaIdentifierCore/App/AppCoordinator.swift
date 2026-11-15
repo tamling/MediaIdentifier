@@ -1095,8 +1095,7 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
             ? nil : URL(fileURLWithPath: settings.moviesFolder, isDirectory: true)
         let series = settings.seriesFolder.isEmpty
             ? nil : URL(fileURLWithPath: settings.seriesFolder, isDirectory: true)
-        let planned = planner.makePlan(for: mediaFiles, outputRoot: nil,
-                                       libraryRoot: nil)
+        let planned = planner.makePlan(for: mediaFiles, outputRoot: nil)
             .map { item -> RenameItem in
                 let root = item.mediaFile.parsed.kind == .episode ? series : movies
                 guard let root else {

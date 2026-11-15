@@ -18,18 +18,21 @@ public struct RenamePlanner {
     ///   - mediaFiles: parsed media files to rename.
     ///   - outputRoot: destination root. When `nil`, each file is renamed in
     ///     place relative to its own parent directory (FR18, fully local).
-    ///   - libraryRoot: when set, finished media is moved here as the final
-    ///     step — movies always, but episodes only when their season is
-    ///     complete (partial seasons stay at `outputRoot`/in place).
+    ///
+    /// There was a `libraryRoot` here as well, with a rule: movies always
+    /// moved, but episodes only once their season was contiguous from
+    /// episode 1 with at least two present, and a partial season was renamed
+    /// where it lay. It was documented, had its own analyser and ten green
+    /// tests, and never ran — the one production call passed `libraryRoot:
+    /// nil` and the coordinator chose the roots itself afterwards. Asked
+    /// about it, the answer was that the rule should go rather than be
+    /// switched on: for a series that arrives weekly it would hold every
+    /// episode in the import folder until the season ended.
     public func makePlan(
         for mediaFiles: [MediaFile],
-        outputRoot: URL? = nil,
-        libraryRoot: URL? = nil
+        outputRoot: URL? = nil
     ) -> [RenameItem] {
-        let completeSeasons = libraryRoot == nil ? [] : SeasonAnalyzer.completeSeasons(in: mediaFiles)
-        var items = mediaFiles.map {
-            makeItem(for: $0, outputRoot: outputRoot, libraryRoot: libraryRoot, completeSeasons: completeSeasons)
-        }
+        var items = mediaFiles.map { makeItem(for: $0, outputRoot: outputRoot) }
         detectConflicts(in: &items)
         return items
     }
@@ -61,23 +64,9 @@ public struct RenamePlanner {
 
     private func makeItem(
         for mediaFile: MediaFile,
-        outputRoot: URL?,
-        libraryRoot: URL?,
-        completeSeasons: Set<SeasonAnalyzer.SeasonKey>
+        outputRoot: URL?
     ) -> RenameItem {
-        let inPlace = outputRoot ?? mediaFile.url.deletingLastPathComponent()
-        let root: URL
-        if let libraryRoot {
-            switch mediaFile.parsed.kind {
-            case .movie, .unknown:
-                root = libraryRoot
-            case .episode:
-                root = SeasonAnalyzer.isComplete(mediaFile.parsed, within: completeSeasons)
-                    ? libraryRoot : inPlace
-            }
-        } else {
-            root = inPlace
-        }
+        let root = outputRoot ?? mediaFile.url.deletingLastPathComponent()
         let ext = mediaFile.url.pathExtension
         let relativePath = namer.relativePath(for: mediaFile.parsed, fileExtension: ext)
         let notes = Self.companionNotes(for: mediaFile)

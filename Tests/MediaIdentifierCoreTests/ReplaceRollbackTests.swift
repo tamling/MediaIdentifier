@@ -48,8 +48,7 @@ final class ReplaceRollbackTests: XCTestCase {
         let incoming = source.appendingPathComponent("Tenet.2020.2160p.mkv")
         try Data(payload.utf8).write(to: incoming)
         let files = MediaScanner().scan(urls: [incoming])
-        let plan = RenamePlanner().makePlan(for: files, outputRoot: library,
-                                            libraryRoot: library)
+        let plan = RenamePlanner().makePlan(for: files, outputRoot: library)
         let destination = try XCTUnwrap(plan.first).primaryDestination
         try fm.createDirectory(at: destination.deletingLastPathComponent(),
                                withIntermediateDirectories: true)
@@ -282,7 +281,7 @@ final class ReplaceRollbackTests: XCTestCase {
         let absent = root.appendingPathComponent("not-mounted")
         let plan = RenamePlanner().makePlan(
             for: MediaScanner().scan(urls: [incoming]),
-            outputRoot: absent, libraryRoot: absent)
+            outputRoot: absent)
         let (executor, log, _) = makeExecutor()
 
         let outcome = executor.execute(plan: plan, policy: .skip)

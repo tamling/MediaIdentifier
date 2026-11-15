@@ -101,8 +101,7 @@ final class ReleaseSampleTests: XCTestCase {
         try write("Downloads/Fargo.S05E10.1080p.WEB.H264-GROUP-sample.mkv")
 
         let found = MediaScanner().scan(urls: [root.appendingPathComponent("Downloads")])
-        let plan = RenamePlanner().makePlan(for: found, outputRoot: library,
-                                            libraryRoot: library)
+        let plan = RenamePlanner().makePlan(for: found, outputRoot: library)
         XCTAssertEqual(plan.count, 1)
         XCTAssertNil(plan.first?.conflict,
                      "the film still collides with something")
@@ -151,8 +150,7 @@ final class ReleaseSampleTests: XCTestCase {
         // Still collected, so the row can say where it stays.
         XCTAssertEqual(file.companions.filter { $0.role == .sample }.count, 1)
 
-        let plan = RenamePlanner().makePlan(for: [file], outputRoot: library,
-                                            libraryRoot: library)
+        let plan = RenamePlanner().makePlan(for: [file], outputRoot: library)
         let item = try XCTUnwrap(plan.first)
         XCTAssertFalse(item.allMoves.contains { $0.source == sample },
                        "the sample is still planned to move")

@@ -54,7 +54,7 @@ final class UndoResumeTests: XCTestCase {
         let film = try write("Tenet.2020.1080p.BluRay.x264-GROUP.mkv")
         try write("Tenet.2020.1080p.BluRay.x264-GROUP.en.srt")
         return RenamePlanner().makePlan(for: [MediaScanner().mediaFile(for: film)],
-                                        outputRoot: library, libraryRoot: library)
+                                        outputRoot: library)
     }
 
     // MARK: The history must not call an undo a rename

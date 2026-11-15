@@ -79,7 +79,7 @@ final class ReleaseNoteDeletionTests: XCTestCase {
         let scanner = MediaScanner()
         let file = scanner.mediaFile(for: video)
         let planner = RenamePlanner()
-        return planner.makePlan(for: [file], outputRoot: library, libraryRoot: library)
+        return planner.makePlan(for: [file], outputRoot: library)
     }
 
     // MARK: What the plan says
@@ -198,8 +198,7 @@ final class ReleaseNoteDeletionTests: XCTestCase {
         let video = try write("Fargo - S05E10.mkv", in: library)
         let note = try write("Fargo - S05E10.nfo", in: library)
         let file = MediaScanner().mediaFile(for: video)
-        let plan = RenamePlanner().makePlan(for: [file], outputRoot: library,
-                                            libraryRoot: library)
+        let plan = RenamePlanner().makePlan(for: [file], outputRoot: library)
         var item = try XCTUnwrap(plan.first)
         // Destination equal to the source: the no-op branch.
         item.proposedRelativePath = "Fargo - S05E10.mkv"
@@ -327,7 +326,7 @@ final class ReleaseNoteDeletionTests: XCTestCase {
                                 contents: "<movie>\n  <title>The Matrix</title>\n</movie>")
         let plan = RenamePlanner().makePlan(
             for: [MediaScanner().mediaFile(for: film)],
-            outputRoot: library, libraryRoot: library)
+            outputRoot: library)
         let (executor, _) = makeExecutor()
 
         XCTAssertEqual(executor.execute(plan: plan, policy: .skip).deleted, 0)

@@ -150,7 +150,7 @@ final class StateFilePermissionTests: XCTestCase {
         let journal = RenameJournal(url: blocker.appendingPathComponent("j.json"))
         let plan = RenamePlanner().makePlan(
             for: [MediaScanner().mediaFile(for: film)],
-            outputRoot: work, libraryRoot: work)
+            outputRoot: work)
 
         let outcome = RenameExecutor(log: log, journal: journal)
             .execute(plan: plan, policy: .skip)

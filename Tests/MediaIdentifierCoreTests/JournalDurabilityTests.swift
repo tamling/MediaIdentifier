@@ -47,8 +47,7 @@ final class JournalDurabilityTests: XCTestCase {
     private func planFilms(_ names: [String]) throws -> [RenameItem] {
         for name in names { try write(name) }
         let files = MediaScanner().scan(urls: [source])
-        return RenamePlanner().makePlan(for: files, outputRoot: library,
-                                        libraryRoot: library)
+        return RenamePlanner().makePlan(for: files, outputRoot: library)
     }
 
     /// Counted off the file on disk, which is the only thing durability can

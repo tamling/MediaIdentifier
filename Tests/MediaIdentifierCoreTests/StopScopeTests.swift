@@ -184,8 +184,7 @@ final class StopScopeTests: XCTestCase {
             _ = try makeFile("Film.20\(10 + index).1080p.en.srt")
         }
         let files = MediaScanner().scan(urls: [source])
-        let plan = RenamePlanner().makePlan(for: files, outputRoot: library,
-                                            libraryRoot: library)
+        let plan = RenamePlanner().makePlan(for: files, outputRoot: library)
         XCTAssertEqual(plan.count, 4)
         let journal = RenameJournal(url: config.appendingPathComponent("j.json"))
         let executor = RenameExecutor(

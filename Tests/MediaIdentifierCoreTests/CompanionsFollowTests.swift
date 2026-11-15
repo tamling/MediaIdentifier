@@ -49,7 +49,7 @@ final class CompanionsFollowTests: XCTestCase {
         let film = try write("Tenet.2020.1080p.BluRay.x264-GROUP.mkv")
         try write("Tenet.2020.1080p.BluRay.x264-GROUP.en.srt")
         return RenamePlanner().makePlan(for: [MediaScanner().mediaFile(for: film)],
-                                        outputRoot: library, libraryRoot: library)
+                                        outputRoot: library)
     }
 
     // MARK: The "rename" policy
@@ -196,11 +196,9 @@ final class CompanionsFollowTests: XCTestCase {
         let planner = RenamePlanner()
         let scanner = MediaScanner()
         var a = try XCTUnwrap(planner.makePlan(for: [scanner.mediaFile(for: filmA)],
-                                               outputRoot: library,
-                                               libraryRoot: library).first)
+                                               outputRoot: library).first)
         var b = try XCTUnwrap(planner.makePlan(for: [scanner.mediaFile(for: filmB)],
-                                               outputRoot: library,
-                                               libraryRoot: library).first)
+                                               outputRoot: library).first)
         // Hand both the same companion, as the prefix rule used to.
         a.companionMoves = [PlannedMove(
             source: shared,

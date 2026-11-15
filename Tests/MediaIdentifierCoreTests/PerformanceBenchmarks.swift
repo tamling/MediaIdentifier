@@ -170,8 +170,7 @@ final class PerformanceBenchmarks: XCTestCase {
         try fm.createDirectory(at: library, withIntermediateDirectories: true)
         var planned = 0
         try seconds("plan \(workloadSize) items") {
-            planned = RenamePlanner().makePlan(for: files, outputRoot: library,
-                                               libraryRoot: library).count
+            planned = RenamePlanner().makePlan(for: files, outputRoot: library).count
         }
         XCTAssertEqual(planned, workloadSize)
     }
@@ -210,8 +209,7 @@ final class PerformanceBenchmarks: XCTestCase {
         // created and filled, and the run reported success.
         try fm.createDirectory(at: library, withIntermediateDirectories: true)
         let files = MediaScanner().scan(urls: [folder])
-        let plan = RenamePlanner().makePlan(for: files, outputRoot: library,
-                                            libraryRoot: library)
+        let plan = RenamePlanner().makePlan(for: files, outputRoot: library)
         let log = RenameLog(url: root.appendingPathComponent("log.json"))
         let journal = RenameJournal(url: root.appendingPathComponent("journal.json"))
         let executor = RenameExecutor(log: log, journal: journal)
