@@ -111,39 +111,52 @@ final class PerformanceBenchmarks: XCTestCase {
             XCTAssertEqual(found, count)
             try fm.removeItem(at: folder)
         }
-        // Measured against the same disk, not against the clock.
-        //
-        // A ceiling in seconds measures the runner. This one was 5 s, which
-        // held here (0.25 s) and on the Linux container, and failed on the
-        // macOS runner at 5.93 s — where creating the fixture is about
-        // twenty times slower than here. A guard that flakes teaches people
-        // to press the button again, which is the same thing as no guard.
-        //
-        // So the baseline is the cost of writing the 1,500 files the scan
-        // then reads, on whatever disk the test is running on. Linear, the
-        // scan is of that order; quadratic, it was seventy times it.
-        // Five times, not eight: eight put the ceiling at 8.8 s here, and
-        // the quadratic version took 10.4 s — an 18% margin for catching
-        // the thing this test exists to catch. Five gives 5.5 s here
-        // (thirteen times the measured 0.42 s) and still fails the old code
-        // by a factor of two. The ratio of scan to write is about 0.4 on
-        // this container; the printed numbers below say what it is on
-        // whatever machine ran it.
-        let ceiling = max(3, written * 5)
-        // Printed so a future reader can see the margin on their machine
-        // rather than guess at it. On this container the ratio is about 0.5;
-        // quadratic it was about 70.
+        // A loose backstop, in seconds, and deliberately loose: the
+        // structural test below is the one that catches the regression
+        // exactly. Two attempts at a clock ceiling here both flaked — 5 s
+        // failed on the macOS runner at 5.9 s, and "eight times the cost of
+        // writing the files" failed there too, because the ratio of reading
+        // to writing is about 11 on that machine and 0.3 in this container.
+        // A number that varies by thirty times between two machines is not
+        // measuring the code.
         print("BENCH write 1,500 files                    "
               + String(format: "%.3f s", written))
-        print("BENCH scan ceiling (5x the write)         "
-              + String(format: "%.3f s", ceiling))
         XCTAssertLessThan(
-            scanned, ceiling,
-            "scanning 500 files took \(scanned)s against a ceiling of "
-                + "\(ceiling)s (writing the 1,500 files took \(written)s). It was "
-                + "10.4 s here when companionFiles listed the folder once per video "
-                + "and asked the filesystem about every entry, against 0.25 s after "
-                + "— about seventy times the cost of writing them.")
+            scanned, 30,
+            "scanning 500 files took \(scanned)s, which is slow on any machine "
+                + "(writing the 1,500 files took \(written)s). It was 10.4 s here "
+                + "when companionFiles listed the folder once per video.")
+    }
+
+    /// The regression itself, counted rather than timed.
+    ///
+    /// `companionFiles` used to list the whole directory once per video and
+    /// then ask the filesystem whether each entry was a directory — for
+    /// every video. That is not a slow version of the right algorithm, it is
+    /// a different algorithm, and the number of listings says so exactly: it
+    /// was one per video, it is one per directory.
+    ///
+    /// This replaces a ceiling in seconds, which measured the runner. Two of
+    /// them flaked on the macOS runner before this test existed.
+    func testAFolderIsListedOncePerFolderAndNotOncePerVideo() throws {
+        let count = 200
+        let folder = try populate(count, companions: true)
+        let counting = CountingFileManager()
+        let found = MediaScanner(fileManager: counting).scan(urls: [folder]).count
+
+        XCTAssertEqual(found, count)
+        print("BENCH listings for \(count) videos            \(counting.listings)")
+        XCTAssertLessThanOrEqual(
+            counting.listings, 4,
+            "the folder was listed \(counting.listings) times for \(count) videos; "
+                + "companionFiles used to list it once per video, which is where "
+                + "the 40 seconds for 1,000 files came from")
+        // The stat per entry cannot be counted the same way —
+        // `fileExists(atPath:isDirectory:)` is in an extension on Linux and
+        // a subclass may not override it. The listing count is the shape
+        // that matters: the per-entry lookup was always one per entry, and
+        // what made it quadratic was doing the whole listing again for
+        // every video.
     }
 
     /// Planning, which is pure computation over what the scan returned.
@@ -206,5 +219,24 @@ final class PerformanceBenchmarks: XCTestCase {
                           "renaming \(workloadSize) files took \(renaming)s; 1,000 took "
                               + "44 s when each history entry rewrote the whole log, "
                               + "and 0.23 s after")
+    }
+
+    /// Counts what the scanner asks the filesystem for.
+    ///
+    /// Only the path-based `contentsOfDirectory`, which is what the
+    /// scanner uses and the one overload Linux lets a subclass override —
+    /// the URL-based one and `fileExists(atPath:isDirectory:)` are declared
+    /// in extensions there. `enumerator` is not counted: it is one call for
+    /// the whole walk either way, which is not where the regression was.
+    private final class CountingFileManager: FileManager, @unchecked Sendable {
+        private let lock = NSLock()
+        private var _listings = 0
+        var listings: Int { lock.lock(); defer { lock.unlock() }; return _listings }
+
+        override func contentsOfDirectory(atPath path: String) throws -> [String] {
+            lock.lock(); _listings += 1; lock.unlock()
+            return try super.contentsOfDirectory(atPath: path)
+        }
+
     }
 }

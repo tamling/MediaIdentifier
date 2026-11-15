@@ -80,17 +80,28 @@ public struct MediaScanner {
         let videoStems: [String]
 
         init(of directory: URL, fileManager: FileManager) {
-            let found = (try? fileManager.contentsOfDirectory(
-                at: directory,
-                includingPropertiesForKeys: [.isDirectoryKey],
-                options: [.skipsHiddenFiles])) ?? []
+            // The path-based listing, not the URL-based one. Same work —
+            // one listing plus one lookup per entry — but this overload can
+            // be overridden on Linux, where the URL one is declared in an
+            // extension and cannot be. That is what lets a test COUNT the
+            // listings, which is the only exact way to state the rule this
+            // type exists for: one listing per folder, not one per video.
+            // Two attempts at saying it with a stopwatch both flaked.
+            let names = (try? fileManager.contentsOfDirectory(atPath: directory.path))
+                ?? []
             var files: [Entry] = []
             var stems: [String] = []
-            files.reserveCapacity(found.count)
-            for url in found {
-                let isDirectory = (try? url.resourceValues(forKeys: [.isDirectoryKey]))?
-                    .isDirectory ?? false
-                if isDirectory { continue }
+            files.reserveCapacity(names.count)
+            for name in names.sorted() {
+                // `.skipsHiddenFiles` by hand, and it matters here beyond
+                // tidiness: a replacement's staged `.mediafin-incoming-…`
+                // file must not be picked up as somebody's companion.
+                if name.hasPrefix(".") { continue }
+                let url = directory.appendingPathComponent(name)
+                var isDir: ObjCBool = false
+                guard fileManager.fileExists(atPath: url.path, isDirectory: &isDir)
+                else { continue }
+                if isDir.boolValue { continue }
                 let stem = url.deletingPathExtension().lastPathComponent
                 files.append(Entry(url: url, stem: stem,
                                    role: VideoFileTypes.role(for: url)))
