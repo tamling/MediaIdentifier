@@ -129,6 +129,27 @@ public final class RenameExecutor {
         var movedSources: Set<String> = []
         progress?(0)
 
+        // Said once, before the run, because the next replacement into the
+        // same folder would make a second one and nothing would ever
+        // mention either.
+        for stranded in strandedStagedFiles(forPlan: plan) {
+            let size = (try? fileManager.attributesOfItem(atPath: stranded.path)[.size])
+                as? NSNumber
+            log.append(RenameLogEntry(
+                oldName: stranded.lastPathComponent, newName: "—", status: .skipped,
+                errorDescription: Text.s(
+                    "Rest eines abgebrochenen Austauschs in "
+                        + "„\(stranded.deletingLastPathComponent().path)“"
+                        + (size == nil ? "" : ", \(size!.int64Value) Bytes")
+                        + ". Der Name beginnt mit einem Punkt, deshalb findet ihn "
+                        + "keine Suche. Entweder von Hand umbenennen oder löschen.",
+                    "Left over from an interrupted replacement in "
+                        + "“\(stranded.deletingLastPathComponent().path)”"
+                        + (size == nil ? "" : ", \(size!.int64Value) bytes")
+                        + ". The name starts with a dot, so no scan will find it. "
+                        + "Rename it by hand or delete it.")))
+        }
+
         /// Set once a stop has been honoured. Nothing after it is
         /// attempted, so the plan's tail is reported as untouched rather
         /// than half done.
@@ -224,7 +245,8 @@ public final class RenameExecutor {
                     // what really happened.
                     let backup = try replace(
                         at: resolution.destination, with: move.source,
-                        base: completed, total: total, progress: progress)
+                        base: completed, total: total, progress: progress,
+                        staged: { [journal] in journal.appendToBatch($0) })
                     // Before the main move, so undo restores it after the main
                     // move has been undone and the destination is free again.
                     if let backup { remember(backup) }
@@ -470,6 +492,45 @@ public final class RenameExecutor {
 
     // MARK: Helpers
 
+    /// A replacement that could not be undone cleanly, carrying where the
+    /// user's files actually are.
+    ///
+    /// The three rollback moves inside `replace` used to be `try?`, so a
+    /// rollback that failed was indistinguishable from one that worked and
+    /// the only thing logged was the original cause — "A file with the same
+    /// name already exists" — with no path in it. Meanwhile the user's film
+    /// was sitting in a library folder under `.mediafin-incoming-…`, which
+    /// every scanner here skips.
+    struct ReplaceFailure: LocalizedError {
+        /// What went wrong in the first place.
+        let cause: Error
+        /// Where the incoming file is, if the rollback could not move it back.
+        var strandedIncoming: URL?
+        /// Where the library's own copy is, if that could not be put back.
+        var strandedBackup: URL?
+
+        var errorDescription: String? {
+            var parts = [(cause as NSError).localizedDescription]
+            if let strandedIncoming {
+                parts.append(Text.s(
+                    "Die neue Datei liegt jetzt unter „\(strandedIncoming.path)“ — "
+                        + "der Name beginnt mit einem Punkt, deshalb taucht sie in "
+                        + "keiner Suche auf. Von Hand umbenennen, dann ist sie wieder "
+                        + "benutzbar.",
+                    "The incoming file is now at “\(strandedIncoming.path)” — the "
+                        + "name starts with a dot, so no scan will show it. Rename it "
+                        + "by hand and it is usable again."))
+            }
+            if let strandedBackup {
+                parts.append(Text.s(
+                    "Die bisherige Datei der Bibliothek liegt unter "
+                        + "„\(strandedBackup.path)“.",
+                    "The library's own copy is at “\(strandedBackup.path)”."))
+            }
+            return parts.joined(separator: " ")
+        }
+    }
+
     /// The outcome of resolving a conflict: where the file should go, and
     /// whether something is already there that the policy says to displace.
     ///
@@ -550,9 +611,15 @@ public final class RenameExecutor {
     /// place. Those last two are renames within one directory on one
     /// filesystem, which is as close to "cannot fail" as a file system offers.
     /// If one does anyway, both are undone and the library keeps its own copy.
+    /// - Parameter staged: called the moment the transfer has finished and
+    ///   before anything of the user's is touched, with the move that has
+    ///   just happened. Nothing used to be recorded until `replace` returned,
+    ///   so a failure — or a process death — anywhere in steps two and three
+    ///   left the user's file moved and no record of it anywhere.
     private func replace(
         at destination: URL, with source: URL,
-        base: Int, total: Int, progress: ((Double) -> Void)?
+        base: Int, total: Int, progress: ((Double) -> Void)?,
+        staged stagedHandler: ((RenameTransaction.Move) -> Void)? = nil
     ) throws -> RenameTransaction.Move? {
         // The extension is kept and the name is not: a staged file left behind
         // by a crash is then identifiable as a video rather than as a nameless
@@ -562,11 +629,16 @@ public final class RenameExecutor {
             ? "" : "." + destination.pathExtension
         let staged = destination.deletingLastPathComponent()
             .appendingPathComponent(
-                ".mediafin-incoming-\(UUID().uuidString.prefix(8))\(suffix)")
+                "\(Self.stagingPrefix)\(UUID().uuidString.prefix(8))\(suffix)")
 
         // Step one: the whole transfer, before anything of the user's moves.
         try moveWithProgress(from: source, to: staged,
                              base: base, total: total, progress: progress)
+        // Recorded here, not when this function returns. From this line
+        // until step three completes, that hidden file is the only copy of
+        // the user's film, and this is what lets undo reach it after a
+        // crash.
+        stagedHandler?(RenameTransaction.Move(from: source, to: staged))
 
         // Step two: the library's copy out of the way, journalled so undo can
         // put it back.
@@ -577,23 +649,81 @@ public final class RenameExecutor {
             // Put the incoming file back where it came from. A staged file
             // left behind is invisible litter, and the source has to still be
             // there for a second attempt to have anything to move.
-            try? fileManager.moveItem(at: staged, to: source)
-            throw error
+            throw ReplaceFailure(cause: error,
+                                 strandedIncoming: returning(staged, to: source))
         }
 
         // Step three: into place.
         do {
             try fileManager.moveItem(at: staged, to: destination)
         } catch {
-            if let backup { try? fileManager.moveItem(at: backup.to, to: backup.from) }
-            try? fileManager.moveItem(at: staged, to: source)
-            throw error
+            var failure = ReplaceFailure(cause: error)
+            if let backup {
+                do {
+                    try fileManager.moveItem(at: backup.to, to: backup.from)
+                } catch {
+                    failure.strandedBackup = backup.to
+                }
+            }
+            failure.strandedIncoming = returning(staged, to: source)
+            throw failure
         }
         return backup
     }
 
+    /// Moves a staged file back to where it came from, taking the next free
+    /// name if that one has been retaken. Returns where it was left if even
+    /// that failed, else nil.
+    ///
+    /// `moveItem` refuses to overwrite, so a torrent client recreating the
+    /// source name between step one and step two was enough to make the
+    /// rollback fail — silently, because it was a `try?`. The file then sat
+    /// in a library folder under a dotted name that nothing lists.
+    private func returning(_ staged: URL, to source: URL) -> URL? {
+        do {
+            try fileManager.moveItem(at: staged, to: source)
+            return nil
+        } catch {
+            if let free = uniqueURL(for: source),
+               (try? fileManager.moveItem(at: staged, to: free)) != nil {
+                // Back in the import folder under "… (1)", which a scan
+                // finds, rather than hidden in the library.
+                return free
+            }
+            return staged
+        }
+    }
+
     /// Where a replaced file waits on a system with no desktop Trash.
     public static let trashFolderName = ".mediafin-trash"
+
+    /// The prefix a replacement's staged file carries.
+    public static let stagingPrefix = ".mediafin-incoming-"
+
+    /// Names any staged file left behind in the directories this plan writes
+    /// to, so an interrupted replacement is said out loud once.
+    ///
+    /// Nothing looked for this prefix anywhere outside the download staging
+    /// folder. A crash during step one's cross-device copy leaves a partial
+    /// dotfile holding gigabytes — the source survives, because `moveItem`
+    /// unlinks it only after the copy completes — and a crash between steps
+    /// two and three leaves the only copy of the user's film under that
+    /// name. Either way nothing lists it, because every scanner here skips
+    /// hidden files, so it sat there until somebody ran `ls -a`.
+    func strandedStagedFiles(forPlan plan: [RenameItem]) -> [URL] {
+        var directories: Set<String> = []
+        for item in plan where item.isAccepted {
+            directories.insert(item.primaryDestination.deletingLastPathComponent().path)
+        }
+        var found: [URL] = []
+        for path in directories.sorted() {
+            let names = (try? fileManager.contentsOfDirectory(atPath: path)) ?? []
+            for name in names.sorted() where name.hasPrefix(Self.stagingPrefix) {
+                found.append(URL(fileURLWithPath: path).appendingPathComponent(name))
+            }
+        }
+        return found
+    }
 
     /// Puts `url` out of the way and returns a journal move, so undo can put
     /// it back.
