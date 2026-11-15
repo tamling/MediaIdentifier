@@ -75,6 +75,35 @@ final class AppWindow {
     /// from the widgets on every refresh so it answers before the run rather
     /// than after it.
     private let convertEstimate: UnsafeMutablePointer<GtkWidget>
+    /// The panel a conversion is actually started from, and its parts.
+    private let convertDialog: UnsafeMutablePointer<GtkWidget>
+    private let convertFindButton: UnsafeMutablePointer<GtkWidget>
+    private let convertRunButton: UnsafeMutablePointer<GtkWidget>
+    private let convertStopButton: UnsafeMutablePointer<GtkWidget>
+    private let convertListColumn: UnsafeMutablePointer<GtkWidget>
+    private let convertCountLabel: UnsafeMutablePointer<GtkWidget>
+    private let convertBar: UnsafeMutablePointer<GtkWidget>
+    /// The rows of the conversion list, and which candidate each belongs to.
+    private var convertRows: [(id: UUID, check: UnsafeMutablePointer<GtkWidget>)] = []
+    private var convertRowWidgets: [UnsafeMutablePointer<GtkWidget>] = []
+    /// Which files the user has taken *out* of the run, by path.
+    ///
+    /// Held here and not only in the widgets, for the reason the proposals
+    /// list learned the hard way: the list is rebuilt whenever the engine's
+    /// candidates change, and a tick that lives only in a destroyed widget
+    /// is a tick the user set and the program then quietly dropped. Unlike
+    /// the proposals there is no engine-side flag for these — `convertFiles`
+    /// takes the set from whoever asks — so this is where it lives.
+    ///
+    /// By path, and as the *exclusions*, for two reasons. A fresh search
+    /// builds fresh candidates with fresh UUIDs, so ids carry nothing over
+    /// and a second press of Suchen would silently re-tick the files the
+    /// user had just taken out. And everything found is ticked by default:
+    /// pressing Suchen is already the statement of intent, and clearing 40
+    /// boxes to convert 39 is the wrong way round.
+    private var convertExcludedPaths: Set<String> = []
+    /// The candidate ids the list is currently drawn from.
+    private var renderedConvertIDs: [UUID] = []
     /// Settings, status and fetching live in windows of their own, opened from
     /// the header's menu.
     ///
@@ -461,6 +490,63 @@ final class AppWindow {
         gtk_container_add(Gtk.container(conversionExpander), conversionCard)
         gtk_box_pack_start(Gtk.box(settingsPage), conversionExpander, 0, 0, 0)
 
+        // MARK: The conversion panel
+        //
+        // Separate from the settings: the settings say what a conversion
+        // does, this says do it now, to these files. Putting the button in
+        // the settings would have made Apply and Konvertieren neighbours,
+        // and one of them starts hours of encoding.
+        let convertPage = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10)!
+        gtk_container_set_border_width(Gtk.container(convertPage), 12)
+
+        convertFindButton = gtk_button_new_with_label(
+            Text.s("Suchen", "Look for files"))!
+        convertRunButton = gtk_button_new_with_label(
+            Text.s("Konvertieren", "Convert"))!
+        Styling.style(convertRunButton, "suggested-action")
+        convertStopButton = gtk_button_new_with_label(Text.s("Stopp", "Stop"))!
+        convertCountLabel = Self.label("", classes: "mf-dim")
+        gtk_label_set_line_wrap(Gtk.label(convertCountLabel), 1)
+        convertListColumn = gtk_box_new(GTK_ORIENTATION_VERTICAL, 1)!
+        convertBar = gtk_progress_bar_new()!
+
+        let convertCard = Self.card()
+        let findRow = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8)!
+        gtk_box_pack_start(Gtk.box(findRow), convertFindButton, 0, 0, 0)
+        gtk_box_pack_start(Gtk.box(findRow), convertCountLabel, 1, 1, 0)
+        Self.add(findRow, to: convertCard)
+
+        let convertScroller = gtk_scrolled_window_new(nil, nil)!
+        gtk_scrolled_window_set_policy(Gtk.scrolledWindow(convertScroller),
+                                       GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC)
+        gtk_widget_set_size_request(convertScroller, -1, 220)
+        gtk_container_add(Gtk.container(convertScroller), convertListColumn)
+        Self.add(convertScroller, to: convertCard, expand: true)
+
+        Self.add(convertBar, to: convertCard)
+
+        let convertActions = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8)!
+        let convertAllButton = gtk_button_new_with_label(Text.s("Alle", "All"))!
+        let convertNoneButton = gtk_button_new_with_label(Text.s("Keine", "None"))!
+        gtk_box_pack_start(Gtk.box(convertActions), convertAllButton, 0, 0, 0)
+        gtk_box_pack_start(Gtk.box(convertActions), convertNoneButton, 0, 0, 0)
+        // Right to left: convert, then stop — the same order as the main
+        // surface, where the one that does the work sits furthest right.
+        gtk_box_pack_end(Gtk.box(convertActions), convertRunButton, 0, 0, 0)
+        gtk_box_pack_end(Gtk.box(convertActions), convertStopButton, 0, 0, 0)
+        Self.add(convertActions, to: convertCard)
+
+        Self.add(Self.label(Text.s(
+                    "Die neue Datei wird neben die alte gelegt; die alte bleibt "
+                        + "liegen und wird nicht angefasst. Was dabei herauskommt, "
+                        + "steht in den Einstellungen unter Konvertieren.",
+                    "The new file is written beside the old one; the old one "
+                        + "stays and is not touched. What comes out is decided "
+                        + "in the settings, under Converting."),
+                            classes: "mf-dim"),
+                 to: convertCard)
+        gtk_box_pack_start(Gtk.box(convertPage), convertCard, 1, 1, 0)
+
         // MARK: The media server
 
         jellyfinURLEntry = Self.entry(placeholder: "http://192.168.1.2:8096")
@@ -592,6 +678,8 @@ final class AppWindow {
                                   holding: statusPage, over: window)
         fetchDialog = Self.panel(Text.s("Aus dem Netz laden", "Fetch from a link"),
                                  holding: fetchPage, over: window)
+        convertDialog = Self.panel(Text.s("Konvertieren", "Converting"),
+                                   holding: convertPage, over: window)
 
         // A menu in the header, which is where a GTK application keeps the
         // things it is not doing right now -- the same place a Mac keeps
@@ -612,6 +700,11 @@ final class AppWindow {
         Gtk.onClick(noneButton, self) { $0.setAllChecked(false) }
         Gtk.onClick(testButton, self) { $0.testModelServer() }
         Gtk.onClick(jellyfinTestButton, self) { $0.testMediaServer() }
+        Gtk.onClick(convertFindButton, self) { $0.findConvertible() }
+        Gtk.onClick(convertRunButton, self) { $0.convertTickedFiles() }
+        Gtk.onClick(convertStopButton, self) { $0.stopConverting() }
+        Gtk.onClick(convertAllButton, self) { $0.setAllConvertChecked(true) }
+        Gtk.onClick(convertNoneButton, self) { $0.setAllConvertChecked(false) }
         Gtk.onClick(checkButton, self) { $0.checkEverything() }
         Gtk.onClick(downloadButton, self) { $0.startDownload() }
         Gtk.onClick(cancelDownloadButton, self) { $0.cancelDownload() }
@@ -969,6 +1062,9 @@ final class AppWindow {
             entry(Text.s("Aus dem Netz laden …", "Fetch from a link…")) {
                 $0.open($0.fetchDialog)
             }
+            entry(Text.s("Konvertieren …", "Converting…")) {
+                $0.open($0.convertDialog)
+            }
             gtk_menu_shell_append(Gtk.menuShell(built),
                                   gtk_separator_menu_item_new())
             entry(MediafinVersion.display) { _ in }
@@ -1098,6 +1194,51 @@ final class AppWindow {
     /// The estimate line under the conversion settings, read off the label.
     var estimateText: String {
         String(cString: gtk_label_get_text(Gtk.label(convertEstimate)))
+    }
+
+    // MARK: Driving the conversion panel from outside
+
+    /// Opens the conversion panel, as the menu does.
+    func openConverting() { open(convertDialog) }
+
+    /// Presses "Suchen".
+    func pressFindConvertible() { findConvertible() }
+
+    /// Presses "Konvertieren".
+    func pressConvert() { convertTickedFiles() }
+
+    /// Presses "Stopp".
+    func pressStopConverting() { stopConverting() }
+
+    /// How many rows the conversion list is drawing.
+    var convertRowCount: Int { convertRows.count }
+
+    /// The line beside Suchen, read off the label.
+    var convertCountText: String {
+        String(cString: gtk_label_get_text(Gtk.label(convertCountLabel)))
+    }
+
+    /// What the progress bar says, read off the bar.
+    var convertBarText: String {
+        guard let text = gtk_progress_bar_get_text(Gtk.progressBar(convertBar))
+        else { return "" }
+        return String(cString: text)
+    }
+
+    /// How many files pressing Konvertieren would hand to the engine.
+    ///
+    /// Worked out the same way the button does, not counted off the rows:
+    /// the list is capped and a file past the cap is still in the run.
+    var tickedConvertCount: Int { tickedConvertIDs.count }
+
+    /// Presses one conversion row's tick box, as a click does.
+    @discardableResult
+    func pressConvertRowCheck(at index: Int) -> Bool {
+        guard convertRows.indices.contains(index) else { return false }
+        let check = convertRows[index].check
+        gtk_toggle_button_set_active(Gtk.toggleButton(check),
+                                     Gtk.isChecked(check) ? 0 : 1)
+        return true
     }
 
     /// What the middle of the window says while the list is empty, read back
@@ -1293,6 +1434,154 @@ final class AppWindow {
                 + "better and bigger."))
     }
 
+    // MARK: Converting
+
+    /// Looks for files that could be converted.
+    ///
+    /// Saves first, like `startDownload`: the search reads the library
+    /// folders out of the settings, and searching the folders shown in the
+    /// window beats searching the ones stored when it opened.
+    private func findConvertible() {
+        saveFolders()
+        coordinator.submit(.findConvertible)
+    }
+
+    /// Starts converting what is ticked.
+    private func convertTickedFiles() {
+        // Built from what the engine currently offers, so an exclusion left
+        // over from an earlier search cannot name a file that is no longer
+        // on the list, and a file that is on the list cannot be missed
+        // because no row was ever drawn for it.
+        //
+        // The engine says "nothing was ticked" for an empty set, which is
+        // the right message, so this is not guarded here.
+        coordinator.submit(.convertFiles(accepting: tickedConvertIDs))
+    }
+
+    /// The ticked candidates, worked out from the engine's list and the
+    /// exclusions rather than from the rows: the list is capped at
+    /// `visibleProposals` rows, and a file past the cap is still in the run.
+    private var tickedConvertIDs: Set<UUID> {
+        Set(coordinator.convertible
+            .filter { !convertExcludedPaths.contains($0.source.path) }
+            .map(\.id))
+    }
+
+    private func stopConverting() {
+        coordinator.submit(.cancelConversions)
+    }
+
+    private func setAllConvertChecked(_ on: Bool) {
+        convertExcludedPaths = on
+            ? []
+            : Set(coordinator.convertible.map(\.source.path))
+        isSeedingRows = true
+        for row in convertRows { Gtk.setChecked(row.check, on) }
+        isSeedingRows = false
+        refreshConvertCounts()
+    }
+
+    /// Rebuilds the conversion list when the engine's candidates change.
+    ///
+    /// The same shape as `refreshList`, and for the same reason: GTK rows
+    /// are rebuilt only when the ids actually differ, or every refresh would
+    /// destroy the widget under the user's cursor twice a second.
+    private func refreshConvertList() {
+        let candidates = coordinator.convertible
+        let ids = candidates.map(\.id)
+        guard ids != renderedConvertIDs else {
+            refreshConvertCounts()
+            return
+        }
+        renderedConvertIDs = ids
+
+        isSeedingRows = true
+        defer { isSeedingRows = false }
+        for row in convertRowWidgets { gtk_widget_destroy(row) }
+        convertRowWidgets = []
+        convertRows = []
+
+        if candidates.isEmpty {
+            let empty = Self.label(
+                Text.s("Noch nichts gesucht — „Suchen“ drücken.",
+                       "Nothing looked for yet — press “Look for files”."),
+                classes: "mf-dim")
+            gtk_label_set_xalign(Gtk.label(empty), 0.5)
+            gtk_box_pack_start(Gtk.box(convertListColumn), empty, 0, 0, 0)
+            convertRowWidgets = [empty]
+        } else {
+            for (index, candidate) in candidates.prefix(Self.visibleProposals)
+                .enumerated() {
+                let row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10)!
+                Styling.style(row, "mf-row")
+                if index % 2 == 1 { Styling.style(row, "mf-row-alt") }
+
+                let check = gtk_check_button_new()!
+                let id = candidate.id
+                let path = candidate.source.path
+                Gtk.setChecked(check, !convertExcludedPaths.contains(path))
+                Gtk.onToggled(check, self) { window in
+                    guard !window.isSeedingRows else { return }
+                    if Gtk.isChecked(check) {
+                        window.convertExcludedPaths.remove(path)
+                    } else {
+                        window.convertExcludedPaths.insert(path)
+                    }
+                    window.refreshConvertCounts()
+                }
+                gtk_widget_set_valign(check, GTK_ALIGN_CENTER)
+                gtk_box_pack_start(Gtk.box(row), check, 0, 0, 0)
+
+                let name = Self.label(candidate.fileName, classes: "mf-from")
+                gtk_label_set_ellipsize(Gtk.label(name), PANGO_ELLIPSIZE_MIDDLE)
+                gtk_widget_set_tooltip_text(name, candidate.source.path)
+                gtk_box_pack_start(Gtk.box(row), name, 1, 1, 0)
+
+                // The size, because it is the one number that says how long
+                // this will take and whether there is room for the output.
+                let size = Self.label(candidate.readableSize, classes: "mf-dim")
+                gtk_box_pack_end(Gtk.box(row), size, 0, 0, 0)
+
+                gtk_box_pack_start(Gtk.box(convertListColumn), row, 0, 0, 0)
+                convertRowWidgets.append(row)
+                convertRows.append((id: id, check: check))
+            }
+            if candidates.count > Self.visibleProposals {
+                let rest = candidates.count - Self.visibleProposals
+                let more = Self.label(
+                    Text.s("… und \(rest) weitere, hier nicht gezeichnet. Sie "
+                               + "sind angehakt und werden mit konvertiert.",
+                           "… and \(rest) more, not drawn here. They are ticked "
+                               + "and will be converted with the rest."),
+                    classes: "mf-dim")
+                gtk_label_set_line_wrap(Gtk.label(more), 1)
+                gtk_box_pack_start(Gtk.box(convertListColumn), more, 0, 0, 0)
+                convertRowWidgets.append(more)
+            }
+        }
+        gtk_widget_show_all(convertListColumn)
+        refreshConvertCounts()
+    }
+
+    /// The line beside Suchen: how many were found, how many are ticked, and
+    /// how much that is. Spelled out, because the whole point of the panel
+    /// is to see what a run will chew through before starting it.
+    private func refreshConvertCounts() {
+        let candidates = coordinator.convertible
+        guard !candidates.isEmpty else {
+            Gtk.setText(convertCountLabel, "")
+            return
+        }
+        let ticked = candidates.filter {
+            !convertExcludedPaths.contains($0.source.path)
+        }
+        let bytes = ticked.reduce(Int64(0)) { $0 + $1.byteSize }
+        let size = ConversionCandidate.readableSize(ofBytes: bytes)
+        Gtk.setText(convertCountLabel, Text.s(
+            "\(candidates.count) gefunden · \(ticked.count) angehakt · \(size)",
+            "\(candidates.count) found · \(ticked.count) ticked · \(size)"))
+    }
+
     /// Asks the media server whether it is there.
     private func testMediaServer() {
         // Saved first, so the test uses the address in the field rather than
@@ -1380,6 +1669,32 @@ final class AppWindow {
         Gtk.setText(scheduleSummary,
                     ScheduleLine.describe(coordinator.settings.schedule, state))
         refreshConversionEstimate()
+
+        // The conversion panel. Driven from the same timer as everything
+        // else, so it is live whether or not it happens to be open.
+        gtk_widget_set_sensitive(convertFindButton, state.busy ? 0 : 1)
+        gtk_widget_set_sensitive(convertRunButton,
+                                 (!convertRows.isEmpty && !state.busy) ? 1 : 0)
+        gtk_widget_set_sensitive(convertStopButton, state.converting ? 1 : 0)
+        if state.converting {
+            let detail = [state.currentFile, state.convertDetail]
+                .compactMap { $0 }.joined(separator: " · ")
+            Gtk.setProgress(convertBar, fraction: state.convertProgress,
+                            text: state.pendingConversions > 0
+                                ? detail + Text.s(" · noch \(state.pendingConversions)",
+                                                  " · \(state.pendingConversions) to go")
+                                : detail)
+        } else if let status = state.convertStatus {
+            // The engine is doing something it has no percentage for.
+            gtk_progress_bar_pulse(Gtk.progressBar(convertBar))
+            gtk_progress_bar_set_show_text(Gtk.progressBar(convertBar), 1)
+            gtk_progress_bar_set_text(Gtk.progressBar(convertBar), status)
+        } else {
+            Gtk.setProgress(convertBar, fraction: 0,
+                            text: Text.s("Keine Konvertierung",
+                                         "Nothing converting"))
+        }
+        refreshConvertList()
 
         refreshList()
         refreshLog()

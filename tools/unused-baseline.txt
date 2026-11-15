@@ -24,10 +24,6 @@ seasonEpisodeDescription
 isImage
 isSubtitle
 
-# Shown by the conversion list, which is the next block: the settings for a
-# conversion are in the window now, the panel that starts one is not.
-readableSize
-
 # Accessors that exist for the tests but are not named *ForTesting.
 isWatching
 pendingWorkCount

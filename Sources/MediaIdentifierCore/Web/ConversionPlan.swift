@@ -66,11 +66,22 @@ public struct ConversionCandidate: Identifiable, Sendable, Equatable {
     public var fileName: String { source.lastPathComponent }
 
     /// Human-readable size, e.g. "4.3 GB".
+    ///
+    /// Kilobytes are in the list of units because a megabyte floor prints
+    /// "0 MB" for anything smaller, and a row that says a file is 0 bytes
+    /// when it is not reads as a broken row. Media files are rarely that
+    /// small; test fixtures and clips are.
     public var readableSize: String {
+        Self.readableSize(ofBytes: byteSize)
+    }
+
+    /// The same formatting for a total, so the list and the line above it
+    /// cannot disagree about what a size looks like.
+    public static func readableSize(ofBytes bytes: Int64) -> String {
         let formatter = ByteCountFormatter()
-        formatter.allowedUnits = [.useGB, .useMB]
+        formatter.allowedUnits = [.useGB, .useMB, .useKB]
         formatter.countStyle = .file
-        return formatter.string(fromByteCount: byteSize)
+        return formatter.string(fromByteCount: bytes)
     }
 }
 

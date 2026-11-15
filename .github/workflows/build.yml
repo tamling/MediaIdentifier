@@ -642,6 +642,92 @@ jobs:
             *) echo "FAIL: no size estimate under the conversion settings"; exit 1 ;;
           esac
 
+          echo "=== converting, end to end ==="
+          # The feature nothing could ask for. Two real files, one unticked,
+          # and FFmpeg actually runs: the output has to appear beside the
+          # original, the original has to survive, and the file taken out of
+          # the run has to be left alone.
+          conv="$(mktemp -d)"
+          mkdir -p "$conv/config" "$conv/movies"
+          for name in A B; do
+            ffmpeg -nostdin -loglevel error -y \
+              -f lavfi -i testsrc=size=320x180:rate=10 -t 2 \
+              -c:v libx264 -preset ultrafast -pix_fmt yuv420p \
+              "$conv/movies/Film $name (2020).mkv"
+          done
+          python3 - "$conv" > "$conv/config/settings.json" <<'MAKE'
+          import json, sys
+          root = sys.argv[1]
+          print(json.dumps({
+              "sourceFolder": "", "moviesFolder": root + "/movies",
+              "seriesFolder": "", "musicFolder": "", "libraryMode": "video",
+              "identification": "offline", "localLLMBaseURL": "",
+              "localLLMModel": "", "jellyfinBaseURL": "",
+              "conflictPolicy": "skip", "watchSourceFolder": False,
+              "conversion": {"videoCodec": "h264", "quality": 30,
+                             "preset": "veryfast", "targetHeight": None,
+                             "audioMode": "passthrough",
+                             "stripSubtitles": False, "ffmpegPath": ""},
+              "schedule": {"isEnabled": False, "alsoRename": False,
+                           "cadence": "daily", "hour": 3, "minute": 0,
+                           "everyHours": 6},
+          }))
+          MAKE
+          timeout 240 xvfb-run -a --server-args="-screen 0 1280x900x24" \
+            env MEDIAFIN_CONFIG_DIR="$conv/config" \
+            .build/release/mediafin-gtk --press-convert | tee convert.log
+
+          grep -q "^pressed stop while idle: yes" convert.log || {
+            echo "FAIL: the Stopp button was never pressed"; exit 1; }
+          found="$(sed -n 's/^convertible found: \([0-9]*\)$/\1/p' convert.log)"
+          test "${found:-0}" -eq 2 || {
+            echo "FAIL: Suchen found ${found:-0} files, expected 2"; exit 1; }
+          rows="$(sed -n 's/^convert rows: \([0-9]*\)$/\1/p' convert.log)"
+          test "${rows:-0}" -eq 2 || {
+            echo "FAIL: the panel drew ${rows:-0} rows for 2 files"; exit 1; }
+          before="$(sed -n 's/^ticked: \([0-9]*\)$/\1/p' convert.log)"
+          after="$(sed -n 's/^after untick, ticked: \([0-9]*\)$/\1/p' convert.log)"
+          echo "ticked before: ${before:-none}, after: ${after:-none}"
+          test "${before:-0}" -eq 2 || {
+            echo "FAIL: a fresh search did not tick what it found"; exit 1; }
+          # The assertion the tick box exists for: pressing it changes what
+          # the engine is asked to convert. With the exclusions ignored this
+          # reads 2, and both files get converted.
+          test "${after:-0}" -eq 1 || {
+            echo "FAIL: unticking a row left ${after:-0} files in the run"
+            exit 1
+          }
+          grep -q "^after untick, counts: .*1 angehakt" convert.log \
+            || grep -q "^after untick, counts: .*1 ticked" convert.log || {
+            echo "FAIL: the counts line does not follow the tick"
+            grep "^after untick, counts:" convert.log || echo "(no counts line)"
+            exit 1
+          }
+          status="$(sed -n 's/^convert status: //p' convert.log)"
+          echo "status: ${status:-nothing}"
+          case "$status" in
+            *Konvertiert\ 1*|*Converted\ 1*) : ;;
+            *) echo "FAIL: the run did not report converting exactly one file"
+               exit 1 ;;
+          esac
+          # And on disk, which is the only thing that settles it.
+          ls -l "$conv/movies"
+          test -f "$conv/movies/Film B (2020).x264.mkv" || {
+            echo "FAIL: no converted file was written beside the original"
+            exit 1
+          }
+          test -s "$conv/movies/Film B (2020).x264.mkv" || {
+            echo "FAIL: the converted file is empty"; exit 1; }
+          test -f "$conv/movies/Film B (2020).mkv" || {
+            echo "FAIL: the original is gone -- a conversion must never "
+            echo "      touch it, because re-encoding cannot be undone"
+            exit 1
+          }
+          test ! -e "$conv/movies/Film A (2020).x264.mkv" || {
+            echo "FAIL: the file taken out of the run was converted anyway"
+            exit 1
+          }
+
           echo "=== with one film to find ==="
           run_window "$ready/config" | tee ready.log
           found="$(sed -n 's/^proposals: \([0-9]*\)$/\1/p' ready.log)"

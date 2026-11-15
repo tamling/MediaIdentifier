@@ -42,6 +42,16 @@ private enum Mode {
     /// of contradicting -- and a check that cannot run looks exactly like a
     /// check that passes.
     case pressScan
+    /// Open the conversion panel, look for files, untick one, and convert
+    /// what is left -- the whole feature end to end.
+    ///
+    /// The conversion feature was reachable from the removed web front-end
+    /// and from nothing else: the engine, the FFmpeg driving, the progress
+    /// reporting, the cancelling and their tests were all there, and no
+    /// button in the program could ask for any of it. A unit test cannot
+    /// catch that, and a check that cannot run looks exactly like a check
+    /// that passes -- so this presses the buttons.
+    case pressConvert
 }
 
 private struct Options {
@@ -70,6 +80,9 @@ private func usage() -> String {
                                        says nothing at all
       mediafin-gtk --press-apply       open the settings, press Apply twice,
                                        and print what it says each time
+      mediafin-gtk --press-convert     open the conversion panel, look for
+                                       files, untick one, convert the rest,
+                                       and print what came of it
       mediafin-gtk --drop FILE…        hand these files to the window as a
                                        drop would, and print what came of it
       mediafin-gtk --help              this text
@@ -111,6 +124,8 @@ private func parse(_ arguments: [String]) -> Options {
             options.mode = .pressScan
         case "--press-apply":
             options.mode = .pressApply
+        case "--press-convert":
+            options.mode = .pressConvert
         case "--drop":
             // Everything after --drop is a path, so this has to come last.
             let rest = Array(arguments[arguments.index(after: index)...])
@@ -141,6 +156,9 @@ private enum Pending {
     static var screenshotPath: String?
     /// What --drop was given, so the C timeout callback can reach it.
     static var dropPaths: [String] = []
+    /// How many times --press-convert has looked to see whether the encode
+    /// has finished, so a hung FFmpeg fails CI instead of hanging it.
+    static var convertTicks = 0
     /// Set by the snapshot callback; read after the main loop returns to decide
     /// the exit status. A GUI that silently fails to draw must not exit 0.
     static var failure: String?
@@ -300,6 +318,88 @@ case .pressScan:
     // Checked here and not only in the screenshot branch: a mode that reports
     // a fault and then exits 0 is a check that cannot fail, which is the
     // thing this whole mode exists to stop.
+    if let failure = Pending.failure {
+        fail(failure, code: 1)
+    }
+
+case .pressConvert:
+    // Three stages, for the reason pressScan has two: GTK has to lay the
+    // panel out before a button can be pressed, the engine answers on its
+    // own queue, and FFmpeg takes as long as it takes.
+    let look: @convention(c) (UnsafeMutableRawPointer?) -> gboolean = { _ in
+        mainWindow.openConverting()
+        print("convert bar before: \(mainWindow.convertBarText)")
+        // Stopp first, while nothing is running. The engine deliberately
+        // refuses to arm its cancel flag with no run to apply it to --
+        // "otherwise a stray press while idle would sit there and stop the
+        // next run the user asks for" -- and a rule with no caller is a
+        // rule nobody has watched work. The conversion below must still
+        // happen after this press.
+        mainWindow.pressStopConverting()
+        // Not read back as a message: the search below answers on the same
+        // queue a moment later and overwrites it. What proves the rule is
+        // that the conversion still runs, which is asserted at the end.
+        print("pressed stop while idle: yes")
+        mainWindow.pressFindConvertible()
+
+        let tick: @convention(c) (UnsafeMutableRawPointer?) -> gboolean = { _ in
+            mainWindow.refresh()
+            print("convertible found: \(coordinator.convertible.count)")
+            print("convert rows: \(mainWindow.convertRowCount)")
+            print("convert counts: \(mainWindow.convertCountText)")
+            print("ticked: \(mainWindow.tickedConvertCount)")
+            // Untick the first one. The assertion worth making about a tick
+            // is that pressing the widget changes what the engine is asked
+            // to convert, and that can only be checked through the widget.
+            if mainWindow.pressConvertRowCheck(at: 0) {
+                print("after untick, counts: \(mainWindow.convertCountText)")
+                print("after untick, ticked: \(mainWindow.tickedConvertCount)")
+            } else {
+                Pending.failure = "the conversion list drew no row to untick"
+            }
+            mainWindow.pressConvert()
+
+            // Polled, because an encode has no fixed duration. The deadline
+            // is what stops a hung FFmpeg from hanging CI instead of
+            // failing it.
+            let wait: @convention(c) (UnsafeMutableRawPointer?) -> gboolean = { _ in
+                mainWindow.refresh()
+                Pending.convertTicks += 1
+                let state = coordinator.snapshot
+                if state.converting {
+                    print("converting: \(mainWindow.convertBarText)")
+                    return Gtk.sourceContinue
+                }
+                // Not merely "not converting": that is also true in the
+                // moment before the engine takes the command off its queue,
+                // and quitting there would report success having waited for
+                // nothing. The result line is the engine saying it is done.
+                let status = mainWindow.statusText
+                let finished = status.contains("Konvertiert")
+                    || status.contains("Converted")
+                    || status.contains("FFmpeg")
+                    || status.contains("ffmpeg")
+                if !finished, Pending.convertTicks < 120 {
+                    return Gtk.sourceContinue
+                }
+                defer { gtk_main_quit() }
+                print("convert status: \(status)")
+                print("convert bar after: \(mainWindow.convertBarText)")
+                print("convertible left: \(coordinator.convertible.count)")
+                if !finished {
+                    Pending.failure = "the conversion never finished: " + status
+                }
+                return Gtk.sourceRemove
+            }
+            g_timeout_add(500, wait, nil)
+            return Gtk.sourceRemove
+        }
+        g_timeout_add(2500, tick, nil)
+        return Gtk.sourceRemove
+    }
+    g_timeout_add(400, look, nil)
+    gtk_main()
+
     if let failure = Pending.failure {
         fail(failure, code: 1)
     }
