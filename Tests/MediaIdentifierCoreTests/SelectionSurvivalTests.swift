@@ -161,6 +161,42 @@ final class SelectionSurvivalTests: XCTestCase {
         XCTAssertEqual(coordinator.snapshot.ready, 1)
     }
 
+    // MARK: The list has a ceiling
+
+    /// Nothing bounded the accumulated list. `FolderScan.maximumFiles` is a
+    /// per-call ceiling applied inside each enumeration, so dropping folder
+    /// after folder grew it without limit — and every drop re-ran conflict
+    /// detection over the whole thing and the window rebuilt a widget
+    /// subtree per row, uncapped.
+    func testDroppingPastTheCeilingStopsAndSaysSo() throws {
+        coordinator.executeForTesting(.saveSettings(configured()))
+        // Two drops that together exceed the ceiling. Built as URLs that do
+        // not exist on disk is not enough — addFiles stats them — so this
+        // uses the smallest number of real files that proves the rule, by
+        // setting the items directly and then dropping one more.
+        let filler = (0..<MediaScanner.maximumFiles).map { index in
+            RenameItem(
+                mediaFile: MediaFile(
+                    url: URL(fileURLWithPath: "/downloads/F\(index).mkv"),
+                    parsed: ParsedRelease(originalFileName: "F\(index).mkv",
+                                          title: "F\(index)")),
+                outputRoot: library,
+                proposedRelativePath: "F\(index)/F\(index).mkv")
+        }
+        coordinator.setItemsForTesting(filler)
+        XCTAssertEqual(coordinator.items.count, MediaScanner.maximumFiles)
+
+        let extra = root.appendingPathComponent("Extra.2020.1080p.mkv")
+        try Data("x".utf8).write(to: extra)
+        coordinator.executeForTesting(.addFiles([extra]))
+
+        XCTAssertEqual(coordinator.items.count, MediaScanner.maximumFiles,
+                       "the list grew past its own ceiling")
+        let said = coordinator.snapshot.lastResult ?? ""
+        XCTAssertTrue(said.contains("nicht aufgenommen") || said.contains("not added"),
+                      "the list quietly stopped growing: \(said)")
+    }
+
     // MARK: The unattended run
 
     /// The worst of it: no user action at all. The nightly run rescans, the

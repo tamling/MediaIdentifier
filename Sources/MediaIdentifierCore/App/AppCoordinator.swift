@@ -946,7 +946,18 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         // collision worth warning about, and checking the new ones alone
         // would miss it.
         lock.lock()
-        _items = applyingExclusions(to: Self.markingConflicts(in: _items + added))
+        // Capped, because nothing bounded this. `FolderScan.maximumFiles`
+        // is a per-call ceiling applied inside each enumeration, so
+        // dropping folder after folder accumulated past 5,000 without
+        // limit — and every drop re-ran conflict detection over the whole
+        // list and rebuilt a widget subtree per row.
+        var combined = Self.markingConflicts(in: _items + added)
+        var droppedForTheCeiling = 0
+        if combined.count > MediaScanner.maximumFiles {
+            droppedForTheCeiling = combined.count - MediaScanner.maximumFiles
+            combined.removeLast(droppedForTheCeiling)
+        }
+        _items = applyingExclusions(to: combined)
         let total = _items.count
         lock.unlock()
 
@@ -969,6 +980,18 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
                 parts.append(Text.s(
                     "\(added.count) hinzugefügt, \(total) in der Liste.",
                     "\(added.count) added, \(total) in the list."))
+            }
+            if droppedForTheCeiling > 0 {
+                // Said, not silently dropped. The ceiling is the engine's
+                // own, and a list that quietly stops growing looks like a
+                // drop that did not arrive.
+                parts.append(Text.s(
+                    "\(droppedForTheCeiling) nicht aufgenommen — die Liste ist bei "
+                        + "\(MediaScanner.maximumFiles) voll. Erst umbenennen, dann "
+                        + "den Rest hinzufügen.",
+                    "\(droppedForTheCeiling) not added — the list is full at "
+                        + "\(MediaScanner.maximumFiles). Rename these first, then "
+                        + "add the rest."))
             }
             if alreadyThere > 0 {
                 parts.append(Text.s("\(alreadyThere) war\(alreadyThere == 1 ? "" : "en") "
@@ -1393,13 +1416,17 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
     /// were getting nothing.
     static func markingConflicts(in plan: [RenameItem],
                                  fileManager: FileManager = .default) -> [RenameItem] {
+        // Each path computed once. `primaryDestination` is a computed
+        // property that builds a URL and this function read it twice per
+        // item, then standardised the result both times — and a drop runs
+        // it over the whole accumulated list, so the cost was paid again on
+        // every drop.
+        let paths = plan.map { $0.primaryDestination.standardizedFileURL.path }
         var counts: [String: Int] = [:]
-        for item in plan {
-            counts[item.primaryDestination.standardizedFileURL.path, default: 0] += 1
-        }
-        return plan.map { item in
+        for path in paths { counts[path, default: 0] += 1 }
+        return plan.enumerated().map { index, item in
             var flagged = item
-            let path = item.primaryDestination.standardizedFileURL.path
+            let path = paths[index]
             if counts[path, default: 0] > 1 {
                 flagged.conflict = .duplicateInBatch
             } else if fileManager.fileExists(atPath: path) {

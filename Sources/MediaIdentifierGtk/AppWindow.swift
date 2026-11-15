@@ -760,8 +760,13 @@ final class AppWindow {
     /// ticked, so nothing was renamed", and a second opinion in the window
     /// would be one more place for the two to disagree.
     func applySelected() {
-        let ticked = rowChecks.filter { Gtk.isChecked($0.check) }.map(\.id)
-        coordinator.submit(.applyProposedRenames(accepting: Set(ticked)))
+        // The engine's own `isAccepted`, not the drawn rows. Every tick box
+        // reports itself with `.setAccepted`, so the two agree — and reading
+        // the rows would mean that with the list capped at
+        // `visibleProposals`, pressing Umbenennen renamed only what happened
+        // to be on screen. `accepting: nil` means "whatever is accepted",
+        // and the executor acts on `isAccepted` alone.
+        coordinator.submit(.applyProposedRenames(accepting: nil))
     }
 
     /// Stops a scan. Goes straight to the engine without saving first: the
@@ -1249,6 +1254,25 @@ final class AppWindow {
     /// stays on disk and in the web interface's history page.
     static let visibleLogEntries = 200
 
+    /// How many proposal rows are drawn.
+    ///
+    /// The log beside this was capped at 200 for the reason above, and the
+    /// proposal list — three to four times the widgets per row, and up to
+    /// the engine's own 5,000-file ceiling — had no cap at all. Each row is
+    /// a box, a check button, an inner box, two or three ellipsized labels
+    /// with their own Pango layouts, sometimes a deletion note and a sample
+    /// note, and an icon button that is itself a button plus an image plus
+    /// an icon-theme lookup. The comment at the list's own construction
+    /// names the threshold — "it will have to become a TreeView if these
+    /// lists reach the thousands" — and nothing enforced it.
+    ///
+    /// 500 rather than 200: this list is the thing the user is here to
+    /// read, and scrolling through 500 is a reasonable amount of reading.
+    /// The rest are in the plan and are renamed with them; the engine owns
+    /// the tick state, so a row that is not drawn is not a row that is not
+    /// renamed.
+    static let visibleProposals = 500
+
     private static func logRow(_ entry: RenameLogEntry)
         -> UnsafeMutablePointer<GtkWidget> {
         let row = gtk_box_new(GTK_ORIENTATION_VERTICAL, 1)!
@@ -1347,7 +1371,7 @@ final class AppWindow {
             rowWidgets = [empty, second]
             emptyDetail = second
         } else {
-            for (index, item) in items.enumerated() {
+            for (index, item) in items.prefix(Self.visibleProposals).enumerated() {
                 let built = proposalRow(item, banded: index % 2 == 1)
                 gtk_box_pack_start(Gtk.box(listColumn), built.row, 0, 0, 0)
                 rowWidgets.append(built.row)
@@ -1355,6 +1379,22 @@ final class AppWindow {
                 rowDestinations.append(built.destination)
                 if let note = built.deletionNote { rowDeletionNotes.append(note) }
                 if let note = built.keptNote { rowKeptNotes.append(note) }
+            }
+            if items.count > Self.visibleProposals {
+                // Said, because a list that stops at 500 with nothing to
+                // explain it looks like 500 files were found. These are in
+                // the plan and will be renamed: the engine owns the ticks
+                // now, so Umbenennen does not depend on a row existing.
+                let rest = items.count - Self.visibleProposals
+                let more = Self.label(
+                    Text.s("… und \(rest) weitere, hier nicht gezeichnet. Sie sind "
+                               + "im Plan und werden mit umbenannt.",
+                           "… and \(rest) more, not drawn here. They are in the "
+                               + "plan and will be renamed with the rest."),
+                    classes: "mf-dim")
+                gtk_label_set_line_wrap(Gtk.label(more), 1)
+                gtk_box_pack_start(Gtk.box(listColumn), more, 0, 0, 0)
+                rowWidgets.append(more)
             }
         }
         // New widgets start hidden; the window was already shown.
