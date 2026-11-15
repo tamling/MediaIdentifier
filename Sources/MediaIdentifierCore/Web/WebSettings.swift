@@ -178,39 +178,67 @@ public struct WebSettings: Codable, Sendable, Equatable {
     public func problems() -> [Problem] {
         var found: [Problem] = []
 
+        // Through Text.s, like everything else the user reads. These
+        // messages were written in English only because nothing ever
+        // displayed them: `problems()` had no caller in the program at all,
+        // so the rules were green in CI and never ran.
         for (field, path, label) in [
-            ("sourceFolder", sourceFolder, "The folder to import from"),
-            ("moviesFolder", moviesFolder, "The movies folder"),
-            ("seriesFolder", seriesFolder, "The series folder"),
-            ("musicFolder", musicFolder, "The music folder"),
+            ("sourceFolder", sourceFolder, Text.s("Der Importordner",
+                                                  "The folder to import from")),
+            ("moviesFolder", moviesFolder, Text.s("Der Filme-Ordner",
+                                                  "The movies folder")),
+            ("seriesFolder", seriesFolder, Text.s("Der Serien-Ordner",
+                                                  "The series folder")),
+            ("musicFolder", musicFolder, Text.s("Der Musik-Ordner",
+                                                "The music folder")),
         ] where !path.isEmpty {
             if !path.hasPrefix("/") {
-                found.append(Problem(field: field,
-                                     message: "\(label) must be an absolute path."))
+                found.append(Problem(
+                    field: field,
+                    message: Text.s(
+                        "\(label) muss ein absoluter Pfad sein — also mit / "
+                            + "beginnen. „~/Filme“ oder „Filme“ werden gegen das "
+                            + "Arbeitsverzeichnis des Programms aufgelöst, das beim "
+                            + "Dienst / ist.",
+                        "\(label) must be an absolute path, starting with /. "
+                            + "“~/Films” or “Films” are resolved against the "
+                            + "program's working directory, which for the service "
+                            + "is /.")))
             } else if path.contains("..") {
-                found.append(Problem(field: field,
-                                     message: "\(label) must not contain '..'."))
+                found.append(Problem(
+                    field: field,
+                    message: Text.s("\(label) darf kein „..“ enthalten.",
+                                    "\(label) must not contain '..'.")))
             }
         }
 
         if identification == .localLLM {
             if let problem = Self.urlProblem(localLLMBaseURL, field: "localLLMBaseURL",
-                                             label: "The model server address",
+                                             label: Text.s("Die Adresse des "
+                                                 + "Modellservers",
+                                                 "The model server address"),
                                              required: true) {
                 found.append(problem)
             }
             if localLLMModel.trimmingCharacters(in: .whitespaces).isEmpty {
-                found.append(Problem(field: "localLLMModel",
-                                     message: "Enter the model name your server reports."))
+                found.append(Problem(
+                    field: "localLLMModel",
+                    message: Text.s("Den Modellnamen eintragen, den der Server "
+                                        + "meldet.",
+                                    "Enter the model name your server reports.")))
             }
         } else if let problem = Self.urlProblem(localLLMBaseURL, field: "localLLMBaseURL",
-                                                label: "The model server address",
+                                                label: Text.s("Die Adresse des "
+                                                    + "Modellservers",
+                                                    "The model server address"),
                                                 required: false) {
             found.append(problem)
         }
 
         if let problem = Self.urlProblem(jellyfinBaseURL, field: "jellyfinBaseURL",
-                                         label: "The Jellyfin address", required: false) {
+                                         label: Text.s("Die Jellyfin-Adresse",
+                                                       "The Jellyfin address"),
+                                         required: false) {
             found.append(problem)
         }
         found.append(contentsOf: conversion.problems())
@@ -226,15 +254,21 @@ public struct WebSettings: Codable, Sendable, Equatable {
                                    required: Bool) -> Problem? {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty {
-            return required ? Problem(field: field, message: "\(label) is required.") : nil
+            return required
+                ? Problem(field: field,
+                          message: Text.s("\(label) muss eingetragen werden.",
+                                          "\(label) is required."))
+                : nil
         }
         guard let url = URL(string: trimmed),
               let scheme = url.scheme?.lowercased(),
               scheme == "http" || scheme == "https",
               let host = url.host, !host.isEmpty
         else {
-            return Problem(field: field,
-                           message: "\(label) must look like http://host:port.")
+            return Problem(
+                field: field,
+                message: Text.s("\(label) muss wie http://host:port aussehen.",
+                                "\(label) must look like http://host:port."))
         }
         return nil
     }
@@ -245,6 +279,9 @@ public struct WebSettings: Codable, Sendable, Equatable {
         copy.sourceFolder = Self.trim(sourceFolder)
         copy.moviesFolder = Self.trim(moviesFolder)
         copy.seriesFolder = Self.trim(seriesFolder)
+        // Was missing, so this one path kept its leading and trailing
+        // whitespace while the other three were trimmed.
+        copy.musicFolder = Self.trim(musicFolder)
         copy.localLLMBaseURL = Self.trim(localLLMBaseURL)
         copy.localLLMModel = Self.trim(localLLMModel)
         copy.jellyfinBaseURL = Self.trim(jellyfinBaseURL)

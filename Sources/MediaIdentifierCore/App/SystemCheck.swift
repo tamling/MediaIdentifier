@@ -94,9 +94,13 @@ public enum SystemChecks {
         probes: [ProbeSubject: ProbeResult],
         folders: [String: FolderFacts] = [:],
         nextScheduledRun: Date? = nil,
+        settingsProblem: String? = nil,
         now: Date = Date()
     ) -> [SystemCheck] {
         var checks: [SystemCheck] = []
+
+        checks.append(settingsCheck(settings: settings,
+                                    fileProblem: settingsProblem))
 
         checks.append(folder(id: "source",
                              name: Text.s("Importordner", "Import folder"),
@@ -150,6 +154,47 @@ public enum SystemChecks {
         checks.append(encryption(settings: settings))
         checks.append(schedule(settings.schedule, nextRun: nextScheduledRun, now: now))
         return checks
+    }
+
+    /// Whether the settings themselves are usable.
+    ///
+    /// The rules are `WebSettings.problems()`, which until now had no caller
+    /// in the program: a relative library path was accepted, used as the
+    /// move root, and resolved against the process's working directory.
+    /// `fileProblem` is what the coordinator found when it loaded the file —
+    /// unreadable, or readable and invalid.
+    static func settingsCheck(settings: WebSettings,
+                              fileProblem: String?) -> SystemCheck {
+        let name = Text.s("Einstellungen", "Settings")
+        if let fileProblem, !fileProblem.isEmpty {
+            return SystemCheck(
+                id: "settings", name: name, state: .failed,
+                detail: Text.s(
+                    "Die gespeicherten Einstellungen sind nicht benutzbar: "
+                        + fileProblem,
+                    "The saved settings are not usable: " + fileProblem))
+        }
+        let problems = settings.problems()
+        guard problems.isEmpty else {
+            return SystemCheck(
+                id: "settings", name: name, state: .failed,
+                detail: problems.map(\.message).joined(separator: " "))
+        }
+        // Grey, not green, with nothing filled in: a green lamp for a
+        // question nobody asked is how this panel learned to be ignored.
+        let anything = [settings.sourceFolder, settings.moviesFolder,
+                        settings.seriesFolder, settings.musicFolder,
+                        settings.localLLMBaseURL, settings.jellyfinBaseURL]
+            .contains { !$0.isEmpty }
+        guard anything else {
+            return SystemCheck(id: "settings", name: name, state: .off,
+                               detail: Text.s("Noch nichts eingetragen.",
+                                              "Nothing entered yet."))
+        }
+        return SystemCheck(
+            id: "settings", name: name, state: .ok,
+            detail: Text.s("Die Eingaben sind in Ordnung.",
+                           "The entries are in order."))
     }
 
     /// Whether a stored key would travel in the clear.

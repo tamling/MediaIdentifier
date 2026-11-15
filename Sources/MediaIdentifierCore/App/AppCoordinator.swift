@@ -206,7 +206,16 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         if case .unreadable(let detail) = loaded.state {
             settingsProblem = detail
         } else {
-            settingsProblem = nil
+            // A file that decodes can still be unusable, and this is the
+            // only way to configure the headless service: `"moviesFolder":
+            // "~/Filme"` was accepted and used as the move root, where
+            // URL(fileURLWithPath:) resolves it against the process's
+            // working directory — "/" for the packaged unit. Every rename
+            // then failed on a path the user never typed.
+            let problems = loaded.settings.problems()
+            settingsProblem = problems.isEmpty
+                ? nil
+                : problems.map(\.message).joined(separator: " ")
         }
         // A secrets file left readable by other accounts is a problem whether
         // or not it is read today.
@@ -473,6 +482,30 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
     }
 
     private func save(_ settings: WebSettings) {
+        // Checked before anything is written. `problems()` and `isValid`
+        // existed, were covered by three test files, and had no caller
+        // anywhere in the program — so "the folder must be an absolute
+        // path", "must not contain '..'", "the address must look like
+        // http://host:port" and "the time must be between 00:00 and 23:59"
+        // were green in CI and never ran. Two comments elsewhere already
+        // described this behaviour as if it happened.
+        //
+        // Nothing is saved when something is wrong, which is what the
+        // settings window's own comment promises. The typed values stay in
+        // the fields, so the correction is one edit, and the previous
+        // settings keep working in the meantime.
+        let candidate = settings.normalised()
+        let problems = candidate.problems()
+        guard problems.isEmpty else {
+            update {
+                $0.hasError = true
+                $0.lastResult = Text.s(
+                    "Nicht gespeichert: " + problems.map(\.message)
+                        .joined(separator: " "),
+                    "Not saved: " + problems.map(\.message).joined(separator: " "))
+            }
+            return
+        }
         do {
             let previous = self.settings
             try settingsStore.save(settings)
@@ -2003,7 +2036,8 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
                                       // recomputed: this says whether the
                                       // tick is actually armed, which is the
                                       // thing worth a lamp.
-                                      nextScheduledRun: snapshot.nextScheduledRun)
+                                      nextScheduledRun: snapshot.nextScheduledRun,
+                                      settingsProblem: settingsProblem)
         lock.lock(); _systemChecks = checks; lock.unlock()
     }
 
@@ -2292,6 +2326,15 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
     }
 
     /// Only for tests: one tick of the schedule, synchronously.
+    /// Whether the schedule timer is actually armed.
+    ///
+    /// Read off the timer rather than off the setting: with an impossible
+    /// time the setting says "enabled" and nothing is armed, which is
+    /// exactly the state that used to be invisible.
+    var isScheduleArmedForTesting: Bool {
+        queue.sync { scheduleTimer != nil }
+    }
+
     func runIfDueForTesting() {
         queue.sync { self.runIfDue() }
     }
