@@ -48,6 +48,16 @@ public struct StatusSnapshot: Codable, Sendable, Equatable {
     public var nextScheduledRun: Date?
     /// When the last unattended run happened, or nil if none has.
     public var lastScheduledRun: Date?
+    /// How many renames could still be taken back.
+    ///
+    /// `RenameJournal.canUndo` existed from the start and nothing read it:
+    /// the Rückgängig button was sensitive whether or not there was anything
+    /// to undo, and pressing it on an empty journal said so only afterwards.
+    /// It is a count rather than a flag because the one place it really
+    /// matters is the question before clearing the history, which takes the
+    /// journal with it — and "3 Schritte gehen weg" is a different sentence
+    /// from "nothing goes away".
+    public var undoableBatches: Int = 0
 
     public init(
         updated: Date = Date(),

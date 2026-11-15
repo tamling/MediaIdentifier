@@ -273,6 +273,29 @@ enum Gtk {
     /// Makes a widget accept files dragged from a file manager.
     ///
     /// The C side does the GTK half; this only turns the paths it reports into
+    /// Asks the user to confirm something, modally, and returns their answer.
+    ///
+    /// Through the C shim, because `gtk_message_dialog_new` is a C variadic
+    /// and Swift cannot call one. The shim defaults to "no" for every way of
+    /// not answering — Cancel, Escape, closing the window — so a mistyped
+    /// key cannot confirm a deletion.
+    ///
+    /// Blocking, which is what a confirmation has to be: the caller is a
+    /// button handler that must not act until the answer is in. GTK keeps
+    /// its own loop running inside `gtk_dialog_run`, so the window behind
+    /// still repaints.
+    static func confirm(over parent: UnsafeMutablePointer<GtkWidget>,
+                        heading: String, body: String,
+                        confirm: String, cancel: String) -> Bool {
+        mediafin_confirm(parent, heading, body, confirm, cancel) != 0
+    }
+
+    /// Answers a confirmation dialog that is already on screen, for the
+    /// smoke modes. True when one was found.
+    static func answerDialog(accept: Bool) -> Bool {
+        mediafin_answer_dialog(accept ? 1 : 0) != 0
+    }
+
     /// URLs. Same ownership dance as `onClick`: the owner is captured in an
     /// ordinary Swift closure and only the non-generic `Drop` crosses into C,
     /// because a @convention(c) function has nowhere to put type metadata.

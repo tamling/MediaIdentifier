@@ -2608,8 +2608,10 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         let hasJellyfin = !settings.jellyfinBaseURL.isEmpty
             && secretStore.value(for: .jellyfinToken) != nil
         let done = log.entries.filter { $0.status == .success }.count
+        let undoable = journal.transactionCount
         update {
             $0.totalItems = count
+            $0.undoableBatches = undoable
             // The ones that would actually be acted on, which is not the
             // same as the number proposed — it used to be set to `count`,
             // so the window printed the same number twice.

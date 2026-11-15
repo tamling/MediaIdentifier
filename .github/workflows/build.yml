@@ -728,6 +728,75 @@ jobs:
             exit 1
           }
 
+          echo "=== clearing the history, and the question before it ==="
+          # clearHistory empties the rename journal too, so the undo steps go
+          # with the list. The confirmation is the only thing between a stray
+          # click and a library that cannot be put back -- and a guard nothing
+          # presses is a guard somebody deletes. The mode renames a real file
+          # first, because "unchanged after Cancel" with an empty history is
+          # 0 and 0 and proves nothing.
+          hist="$(mktemp -d)"
+          mkdir -p "$hist/config" "$hist/src" "$hist/movies"
+          printf 'x' > "$hist/src/Tenet.2020.1080p.BluRay.x264.mkv"
+          python3 - "$hist" > "$hist/config/settings.json" <<'MAKE'
+          import json, sys
+          root = sys.argv[1]
+          print(json.dumps({
+              "sourceFolder": root + "/src", "moviesFolder": root + "/movies",
+              "seriesFolder": "", "musicFolder": "", "libraryMode": "video",
+              "identification": "offline", "localLLMBaseURL": "",
+              "localLLMModel": "", "jellyfinBaseURL": "",
+              "conflictPolicy": "skip", "watchSourceFolder": False,
+              "conversion": {"videoCodec": "h265", "quality": 21,
+                             "preset": "slow", "targetHeight": None,
+                             "audioMode": "passthrough",
+                             "stripSubtitles": False, "ffmpegPath": ""},
+              "schedule": {"isEnabled": False, "alsoRename": False,
+                           "cadence": "daily", "hour": 3, "minute": 0,
+                           "everyHours": 6},
+          }))
+          MAKE
+          timeout 120 xvfb-run -a --server-args="-screen 0 1280x900x24" \
+            env MEDIAFIN_CONFIG_DIR="$hist/config" \
+            .build/release/mediafin-gtk --press-clear-history | tee history.log
+
+          before="$(sed -n 's/^history before: \([0-9]*\)$/\1/p' history.log)"
+          undo_before="$(sed -n 's/^undo steps before: \([0-9]*\)$/\1/p' history.log)"
+          test "${before:-0}" -ge 1 || {
+            echo "FAIL: nothing was renamed, so there was no history to clear"
+            exit 1
+          }
+          test "${undo_before:-0}" -ge 1 || {
+            echo "FAIL: a rename left nothing to undo"; exit 1; }
+          # Cancel has to mean no. With the dialog's answer ignored this
+          # reads 0, which is how the guard going missing shows up.
+          cancelled="$(sed -n 's/^history after cancel: \([0-9]*\)$/\1/p' history.log)"
+          undo_cancelled="$(sed -n \
+            's/^undo steps after cancel: \([0-9]*\)$/\1/p' history.log)"
+          test "${cancelled:-0}" = "${before}" || {
+            echo "FAIL: Cancel cleared the history anyway"
+            echo "  before: ${before}, after cancel: ${cancelled:-nothing}"
+            exit 1
+          }
+          test "${undo_cancelled:-0}" = "${undo_before}" || {
+            echo "FAIL: Cancel threw away the undo steps anyway"; exit 1; }
+          # And confirming has to mean yes, in both places.
+          confirmed="$(sed -n 's/^history after confirm: \([0-9]*\)$/\1/p' history.log)"
+          undo_after="$(sed -n 's/^undo steps after: \([0-9]*\)$/\1/p' history.log)"
+          test "${confirmed:-1}" -eq 0 || {
+            echo "FAIL: confirming left ${confirmed} entries in the history"
+            exit 1
+          }
+          test "${undo_after:-1}" -eq 0 || {
+            echo "FAIL: confirming left the undo journal alone"; exit 1; }
+          # The file stays put: clearing the history is about the record, not
+          # the library.
+          test -f "$hist/movies/Tenet (2020)/Tenet (2020).mkv" || {
+            echo "FAIL: clearing the history moved or lost the renamed file"
+            find "$hist/movies" -type f || true
+            exit 1
+          }
+
           echo "=== with one film to find ==="
           run_window "$ready/config" | tee ready.log
           found="$(sed -n 's/^proposals: \([0-9]*\)$/\1/p' ready.log)"

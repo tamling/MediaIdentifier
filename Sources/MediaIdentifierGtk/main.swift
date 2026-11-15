@@ -52,6 +52,14 @@ private enum Mode {
     /// catch that, and a check that cannot run looks exactly like a check
     /// that passes -- so this presses the buttons.
     case pressConvert
+    /// Press "Leeren" in the history column twice: cancel the confirmation
+    /// the first time, confirm it the second, and report the history both
+    /// times.
+    ///
+    /// Clearing takes the undo journal with it, so the confirmation is the
+    /// only thing between a stray click and a library that cannot be put
+    /// back. A guard nothing presses is a guard somebody deletes.
+    case pressClearHistory
 }
 
 private struct Options {
@@ -83,6 +91,10 @@ private func usage() -> String {
       mediafin-gtk --press-convert     open the conversion panel, look for
                                        files, untick one, convert the rest,
                                        and print what came of it
+      mediafin-gtk --press-clear-history
+                                       press "Leeren", cancel the question,
+                                       press it again and confirm, printing
+                                       the history each time
       mediafin-gtk --drop FILE…        hand these files to the window as a
                                        drop would, and print what came of it
       mediafin-gtk --help              this text
@@ -126,6 +138,8 @@ private func parse(_ arguments: [String]) -> Options {
             options.mode = .pressApply
         case "--press-convert":
             options.mode = .pressConvert
+        case "--press-clear-history":
+            options.mode = .pressClearHistory
         case "--drop":
             // Everything after --drop is a path, so this has to come last.
             let rest = Array(arguments[arguments.index(after: index)...])
@@ -398,6 +412,88 @@ case .pressConvert:
         return Gtk.sourceRemove
     }
     g_timeout_add(400, look, nil)
+    gtk_main()
+
+    if let failure = Pending.failure {
+        fail(failure, code: 1)
+    }
+
+case .pressClearHistory:
+    // A real rename first, so there is something to lose. With an empty
+    // history "unchanged after Cancel" is 0 and 0, which proves nothing --
+    // the mode has to make the history it then tries to clear.
+    let fill: @convention(c) (UnsafeMutableRawPointer?) -> gboolean = { _ in
+        mainWindow.pressScan()
+        let rename: @convention(c) (UnsafeMutableRawPointer?) -> gboolean = { _ in
+            mainWindow.refresh()
+            print("proposals: \(coordinator.items.count)")
+            mainWindow.applySelected()
+            return Gtk.sourceRemove
+        }
+        g_timeout_add(2500, rename, nil)
+        return Gtk.sourceRemove
+    }
+    g_timeout_add(400, fill, nil)
+
+    let clear: @convention(c) (UnsafeMutableRawPointer?) -> gboolean = { _ in
+        mainWindow.refresh()
+        print("history before: \(coordinator.logEntries.count)")
+        print("undo steps before: \(coordinator.snapshot.undoableBatches)")
+
+        // The answer is arranged before the button is pressed, because the
+        // handler blocks inside gtk_dialog_run. A timeout still fires there:
+        // GTK keeps its own loop running, which is the whole point of that
+        // call.
+        let sayNo: @convention(c) (UnsafeMutableRawPointer?) -> gboolean = { _ in
+            if !Gtk.answerDialog(accept: false) {
+                // No dialog on screen means the button did not ask. That is
+                // the fault this mode exists to catch, so it is a failure
+                // and not a quiet pass.
+                Pending.failure = "pressing Leeren asked nothing before clearing"
+                gtk_main_quit()
+            }
+            return Gtk.sourceRemove
+        }
+        g_timeout_add(300, sayNo, nil)
+        mainWindow.pressClearHistory()
+
+        // Read on a later turn, not here. `submit` only queues: the engine
+        // works on its own queue, so a count read the instant the handler
+        // returns is the count from before the command was even seen. The
+        // first version of this printed "history after cancel: 1" with the
+        // confirmation's answer ignored entirely -- a check that could not
+        // fail, which is the exact fault this whole mode exists to catch.
+        let afterCancel: @convention(c) (UnsafeMutableRawPointer?) -> gboolean = { _ in
+            mainWindow.refresh()
+            print("history after cancel: \(coordinator.logEntries.count)")
+            print("undo steps after cancel: "
+                      + "\(coordinator.snapshot.undoableBatches)")
+
+            let sayYes: @convention(c) (UnsafeMutableRawPointer?) -> gboolean = { _ in
+                if !Gtk.answerDialog(accept: true) {
+                    Pending.failure = "the second press asked nothing"
+                    gtk_main_quit()
+                }
+                return Gtk.sourceRemove
+            }
+            g_timeout_add(300, sayYes, nil)
+            mainWindow.pressClearHistory()
+
+            let report: @convention(c) (UnsafeMutableRawPointer?) -> gboolean = { _ in
+                defer { gtk_main_quit() }
+                mainWindow.refresh()
+                print("history after confirm: \(coordinator.logEntries.count)")
+                print("undo steps after: \(coordinator.snapshot.undoableBatches)")
+                print("status: \(mainWindow.statusText)")
+                return Gtk.sourceRemove
+            }
+            g_timeout_add(1500, report, nil)
+            return Gtk.sourceRemove
+        }
+        g_timeout_add(1500, afterCancel, nil)
+        return Gtk.sourceRemove
+    }
+    g_timeout_add(5500, clear, nil)
     gtk_main()
 
     if let failure = Pending.failure {

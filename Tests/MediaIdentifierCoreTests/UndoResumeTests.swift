@@ -207,4 +207,41 @@ final class UndoResumeTests: XCTestCase {
         XCTAssertEqual(journal.transactions.count, 2)
         XCTAssertEqual(journal.transactions.last?.id, theirs.id)
     }
+
+    // MARK: What the question before clearing is allowed to say
+
+    /// The number in "3 Schritte lassen sich danach nicht mehr zurücknehmen".
+    ///
+    /// `canUndo` existed from the start and nothing in the program read it.
+    /// The count is read, by the confirmation in front of Verlauf leeren,
+    /// which throws the journal away — so it has to be the real number and
+    /// not a flag dressed up as one.
+    func testTheUndoCountFollowsTheJournal() throws {
+        let plan = try planOneFilm()
+        let (executor, _, journal) = makeParts()
+        XCTAssertEqual(journal.transactionCount, 0)
+
+        executor.execute(plan: plan, policy: .skip)
+        XCTAssertEqual(journal.transactionCount, 1,
+                       "one run is one step to take back")
+
+        // Undoing it takes the step away again: there is nothing left to
+        // lose, and the question has to say so rather than threatening a
+        // loss that is not there.
+        _ = executor.undoLast()
+        XCTAssertEqual(journal.transactionCount, 0)
+    }
+
+    /// And clearing empties it, which is the whole point of asking first.
+    func testClearingTheJournalLeavesNothingToUndo() throws {
+        let plan = try planOneFilm()
+        let (executor, _, journal) = makeParts()
+        executor.execute(plan: plan, policy: .skip)
+        XCTAssertEqual(journal.transactionCount, 1)
+
+        journal.clear()
+
+        XCTAssertEqual(journal.transactionCount, 0)
+        XCTAssertFalse(journal.canUndo)
+    }
 }

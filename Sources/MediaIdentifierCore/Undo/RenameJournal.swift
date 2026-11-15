@@ -325,6 +325,15 @@ public final class RenameJournal: @unchecked Sendable {
     /// stays live without an import folder for exactly this reason.
     public var canUndo: Bool { !transactions.isEmpty }
 
+    /// How many batches could be reversed.
+    ///
+    /// Read by the question before clearing the history, which throws the
+    /// journal away: "3 Schritte gehen damit weg" is a different sentence
+    /// from "nothing goes away", and the user deserves the one that is
+    /// true. Not used to grey the Undo button out — see `canUndo` above for
+    /// why that would be the worse answer.
+    public var transactionCount: Int { transactions.count }
+
     /// The transaction an undo would reverse, left in place.
     ///
     /// There used to be a `popLast()` here, and the executor called it

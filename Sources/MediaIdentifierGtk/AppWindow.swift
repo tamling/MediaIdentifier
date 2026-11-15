@@ -39,6 +39,10 @@ final class AppWindow {
     private let llmKeyEntry: UnsafeMutablePointer<GtkWidget>
     private let logColumn: UnsafeMutablePointer<GtkWidget>
     private let logCountLabel: UnsafeMutablePointer<GtkWidget>
+    /// Empties the history — and the undo journal with it, which is why it
+    /// asks first. It was the last command the engine accepted that nothing
+    /// in the program could send.
+    private let clearHistoryButton: UnsafeMutablePointer<GtkWidget>
     private let urlEntry: UnsafeMutablePointer<GtkWidget>
     private let downloadButton: UnsafeMutablePointer<GtkWidget>
     private let cancelDownloadButton: UnsafeMutablePointer<GtkWidget>
@@ -644,7 +648,21 @@ final class AppWindow {
         Styling.style(logSide, "mf-log")
         gtk_widget_set_size_request(logSide, 264, -1)
         let logTitle = Self.label(Text.s("VERLAUF", "HISTORY"), classes: "mf-card-title")
-        gtk_box_pack_start(Gtk.box(logSide), logTitle, 0, 0, 0)
+        // The title and the button on one line, so the button is clearly
+        // this column's and not the list's below it.
+        let logHeader = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8)!
+        gtk_box_pack_start(Gtk.box(logHeader), logTitle, 1, 1, 0)
+        // Flat, and at the quiet end of the column: it is not an action
+        // anybody came here for, and it throws away the undo history with
+        // the list. The dialog behind it says so.
+        clearHistoryButton = gtk_button_new_with_label(Text.s("Leeren", "Clear"))!
+        gtk_button_set_relief(Gtk.button(clearHistoryButton), GTK_RELIEF_NONE)
+        gtk_widget_set_tooltip_text(
+            clearHistoryButton,
+            Text.s("Verlauf und Rückgängig-Schritte löschen",
+                   "Delete the history and the undo steps"))
+        gtk_box_pack_end(Gtk.box(logHeader), clearHistoryButton, 0, 0, 0)
+        gtk_box_pack_start(Gtk.box(logSide), logHeader, 0, 0, 0)
         logCountLabel = Self.label("", classes: "mf-dim")
         gtk_box_pack_start(Gtk.box(logSide), logCountLabel, 0, 0, 0)
 
@@ -705,6 +723,7 @@ final class AppWindow {
         Gtk.onClick(convertStopButton, self) { $0.stopConverting() }
         Gtk.onClick(convertAllButton, self) { $0.setAllConvertChecked(true) }
         Gtk.onClick(convertNoneButton, self) { $0.setAllConvertChecked(false) }
+        Gtk.onClick(clearHistoryButton, self) { $0.clearHistory() }
         Gtk.onClick(checkButton, self) { $0.checkEverything() }
         Gtk.onClick(downloadButton, self) { $0.startDownload() }
         Gtk.onClick(cancelDownloadButton, self) { $0.cancelDownload() }
@@ -1201,6 +1220,12 @@ final class AppWindow {
     /// Opens the conversion panel, as the menu does.
     func openConverting() { open(convertDialog) }
 
+    /// Presses "Leeren" in the history column.
+    ///
+    /// Blocks until the confirmation is answered, so a smoke mode has to
+    /// arrange the answer before calling this — see `Gtk.answerDialog`.
+    func pressClearHistory() { clearHistory() }
+
     /// Presses "Suchen".
     func pressFindConvertible() { findConvertible() }
 
@@ -1580,6 +1605,41 @@ final class AppWindow {
         Gtk.setText(convertCountLabel, Text.s(
             "\(candidates.count) gefunden · \(ticked.count) angehakt · \(size)",
             "\(candidates.count) found · \(ticked.count) ticked · \(size)"))
+    }
+
+    /// Empties the history, after asking.
+    ///
+    /// It asks because this is not only the list on the right: the engine's
+    /// `clearHistory` empties the rename journal too, so the undo steps go
+    /// with it. A plain "Leeren" button beside a list of past renames does
+    /// not look like it takes Rückgängig away, and that is the one thing
+    /// standing between a wrong rename and a lost library.
+    private func clearHistory() {
+        // Named, not implied. "The undo steps go too" is easy to skim past;
+        // "3 Schritte, die danach weg sind" is a number the reader has to
+        // look at. With nothing to undo the sentence says so instead of
+        // threatening a loss that is not there.
+        let steps = coordinator.snapshot.undoableBatches
+        let cost = steps == 0
+            ? Text.s("Im Moment gibt es nichts rückgängig zu machen.",
+                     "There is nothing to undo at the moment.")
+            : Text.s("\(steps) Schritt\(steps == 1 ? "" : "e") lassen sich "
+                         + "danach nicht mehr zurücknehmen.",
+                     "\(steps) step\(steps == 1 ? "" : "s") could not be "
+                         + "taken back afterwards.")
+        guard Gtk.confirm(
+            over: widget,
+            heading: Text.s("Verlauf wirklich leeren?",
+                            "Clear the history?"),
+            body: Text.s("Damit gehen auch die Rückgängig-Schritte weg. ",
+                         "The undo steps go with it. ")
+                + cost
+                + Text.s(" Die Dateien selbst bleiben, wo sie sind.",
+                         " The files themselves stay where they are."),
+            confirm: Text.s("Leeren", "Clear"),
+            cancel: Text.s("Abbrechen", "Cancel")
+        ) else { return }
+        coordinator.submit(.clearHistory)
     }
 
     /// Asks the media server whether it is there.

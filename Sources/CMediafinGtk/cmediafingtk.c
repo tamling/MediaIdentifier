@@ -110,3 +110,69 @@ void mediafin_accept_file_drops(GtkWidget *widget,
                           G_CALLBACK(mediafin_on_drag_data_received),
                           target, mediafin_free_drop_target, 0);
 }
+
+int mediafin_confirm(GtkWidget *parent,
+                     const char *heading,
+                     const char *body,
+                     const char *confirm_label,
+                     const char *cancel_label) {
+    GtkWindow *window = NULL;
+    if (parent != NULL && GTK_IS_WINDOW(parent)) {
+        window = GTK_WINDOW(parent);
+    }
+    /* GTK_MESSAGE_WARNING, not QUESTION: the dialog is not asking out of
+       curiosity, it is telling the user that something is about to be thrown
+       away. The icon carries that before the text is read. */
+    GtkWidget *dialog = gtk_message_dialog_new(window,
+                                               GTK_DIALOG_MODAL
+                                                   | GTK_DIALOG_DESTROY_WITH_PARENT,
+                                               GTK_MESSAGE_WARNING,
+                                               GTK_BUTTONS_NONE,
+                                               "%s", heading);
+    if (dialog == NULL) {
+        return 0;
+    }
+    if (body != NULL && body[0] != '\0') {
+        /* _text, not _markup: this project forbids Pango markup everywhere
+           (tools/check-markup.sh), because a file name is user data and a
+           stray ampersand in one would otherwise take the label out. */
+        gtk_message_dialog_format_secondary_text(GTK_MESSAGE_DIALOG(dialog),
+                                                 "%s", body);
+    }
+    gtk_dialog_add_button(GTK_DIALOG(dialog), confirm_label, GTK_RESPONSE_ACCEPT);
+    /* Cancel added last so it is the one with the keyboard focus: the safe
+       answer should be the one a thoughtless Return gives. */
+    GtkWidget *cancel = gtk_dialog_add_button(GTK_DIALOG(dialog),
+                                              cancel_label,
+                                              GTK_RESPONSE_CANCEL);
+    gtk_dialog_set_default_response(GTK_DIALOG(dialog), GTK_RESPONSE_CANCEL);
+    if (cancel != NULL) {
+        gtk_widget_grab_focus(cancel);
+    }
+
+    gint response = gtk_dialog_run(GTK_DIALOG(dialog));
+    gtk_widget_destroy(dialog);
+    return response == GTK_RESPONSE_ACCEPT ? 1 : 0;
+}
+
+int mediafin_answer_dialog(int accept) {
+    GList *toplevels = gtk_window_list_toplevels();
+    int answered = 0;
+    for (GList *node = toplevels; node != NULL; node = node->next) {
+        GtkWidget *candidate = GTK_WIDGET(node->data);
+        if (candidate == NULL || !GTK_IS_MESSAGE_DIALOG(candidate)) {
+            continue;
+        }
+        if (!gtk_widget_get_visible(candidate)) {
+            continue;
+        }
+        gtk_dialog_response(GTK_DIALOG(candidate),
+                            accept ? GTK_RESPONSE_ACCEPT : GTK_RESPONSE_CANCEL);
+        answered = 1;
+        break;
+    }
+    /* list_toplevels returns a list the caller owns; the widgets in it are
+       not referenced, so only the list itself is freed. */
+    g_list_free(toplevels);
+    return answered;
+}
