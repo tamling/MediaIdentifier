@@ -71,6 +71,16 @@ final class ReplaceRollbackTests: XCTestCase {
     }
 
     // MARK: Step two fails
+    //
+    // Linux only, and not for convenience: `trashExisting` moves the
+    // library's copy into a hidden `.mediafin-trash` folder beside it on
+    // Linux and calls `trashItem` on macOS. A plain file sitting where that
+    // folder has to be created is what makes step two fail here, and on
+    // macOS it makes nothing fail at all — the replacement simply succeeds,
+    // which is why one of these passed on that runner for the wrong reason
+    // while the other two went red. Linux is the platform this ships to;
+    // the tests below that need no such fixture run on both.
+    #if !os(macOS)
 
     /// The realistic one, and it needs no injection: a plain file called
     /// `.mediafin-trash` is sitting in the library folder, left by somebody
@@ -135,6 +145,8 @@ final class ReplaceRollbackTests: XCTestCase {
         XCTAssertTrue(log.entries.contains { $0.status == .failure })
     }
 
+    #endif
+
     // MARK: Step three fails
 
     /// The last rename is within one directory on one filesystem, which is
@@ -167,6 +179,8 @@ final class ReplaceRollbackTests: XCTestCase {
 
     // MARK: What the failure line says
 
+    #if !os(macOS)
+
     /// The old failure line was the cause alone — "A file with the same name
     /// already exists" — with no path in it, while the user's film sat under
     /// a name nothing lists.
@@ -189,6 +203,8 @@ final class ReplaceRollbackTests: XCTestCase {
                       "the failure line does not say where the file is: \(said)")
         XCTAssertTrue(said.contains("umbenennen"), said)
     }
+
+    #endif
 
     // MARK: The record
 
