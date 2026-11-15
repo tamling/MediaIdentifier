@@ -545,7 +545,7 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
 
     private func setSecret(_ key: SecretKey, _ value: String) {
         do {
-            try secretStore.set(value, for: key)
+            let keptAsidePath = try secretStore.set(value, for: key)
             lock.lock()
             switch key {
             case .localLLMAPIKey: _probes[.localLLM] = nil
@@ -553,11 +553,23 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
             case .tmdbAPIKey: break
             }
             lock.unlock()
+            // Said in the same breath, because the other stored keys are
+            // now out of reach and the user is the only one who can fix it.
+            let kept = keptAsidePath.map { path in
+                Text.s(" Die bisherige Datei mit den Zugangsdaten war nicht "
+                           + "lesbar und liegt jetzt unter „\(path)“ — die anderen "
+                           + "dort gespeicherten Schlüssel müssen neu eingetragen "
+                           + "werden.",
+                       " The previous credentials file could not be read and is "
+                           + "now at “\(path)” — the other keys stored in it have "
+                           + "to be entered again.")
+            } ?? ""
             // Never echo the value, not even its length.
             update {
-                $0.lastResult = value.isEmpty
+                $0.lastResult = (value.isEmpty
                     ? Text.s("\(key.label) entfernt.", "\(key.label) removed.")
-                    : Text.s("\(key.label) gespeichert.", "\(key.label) stored.")
+                    : Text.s("\(key.label) gespeichert.", "\(key.label) stored."))
+                    + kept
             }
         } catch {
             update { $0.lastResult = Text.s("\(key.label) ließ sich nicht speichern.",

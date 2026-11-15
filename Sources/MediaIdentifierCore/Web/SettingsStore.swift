@@ -79,8 +79,30 @@ public struct SecretStore: Sendable {
     }
 
     /// Stores `value`, or removes the secret when it is empty.
-    public func set(_ value: String, for key: SecretKey) throws {
+    ///
+    /// A file that exists and does not decode is kept, not overwritten.
+    /// `load()` swallows every failure and returns an empty dictionary, and
+    /// this function used to start from that and then replace the whole
+    /// file — so one edited value in secrets.json (`"tmdb-api-key": 12345`)
+    /// made all three placeholders read "keiner hinterlegt", and the user
+    /// retyping one key destroyed the other two. Nothing said so, and the
+    /// Jellyfin refresh then stopped working with a lamp saying the address
+    /// was set but no key was stored.
+    /// - Returns: where the previous file was kept, when it existed and
+    ///   could not be read. A struct, so this is a return value rather than
+    ///   a property: nothing here holds state between calls.
+    @discardableResult
+    public func set(_ value: String, for key: SecretKey) throws -> String? {
         var secrets = load()
+        var keptAside: String?
+        if secrets.isEmpty, FileManager.default.fileExists(atPath: fileURL.path) {
+            let aside = fileURL.deletingLastPathComponent()
+                .appendingPathComponent(fileURL.lastPathComponent + ".unreadable")
+            try? FileManager.default.removeItem(at: aside)
+            if (try? FileManager.default.moveItem(at: fileURL, to: aside)) != nil {
+                keptAside = aside.path
+            }
+        }
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty {
             secrets.removeValue(forKey: key.rawValue)
@@ -89,6 +111,7 @@ public struct SecretStore: Sendable {
         }
         let data = try JSONEncoder().encode(secrets)
         try AtomicFile.write(data, to: fileURL, permissions: 0o600)
+        return keptAside
     }
 
     /// Which secrets are set. This is all the interface is ever told, so a

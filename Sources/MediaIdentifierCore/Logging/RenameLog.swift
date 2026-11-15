@@ -130,7 +130,10 @@ public final class RenameLog: @unchecked Sendable {
             _entries.removeAll()
             // At once: clearing is something the user asked for and then
             // looks at, and there is nothing to coalesce it with.
-            persist()
+            //
+            // And without the merge, which would read the entries straight
+            // back in: clearing is destructive on purpose.
+            RunLock.waiting(at: lockURL) { persist(merging: false) }
         }
     }
 
@@ -174,7 +177,53 @@ public final class RenameLog: @unchecked Sendable {
         }
     }
 
-    private func persist() {
+    /// The file whose lock serialises writers.
+    ///
+    /// A separate file, not the history itself: `AtomicFile.write` finishes
+    /// with `rename(2)`, which replaces the inode.
+    private var lockURL: URL {
+        let stem = url.deletingPathExtension().lastPathComponent
+        return url.deletingLastPathComponent()
+            .appendingPathComponent("\(stem).lock")
+    }
+
+    /// Takes in whatever another Mediafin has written since.
+    ///
+    /// This object read the file once in `init` and then rewrote the whole
+    /// array on every change, so two processes on one configuration
+    /// directory — the window and `mediafin --once` from a cron line — each
+    /// erased the other's entries. Merged by id and ordered by time, so the
+    /// window now shows the nightly run's history as well.
+    ///
+    /// Called with the lock held and on `queue`.
+    private func mergeFromDisk() {
+        guard let data = try? Data(contentsOf: url) else { return }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        guard let onDisk = try? decoder.decode([RenameLogEntry].self, from: data)
+        else { return }
+        let known = Set(onDisk.map(\.id))
+        var merged = onDisk
+        for mine in _entries where !known.contains(mine.id) { merged.append(mine) }
+        merged.sort { $0.date < $1.date }
+        if merged.count > Self.maximumEntries {
+            merged.removeFirst(merged.count - Self.maximumEntries)
+        }
+        _entries = merged
+    }
+
+    private func persist(merging: Bool = true) {
+        if merging {
+            RunLock.waiting(at: lockURL) {
+                mergeFromDisk()
+                write()
+            }
+            return
+        }
+        write()
+    }
+
+    private func write() {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.prettyPrinted]

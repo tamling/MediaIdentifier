@@ -69,16 +69,69 @@ public final class RenameJournal: @unchecked Sendable {
     /// re-encoded — so the cost per file does not depend on how many files
     /// came before it.
     public var inFlightURL: URL {
+        inFlightURL(forProcess: ProcessInfo.processInfo.processIdentifier)
+    }
+
+    /// Per process, because two Mediafins can share one configuration
+    /// directory — the window and `mediafin --once` from a cron line — and
+    /// one append-only file between them would interleave two batches into
+    /// nonsense.
+    private func inFlightURL(forProcess pid: Int32) -> URL {
         let stem = url.deletingPathExtension().lastPathComponent
         return url.deletingLastPathComponent()
-            .appendingPathComponent("\(stem)-in-flight.jsonl")
+            .appendingPathComponent("\(stem)-in-flight-\(pid).jsonl")
+    }
+
+    /// The file whose lock serialises writers.
+    ///
+    /// A separate file, not the journal itself: `AtomicFile.write` finishes
+    /// with `rename(2)`, which replaces the inode, so a lock held on the
+    /// journal would protect a file that no longer exists.
+    private var lockURL: URL {
+        let stem = url.deletingPathExtension().lastPathComponent
+        return url.deletingLastPathComponent()
+            .appendingPathComponent("\(stem).lock")
     }
 
     public func record(_ transaction: RenameTransaction) {
         queue.sync {
-            transactions.append(transaction)
-            persist()
+            RunLock.waiting(at: lockURL) {
+                // Re-read first. This object read the file once in `init`
+                // and then rewrote the whole array on every change, so a
+                // window left open all day held a snapshot from startup —
+                // and the next rename in it erased whatever the nightly
+                // `mediafin --once` had recorded in between. Nobody noticed
+                // until a restart, because undo works from memory.
+                mergeFromDisk()
+                transactions.append(transaction)
+                sortByDate()
+                persist()
+            }
         }
+    }
+
+    /// Takes in whatever another process has written since, keeping both.
+    ///
+    /// Called with `lock` held and on `queue`. Merged by id rather than
+    /// replaced, so this process's own unwritten work is not lost either.
+    private func mergeFromDisk() {
+        guard let data = try? Data(contentsOf: url) else { return }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        guard let onDisk = try? decoder.decode([RenameTransaction].self, from: data)
+        else { return }
+        var merged = onDisk
+        let known = Set(onDisk.map(\.id))
+        for mine in transactions where !known.contains(mine.id) {
+            merged.append(mine)
+        }
+        transactions = merged
+    }
+
+    /// Oldest first, so `last` is the most recent transaction whoever wrote
+    /// it. Undo asks for exactly that.
+    private func sortByDate() {
+        transactions.sort { $0.date < $1.date }
     }
 
     // MARK: A batch that is still running
@@ -155,8 +208,28 @@ public final class RenameJournal: @unchecked Sendable {
     /// and is skipped; the moves before it are real and are kept.
     private func recoverInterruptedBatch() {
         let fileManager = FileManager.default
-        guard fileManager.fileExists(atPath: inFlightURL.path),
-              let data = try? Data(contentsOf: inFlightURL),
+        let directory = url.deletingLastPathComponent()
+        let stem = url.deletingPathExtension().lastPathComponent
+        let prefix = "\(stem)-in-flight-"
+        let names = (try? fileManager.contentsOfDirectory(atPath: directory.path)) ?? []
+        for name in names.sorted()
+        where name.hasPrefix(prefix) && name.hasSuffix(".jsonl") {
+            let pidText = name.dropFirst(prefix.count).dropLast(".jsonl".count)
+            // Another Mediafin that is still running owns its file: it is in
+            // the middle of a batch, and taking it would both steal a record
+            // it is about to write properly and delete the file it is
+            // appending to.
+            if let pid = Int32(pidText), pid != ProcessInfo.processInfo.processIdentifier,
+               kill(pid, 0) == 0 {
+                continue
+            }
+            recover(fileAt: directory.appendingPathComponent(name))
+        }
+    }
+
+    private func recover(fileAt inFlight: URL) {
+        let fileManager = FileManager.default
+        guard let data = try? Data(contentsOf: inFlight),
               let text = String(data: data, encoding: .utf8)
         else { return }
         let decoder = JSONDecoder()
@@ -174,15 +247,20 @@ public final class RenameJournal: @unchecked Sendable {
                 moves.append(move)
             }
         }
-        defer { try? fileManager.removeItem(at: inFlightURL) }
+        defer { try? fileManager.removeItem(at: inFlight) }
         guard let header, !moves.isEmpty else { return }
         // The batch may have finished and been recorded, and only the
         // removal of this file lost the race with the process dying.
         guard !transactions.contains(where: { $0.id == header.id }) else { return }
         queue.sync {
-            transactions.append(RenameTransaction(id: header.id, date: header.date,
-                                                  moves: moves))
-            persist()
+            RunLock.waiting(at: lockURL) {
+                mergeFromDisk()
+                guard !transactions.contains(where: { $0.id == header.id }) else { return }
+                transactions.append(RenameTransaction(id: header.id, date: header.date,
+                                                      moves: moves))
+                sortByDate()
+                persist()
+            }
         }
     }
 
@@ -224,15 +302,18 @@ public final class RenameJournal: @unchecked Sendable {
     public func finishUndo(of id: UUID,
                            leaving remaining: [RenameTransaction.Move]) -> Bool {
         queue.sync {
+            RunLock.waiting(at: lockURL) { mergeFromDisk(); sortByDate() }
             guard let last = transactions.last, last.id == id else { return false }
-            transactions.removeLast()
-            // The same id, so a second partial undo still matches this
-            // transaction rather than being refused as somebody else's.
-            if !remaining.isEmpty {
-                transactions.append(RenameTransaction(id: last.id, date: last.date,
-                                                      moves: remaining))
+            RunLock.waiting(at: lockURL) {
+                transactions.removeLast()
+                // The same id, so a second partial undo still matches this
+                // transaction rather than being refused as somebody else's.
+                if !remaining.isEmpty {
+                    transactions.append(RenameTransaction(id: last.id, date: last.date,
+                                                          moves: remaining))
+                }
+                persist()
             }
-            persist()
             return true
         }
     }
