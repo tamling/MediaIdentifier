@@ -354,12 +354,10 @@ public enum SecretKey: String, Codable, Sendable, CaseIterable {
         }
     }
 
-    /// The form field it is submitted under.
-    public var formField: String {
-        switch self {
-        case .localLLMAPIKey: return "localLLMAPIKey"
-        case .jellyfinToken: return "jellyfinToken"
-        case .tmdbAPIKey: return "tmdbAPIKey"
-        }
-    }
+    // No `formField`. Each case carried a third name, the one an HTML
+    // `name=` attribute used, and it was never the source of truth even
+    // while the page existed: `fromForm` reads submitted fields by
+    // hardcoded literals and never consulted it. The two names that are
+    // real both have readers — `rawValue` is what SecretStore writes on
+    // disk, `label` is what the user is told.
 }

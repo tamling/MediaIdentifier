@@ -165,9 +165,28 @@ public struct WebConversionSettings: Codable, Sendable, Equatable {
                           stripSubtitles: stripSubtitles)
     }
 
-    /// Roughly how large the output will be, as a percentage of the input.
+    /// Roughly how large the output will be, as a percentage of the input,
+    /// for a source of the given height.
+    ///
+    /// The height has to be given: the saving from a downscale is the
+    /// difference between the source and the target, and the estimator's
+    /// own default of 1080 silently made four of the five resolutions the
+    /// window offers come out identical. See `sizeFraction`.
+    public func estimatedSizePercent(forSourceHeight height: Int) -> Int {
+        Int((ConversionEstimator.sizeFraction(options: options,
+                                              assumedSourceHeight: height)
+                * 100).rounded())
+    }
+
+    /// The same for a 1080p source, which is what "a normal file" means for
+    /// most libraries.
     public var estimatedSizePercent: Int {
-        Int((ConversionEstimator.sizeFraction(options: options) * 100).rounded())
+        estimatedSizePercent(forSourceHeight: 1080)
+    }
+
+    /// What the chosen quality number looks like, in words.
+    public var qualityDescription: String {
+        ConversionEstimator.quality(options: options).label
     }
 
     // MARK: Form decoding

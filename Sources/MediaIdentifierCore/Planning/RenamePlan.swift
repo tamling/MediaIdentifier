@@ -142,16 +142,14 @@ public struct RenameItem: Identifiable, Equatable, Sendable {
         [PlannedMove(source: mediaFile.url, destination: primaryDestination)] + companionMoves
     }
 
-    // Convenience accessors for the preview UI (FR8).
+    /// What the file is called now, which is the left half of a row.
+    ///
+    /// The only one of these left. `detectedTitle`,
+    /// `seasonEpisodeDescription` and `newFileName` were beside it, built
+    /// for a web page that no longer exists, and none of them was ever read
+    /// by the window: the title reaches the screen through the destination
+    /// path, which `JellyfinNamer` builds with the sanitising this did not
+    /// do, and the row shows that whole path rather than a bare file name.
+    /// Their strings were English-only for the same reason.
     public var originalFileName: String { mediaFile.url.lastPathComponent }
-    public var detectedTitle: String { mediaFile.parsed.title }
-    public var seasonEpisodeDescription: String {
-        guard mediaFile.parsed.kind == .episode else {
-            return mediaFile.parsed.year.map { "Movie (\($0))" } ?? "Movie"
-        }
-        let s = mediaFile.parsed.season.map { String(format: "S%02d", $0) } ?? "S?"
-        let e = mediaFile.parsed.episode.map { String(format: "E%02d", $0) } ?? "E?"
-        return s + e
-    }
-    public var newFileName: String { (proposedRelativePath as NSString).lastPathComponent }
 }

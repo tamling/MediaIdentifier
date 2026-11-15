@@ -376,7 +376,11 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         }
     }
 
-    var pendingWorkCount: Int { lock.lock(); defer { lock.unlock() }; return _pendingWork }
+    // No `pendingWorkCount`. It read the same counter a second way and had
+    // no reader at all -- not in the program, not in a test, despite the
+    // unused-declaration baseline filing it under "accessors that exist for
+    // the tests". `queuedWork` on the snapshot is the published number, and
+    // `StatusSnapshot.isWorking` is what the window gates on.
 
     /// Whether a command does something the user should see progress for.
     ///
@@ -2217,7 +2221,15 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
     // MARK: Watching the import folder
 
     /// True while the import folder is being watched.
-    var isWatching: Bool { queue.sync { watchTimer != nil } }
+    /// Whether the watch timer is really armed.
+    ///
+    /// Named *ForTesting because that is what it is: the program reads
+    /// `snapshot.watchActive`, and this reads the timer itself. The tests
+    /// assert both, deliberately — they once disagreed, and with watching
+    /// on and no import folder nothing was polled while every lamp said
+    /// "active". A test that reads only the published flag cannot catch
+    /// that, and nor can one that reads only the timer.
+    var isWatchingForTesting: Bool { queue.sync { watchTimer != nil } }
 
     /// Starts or stops watching to match the settings. Runs on `queue`.
     private func updateWatchState() {

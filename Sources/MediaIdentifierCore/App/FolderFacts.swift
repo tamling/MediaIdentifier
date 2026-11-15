@@ -125,7 +125,15 @@ public final class FolderInspector: @unchecked Sendable {
 
     /// What is known, with no waiting and no probing. For tests and for a
     /// caller that only wants to know whether anything has been measured.
-    public func cachedFacts(for path: String) -> FolderFacts? {
+    /// What the cache holds for `path`, without starting a probe.
+    ///
+    /// Named *ForTesting because nothing in the program wants it: a reader
+    /// asks `facts(for:)`, which starts a fresh probe when the answer is
+    /// stale, and that is how a mount coming back is noticed at all. A test
+    /// waiting for a late probe's answer to land has no other way to see it
+    /// arrive, and polling `facts(for:)` would start the probe it is
+    /// waiting for.
+    public func cachedFactsForTesting(for path: String) -> FolderFacts? {
         lock.lock(); defer { lock.unlock() }
         return cache[path]
     }

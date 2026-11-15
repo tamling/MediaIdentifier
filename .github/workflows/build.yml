@@ -251,7 +251,7 @@ jobs:
     container: swift:6.0-jammy
     steps:
       - uses: actions/checkout@v4
-      - name: Install GTK3, Xvfb and a font
+      - name: Install GTK3, Xvfb, a font and FFmpeg
         shell: bash
         run: |
           set -euo pipefail
@@ -264,8 +264,17 @@ jobs:
           # GTK's bare fallbacks: Cantarell is the font the Adwaita theme is
           # designed around, and without an icon theme the header bar's
           # controls render as "missing image" squares.
+          #
+          # FFmpeg, because the conversion step below really converts: the
+          # whole feature was reachable from the removed web front-end and
+          # from nothing else, so what is worth checking is that pressing
+          # Konvertieren produces a file on disk. It is installed in the Core
+          # job too, for its own reasons; this job needs its own copy.
           apt-get install -y -qq pkg-config libgtk-3-dev xvfb file \
-            fonts-dejavu-core fonts-cantarell adwaita-icon-theme
+            fonts-dejavu-core fonts-cantarell adwaita-icon-theme ffmpeg
+          # Said out loud: without it the conversion step dies with
+          # "command not found", which is how this failed the first time.
+          ffmpeg -version | head -1
       - name: Build
         run: swift build -c release --product mediafin-gtk
       # The headless runner draws nothing, so what is worth checking is that
@@ -377,6 +386,18 @@ jobs:
           run_window "$empty" | tee empty.log
           grep -q "^scan button available: true" empty.log || {
             echo "FAIL: the scan button was not even available"; exit 1; }
+          # Stop, Umbenennen and Rückgängig must be on the main window, not
+          # inside a panel. The send button was once built into a panel and
+          # became unreachable when that panel moved behind the menu; the
+          # window now has three panels full of buttons, so the same mistake
+          # has three more places to happen in.
+          grep -q "^urgent buttons on main surface: true" empty.log || {
+            echo "FAIL: Stop, Umbenennen or Rückgängig is not on the main "
+            echo "      window -- somebody who needs it urgently would have "
+            echo "      to find the right panel first"
+            grep "^urgent buttons" empty.log || echo "(no line at all)"
+            exit 1
+          }
           grep -qiE "^status: .*(import|Importordner)" empty.log || {
             echo "FAIL: pressing Scan did not name the missing import folder"
             exit 1
@@ -634,12 +655,44 @@ jobs:
           print("settings.json kept every conversion field and the server address")
           CHECK
           # The estimate line, which is the only thing that says what the
-          # chosen settings will do before a run starts.
+          # chosen settings will do before a run starts. The fixture chooses
+          # 720p, so the line has to name BOTH sources: the saving from a
+          # downscale is the difference between the source and the target,
+          # and the estimator's own default of 1080 made four of the five
+          # resolutions print an identical number -- a setting that looked
+          # inert and, for 4K libraries, was wrong by a factor of four.
           estimate="$(sed -n 's/^estimate: //p' applied.log)"
           echo "estimate: ${estimate:-nothing}"
           case "$estimate" in
             *%*) : ;;
             *) echo "FAIL: no size estimate under the conversion settings"; exit 1 ;;
+          esac
+          case "$estimate" in
+            *1080p*4K*|*1080p*|*4K*) : ;;
+            *) echo "FAIL: the estimate does not say which source it assumes."
+               echo "      One number for every resolution is the bug this "
+               echo "      line is supposed to have stopped telling."
+               exit 1 ;;
+          esac
+          # Both numbers, and they must differ: equal ones mean the source
+          # height is being ignored again.
+          python3 - "$estimate" <<'ESTIMATE'
+          import re, sys
+          line = sys.argv[1]
+          numbers = [int(n) for n in re.findall(r"(\d+) ?%", line)]
+          if len(numbers) != 2:
+              sys.exit(f"FAIL: expected two percentages at 720p, got {numbers} "
+                       f"in: {line}")
+          if numbers[0] <= numbers[1]:
+              sys.exit(f"FAIL: a 4K source must come out smaller than a 1080p "
+                       f"one at the same target; got {numbers}")
+          print(f"estimate names both sources: {numbers[0]} % and {numbers[1]} %")
+          ESTIMATE
+          # And the words beside the number: "21" means nothing on its own.
+          case "$estimate" in
+            *"Das Bild wird dabei"*|*"The picture comes out"*) : ;;
+            *) echo "FAIL: the estimate does not say what the picture becomes"
+               exit 1 ;;
           esac
 
           echo "=== converting, end to end ==="
@@ -725,6 +778,106 @@ jobs:
           }
           test ! -e "$conv/movies/Film A (2020).x264.mkv" || {
             echo "FAIL: the file taken out of the run was converted anyway"
+            exit 1
+          }
+
+          echo "=== the window while the engine holds its queue ==="
+          # Four commands hold the engine's serial queue without ever setting
+          # `busy`: both connection tests, Alles prüfen, and Rückgängig. The
+          # window used to key everything on `busy`, so for as long as one ran
+          # it said "Bereit" with every button live. A second press of Undo
+          # during the first reversed a batch the user never asked to reverse,
+          # because the first press had already removed the transaction it
+          # worked from.
+          #
+          # A server that accepts and never answers holds that state open for
+          # the engine's 30-second request timeout, which is what makes this
+          # observable at all.
+          silent="$(mktemp -d)"
+          cat > "$silent/silent-server.py" <<'SERVER'
+          import socket, sys, time
+          listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+          listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+          listener.bind(("127.0.0.1", 0))
+          listener.listen(16)
+          print(listener.getsockname()[1], flush=True)
+          held = []
+          deadline = time.time() + float(sys.argv[1])
+          listener.settimeout(1.0)
+          while time.time() < deadline:
+              try:
+                  held.append(listener.accept()[0])   # kept open, never written to
+              except socket.timeout:
+                  continue
+              except OSError:
+                  break
+          SERVER
+          nohup python3 "$silent/silent-server.py" 90 > "$silent/port" 2>&1 &
+          sleep 2
+          port="$(head -1 "$silent/port")"
+          echo "silent server on port ${port:-none}"
+          case "${port:-}" in
+            ''|*[!0-9]*) echo "FAIL: the silent server did not start"
+                         cat "$silent/port" || true; exit 1 ;;
+          esac
+          mkdir -p "$silent/config" "$silent/src" "$silent/movies"
+          python3 - "$silent" "$port" > "$silent/config/settings.json" <<'MAKE'
+          import json, sys
+          root, port = sys.argv[1], sys.argv[2]
+          print(json.dumps({
+              "sourceFolder": root + "/src", "moviesFolder": root + "/movies",
+              "seriesFolder": "", "musicFolder": "", "libraryMode": "video",
+              "identification": "local-llm",
+              "localLLMBaseURL": "http://127.0.0.1:" + port,
+              "localLLMModel": "qwen/test",
+              "jellyfinBaseURL": "http://127.0.0.1:" + port,
+              "conflictPolicy": "skip", "watchSourceFolder": False,
+              "conversion": {"videoCodec": "h265", "quality": 21,
+                             "preset": "slow", "targetHeight": None,
+                             "audioMode": "passthrough",
+                             "stripSubtitles": False, "ffmpegPath": ""},
+              "schedule": {"isEnabled": False, "alsoRename": False,
+                           "cadence": "daily", "hour": 3, "minute": 0,
+                           "everyHours": 6},
+          }))
+          MAKE
+          timeout 90 xvfb-run -a --server-args="-screen 0 1280x900x24" \
+            env MEDIAFIN_CONFIG_DIR="$silent/config" \
+            .build/release/mediafin-gtk --press-check | tee check.log
+
+          # The mode fails by itself if the probe finished before the window
+          # was read, so reaching here means something really was in flight.
+          queued="$(sed -n 's/^during queued: \([0-9]*\)$/\1/p' check.log)"
+          busy="$(sed -n 's/^during busy: //p' check.log)"
+          test "${queued:-0}" -ge 1 || {
+            echo "FAIL: nothing was queued, so nothing was observed"; exit 1; }
+          # busy false is the whole point: with it true the old gate would
+          # have covered this and the test would prove nothing.
+          test "$busy" = "false" || {
+            echo "FAIL: busy was ${busy:-unknown} -- this run does not "
+            echo "      exercise the gap it is meant to exercise"
+            exit 1
+          }
+          during="$(sed -n 's/^during subtitle: //p' check.log)"
+          echo "subtitle while working: ${during:-nothing}"
+          case "$during" in
+            Bereit|Ready)
+              echo "FAIL: the header said it was idle while the engine was "
+              echo "      holding its queue"
+              exit 1 ;;
+            '') echo "FAIL: no subtitle line to check"; exit 1 ;;
+          esac
+          undo="$(sed -n 's/^during undo pressable: //p' check.log)"
+          test "$undo" = "false" || {
+            echo "FAIL: Undo was still pressable while work was in flight."
+            echo "      A second press reverses a batch nobody asked to "
+            echo "      reverse: the first press has already dropped the "
+            echo "      transaction it worked from."
+            exit 1
+          }
+          scan="$(sed -n 's/^during scan pressable: //p' check.log)"
+          test "$scan" = "false" || {
+            echo "FAIL: Scan was still pressable while work was in flight"
             exit 1
           }
 

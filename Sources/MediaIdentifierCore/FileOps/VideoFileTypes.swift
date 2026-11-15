@@ -22,13 +22,15 @@ public enum VideoFileTypes {
         videoExtensions.contains(url.pathExtension.lowercased())
     }
 
-    public static func isSubtitle(_ url: URL) -> Bool {
-        subtitleExtensions.contains(url.pathExtension.lowercased())
-    }
-
-    public static func isImage(_ url: URL) -> Bool {
-        imageExtensions.contains(url.pathExtension.lowercased())
-    }
+    // No `isSubtitle` or `isImage` beside `isVideo`, on purpose.
+    //
+    // They existed, had no caller, and would have been a trap for the next
+    // one: both were bare extension tests, while `role(for:)` below asks
+    // `isSample` FIRST. So for `Fargo.S05E10-GROUP-sample.srt` the helper
+    // said "subtitle" and the role says "sample", and only the role is
+    // right — `ReleaseSampleTests` records exactly that bug ("it used to be
+    // a bare `contains`, which also made a subtitle whose name ended in
+    // 'sample' a sample rather than a subtitle"). Ask `role(for:)`.
 
     /// Whether this is a release sample rather than the release.
     ///

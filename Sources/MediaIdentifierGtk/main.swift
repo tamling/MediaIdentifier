@@ -60,6 +60,18 @@ private enum Mode {
     /// only thing between a stray click and a library that cannot be put
     /// back. A guard nothing presses is a guard somebody deletes.
     case pressClearHistory
+    /// Press "Alles prüfen" and report, while it is still running, what the
+    /// header says and whether Undo can be pressed.
+    ///
+    /// Four commands hold the engine's serial queue without ever setting
+    /// `busy`: both connection tests, Alles prüfen, and Rückgängig. For as
+    /// long as one runs, the window used to say "Bereit" with every button
+    /// live -- and a second press of Undo during the first reversed a batch
+    /// the user never asked to reverse, because the first press had already
+    /// removed the transaction it worked from. Pointed at a server that
+    /// accepts and never answers, this holds that state open long enough to
+    /// look at it.
+    case pressCheck
 }
 
 private struct Options {
@@ -95,6 +107,9 @@ private func usage() -> String {
                                        press "Leeren", cancel the question,
                                        press it again and confirm, printing
                                        the history each time
+      mediafin-gtk --press-check       press "Alles prüfen" and report, while
+                                       it still runs, what the header says and
+                                       whether Undo can be pressed
       mediafin-gtk --drop FILE…        hand these files to the window as a
                                        drop would, and print what came of it
       mediafin-gtk --help              this text
@@ -140,6 +155,8 @@ private func parse(_ arguments: [String]) -> Options {
             options.mode = .pressConvert
         case "--press-clear-history":
             options.mode = .pressClearHistory
+        case "--press-check":
+            options.mode = .pressCheck
         case "--drop":
             // Everything after --drop is a path, so this has to come last.
             let rest = Array(arguments[arguments.index(after: index)...])
@@ -291,6 +308,12 @@ case .pressScan:
     // queue and the window's own refresh time to pick that answer up.
     let press: @convention(c) (UnsafeMutableRawPointer?) -> gboolean = { _ in
         print("scan button available: \(mainWindow.scanButtonIsAvailable)")
+        // Checked here because this mode already looks at the main surface,
+        // and because the window now has three panels full of buttons: the
+        // fault this guards against is a control sliding into one of them
+        // and only being noticed by somebody who needed it urgently.
+        print("urgent buttons on main surface: "
+                  + "\(mainWindow.urgentButtonsAreOnTheMainSurface)")
         mainWindow.pressScan()
         let report: @convention(c) (UnsafeMutableRawPointer?) -> gboolean = { _ in
             defer { gtk_main_quit() }
@@ -494,6 +517,44 @@ case .pressClearHistory:
         return Gtk.sourceRemove
     }
     g_timeout_add(5500, clear, nil)
+    gtk_main()
+
+    if let failure = Pending.failure {
+        fail(failure, code: 1)
+    }
+
+case .pressCheck:
+    let check: @convention(c) (UnsafeMutableRawPointer?) -> gboolean = { _ in
+        mainWindow.refresh()
+        print("idle subtitle: \(mainWindow.subtitleText)")
+        print("idle undo pressable: \(mainWindow.undoButtonIsPressable)")
+        mainWindow.pressCheckEverything()
+
+        // Read while the probe is still in flight. The engine's request
+        // timeout is 30 seconds and Alles prüfen runs two probes, so a
+        // second in is comfortably inside it.
+        let during: @convention(c) (UnsafeMutableRawPointer?) -> gboolean = { _ in
+            defer { gtk_main_quit() }
+            mainWindow.refresh()
+            let state = coordinator.snapshot
+            print("during busy: \(state.busy)")
+            print("during queued: \(state.queuedWork)")
+            print("during subtitle: \(mainWindow.subtitleText)")
+            print("during undo pressable: \(mainWindow.undoButtonIsPressable)")
+            print("during scan pressable: \(mainWindow.scanButtonIsAvailable)")
+            // If the probe has already finished, the run proves nothing and
+            // must not pass: the whole point is to look at the window while
+            // the queue is held.
+            if state.queuedWork == 0 {
+                Pending.failure = "the probe finished before the window was read, "
+                    + "so nothing was observed in flight"
+            }
+            return Gtk.sourceRemove
+        }
+        g_timeout_add(1200, during, nil)
+        return Gtk.sourceRemove
+    }
+    g_timeout_add(400, check, nil)
     gtk_main()
 
     if let failure = Pending.failure {

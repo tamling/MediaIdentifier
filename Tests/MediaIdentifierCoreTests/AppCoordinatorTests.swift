@@ -432,7 +432,10 @@ final class AppCoordinatorTests: XCTestCase {
 
         XCTAssertEqual(coordinator.items.count, 2)
         XCTAssertTrue(coordinator.items.allSatisfy { $0.conflict == .duplicateInBatch },
-                      coordinator.items.map { "\($0.newFileName) \(String(describing: $0.conflict))" }
+                      coordinator.items.map {
+                          "\($0.primaryDestination.lastPathComponent) "
+                              + "\(String(describing: $0.conflict))"
+                      }
                         .joined(separator: ", "))
     }
 
@@ -610,14 +613,14 @@ final class WatchFolderTests: XCTestCase {
     }
 
     func testWatchingFollowsTheSetting() {
-        XCTAssertFalse(coordinator.isWatching, "off by default")
+        XCTAssertFalse(coordinator.isWatchingForTesting, "off by default")
 
         coordinator.executeForTesting(.saveSettings(settings(watching: true)))
-        XCTAssertTrue(coordinator.isWatching)
+        XCTAssertTrue(coordinator.isWatchingForTesting)
         XCTAssertTrue(coordinator.snapshot.watchActive)
 
         coordinator.executeForTesting(.saveSettings(settings(watching: false)))
-        XCTAssertFalse(coordinator.isWatching)
+        XCTAssertFalse(coordinator.isWatchingForTesting)
         XCTAssertFalse(coordinator.snapshot.watchActive)
     }
 
@@ -625,7 +628,12 @@ final class WatchFolderTests: XCTestCase {
         var incomplete = settings(watching: true)
         incomplete.sourceFolder = ""
         coordinator.executeForTesting(.saveSettings(incomplete))
-        XCTAssertFalse(coordinator.isWatching, "there is nothing to watch")
+        XCTAssertFalse(coordinator.isWatchingForTesting, "there is nothing to watch")
+        // And the published flag, which is what the interface shows. This
+        // test used to read the timer alone, which is how "nothing is
+        // polled while every lamp says active" went unnoticed.
+        XCTAssertFalse(coordinator.snapshot.watchActive,
+                       "the interface would claim it was watching")
     }
 
     func testANewFileIsProposedButNotRenamed() throws {
@@ -701,17 +709,17 @@ final class WatchFolderTests: XCTestCase {
     /// and `refreshSnapshotCounts` ran after it and wrote the raw setting
     /// back — so with watching on and no import folder, nothing was polled
     /// while the status row and every lamp said "active". The sibling test
-    /// asserts `isWatching` only, so it passed throughout.
+    /// asserts the timer only, so it passed throughout.
     func testTheWatchLampSaysWhatIsActuallyBeingWatched() {
         var incomplete = settings(watching: true)
         incomplete.sourceFolder = ""
         coordinator.executeForTesting(.saveSettings(incomplete))
-        XCTAssertFalse(coordinator.isWatching)
+        XCTAssertFalse(coordinator.isWatchingForTesting)
         XCTAssertFalse(coordinator.snapshot.watchActive,
                        "the interface claimed the import folder was being watched")
 
         coordinator.executeForTesting(.saveSettings(settings(watching: true)))
-        XCTAssertTrue(coordinator.isWatching)
+        XCTAssertTrue(coordinator.isWatchingForTesting)
         XCTAssertTrue(coordinator.snapshot.watchActive)
     }
 

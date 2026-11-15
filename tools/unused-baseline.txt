@@ -1,7 +1,7 @@
 # Declarations that exist in the program and are used only by tests.
 #
 # Each line is a debt, not a decision. They were found when
-# tools/check-unused.py was written, and most are remnants of the web
+# tools/check-unused.py was written, and most were remnants of the web
 # front-end that was removed: a page used to call them, the page is gone, and
 # the tests that pinned their behaviour kept them alive.
 #
@@ -10,22 +10,49 @@
 # line out of this file -- by deleting the declaration and its tests, or by
 # giving it a caller -- is a small change each time, and the right one.
 #
-# One name per line.
-
-# Removed web front-end: these built strings for a page that no longer exists.
-detectedTitle
-formField
-isWorking
-newFileName
-seasonEpisodeDescription
-
-# The file-type table's smaller helpers. Their tests pin the table, which is
-# worth keeping; the helpers themselves have no reader.
-isImage
-isSubtitle
-
-# Accessors that exist for the tests but are not named *ForTesting.
-isWatching
-pendingWorkCount
-stopButtonIsOnTheMainSurface
-cachedFacts
+# The list is EMPTY, and the sixteen names that were on it were cleared
+# one at a time rather than forgiven:
+#
+#   Given a caller, because the thing they were for was missing from the
+#   interface and the window needed it --
+#     estimatedSizePercent, heightLabel, offeredHeights, suggestedQuality,
+#     readableSize   (the conversion settings card and the Konvertieren
+#                     panel; the whole feature had no way in)
+#     isWorking      (the four commands that hold the engine's queue
+#                     without setting `busy`; the window said "Bereit" and
+#                     left Undo pressable, where a second press reversed a
+#                     batch nobody asked to reverse)
+#
+#   Deleted, because nothing was lost --
+#     detectedTitle, seasonEpisodeDescription, newFileName
+#                    (display helpers for a page that is gone; the title
+#                     reaches the screen through the sanitised destination
+#                     path, not through these)
+#     isImage, isSubtitle
+#                    (bare extension tests that DISAGREE with role(for:),
+#                     which asks isSample first -- a trap, not a helper)
+#     formField      (a third name per secret, for an HTML name= attribute;
+#                     never the source of truth even then)
+#     pendingWorkCount
+#                    (a second reading of the queue counter, with no reader
+#                     anywhere -- not even a test, despite this file once
+#                     claiming otherwise)
+#
+#   Renamed to *ForTesting, because they really are test accessors and the
+#   script exempts that suffix --
+#     isWatching -> isWatchingForTesting
+#                    (reads the timer; the tests assert it AND the published
+#                     flag, because those two once disagreed)
+#     cachedFacts -> cachedFactsForTesting
+#                    (a test waiting for a late probe has no other way to
+#                     see the answer land)
+#
+#   Given a caller after all, rather than deleted --
+#     stopButtonIsOnTheMainSurface -> urgentButtonsAreOnTheMainSurface
+#                    (it guards a real fault -- a control sliding into a
+#                     panel and becoming unreachable -- and the window now
+#                     has three panels of buttons. --press-scan prints it
+#                     and CI asserts it.)
+#
+# Keep it empty. One name per line if it ever has to grow again, with the
+# reason in writing.

@@ -1284,11 +1284,43 @@ final class AppWindow {
         gtk_widget_get_sensitive(scanButton) != 0
     }
 
-    /// Whether Stop is on the main surface, like Scan. The send button was
-    /// once built into a panel and became unreachable when that panel moved
-    /// behind the menu; this is the same mistake waiting to be repeated.
-    var stopButtonIsOnTheMainSurface: Bool {
-        gtk_widget_get_toplevel(stopScanButton) == widget
+    /// Whether Undo can be pressed at all.
+    ///
+    /// Read as a sensitivity and not as a snapshot field, because the fault
+    /// was precisely that the engine knew it was working and the button did
+    /// not. Asking the engine would agree with itself and prove nothing.
+    var undoButtonIsPressable: Bool {
+        gtk_widget_get_sensitive(undoButton) != 0
+    }
+
+    /// What the header says under the title, read back off the header bar.
+    var subtitleText: String {
+        guard let text = gtk_header_bar_get_subtitle(Gtk.headerBar(header))
+        else { return "" }
+        return String(cString: text)
+    }
+
+    /// Presses "Alles prüfen" in the status panel.
+    func pressCheckEverything() { checkEverything() }
+
+    /// Whether the buttons that must be reachable without opening anything
+    /// really are on the main window.
+    ///
+    /// The send button was once built into a panel and became unreachable
+    /// when that panel moved behind the menu. This guards against repeating
+    /// that — and it had no reader at all until the conversion panel added
+    /// five more buttons inside a panel, which is exactly when a guard like
+    /// this stops being theoretical. It is printed by `--press-scan` and
+    /// asserted in CI.
+    ///
+    /// Stop, Rename and Undo, because those are the three that answer "make
+    /// it stop" and "put it back". `gtk_widget_get_toplevel` returns the
+    /// widget itself when it has no toplevel ancestor, so an orphan fails
+    /// here too.
+    var urgentButtonsAreOnTheMainSurface: Bool {
+        [stopScanButton, applyButton, undoButton].allSatisfy {
+            gtk_widget_get_toplevel($0) == widget
+        }
     }
 
     /// Presses Scan exactly as a click does -- through the signal, so the
@@ -1448,15 +1480,34 @@ final class AppWindow {
                                               targetHeight: typed.targetHeight,
                                               audioMode: typed.audioMode,
                                               stripSubtitles: typed.stripSubtitles)
-        let percent = effective.estimatedSizePercent
+        // Two numbers, not one, whenever the chosen resolution means
+        // different things for different sources — which is most of the
+        // time. A downscale saves the difference between the source and the
+        // target, so "1080p" saves nothing from a 1080p file and three
+        // quarters from a 4K one. The estimator silently assumed 1080 and
+        // the line therefore printed the same 62 % for "keep the source
+        // resolution", 2160p and 1080p alike: a setting that looked inert
+        // and, for the 4K libraries it exists for, was wrong by a factor of
+        // four. Naming the assumption is the only honest version of this
+        // sentence, because nothing can probe a source here — no file has
+        // been chosen yet.
+        let normal = effective.estimatedSizePercent(forSourceHeight: 1080)
+        let fourK = effective.estimatedSizePercent(forSourceHeight: 2160)
+        let size = normal == fourK
+            ? Text.s("Schätzung: etwa \(normal) % der ursprünglichen Größe.",
+                     "Estimate: about \(normal) % of the original size.")
+            : Text.s("Schätzung: etwa \(normal) % bei einer 1080p-Quelle, "
+                         + "etwa \(fourK) % bei einer 4K-Quelle.",
+                     "Estimate: about \(normal) % from a 1080p source, about "
+                         + "\(fourK) % from a 4K source.")
         let usual = ConversionOptions.suggestedQuality(forHeight: effective.targetHeight)
-        Gtk.setText(convertEstimate, Text.s(
-            "Schätzung: etwa \(percent) % der ursprünglichen Größe. "
-                + "Bei dieser Auflösung ist \(usual) der übliche Qualitätswert; "
-                + "kleiner heißt besser und größer.",
-            "Estimate: about \(percent) % of the original size. At this "
-                + "resolution \(usual) is the usual quality value; lower means "
-                + "better and bigger."))
+        Gtk.setText(convertEstimate, size
+            + Text.s(" Das Bild wird dabei: \(effective.qualityDescription). "
+                         + "Bei dieser Auflösung ist \(usual) der übliche "
+                         + "Qualitätswert; kleiner heißt besser und größer.",
+                     " The picture comes out: \(effective.qualityDescription). "
+                         + "At this resolution \(usual) is the usual quality "
+                         + "value; lower means better and bigger."))
     }
 
     // MARK: Converting
@@ -1659,12 +1710,35 @@ final class AppWindow {
     func refresh() {
         let state = coordinator.snapshot
 
+        // What it is doing now outranks how the last thing ended.
+        //
+        // `hasError` used to be tested first, and it is sticky: nothing
+        // clears it on entry, only the end of the next run recomputes it. So
+        // a scan started after a partly failed rename showed "Mit Fehlern
+        // beendet" for its whole duration instead of progress — and the
+        // likeliest route to the Undo button is "some files failed, so I
+        // will undo", which is exactly the case where the user most needs
+        // to see that something is happening.
         let subtitle: String
-        if state.hasError {
+        if state.isWorking {
+            // Two kinds of working. `busy` is set by the handlers that
+            // report progress; `isWorking` also covers the four commands
+            // that hold the engine's serial queue without ever setting it —
+            // Rückgängig, both connection tests, and Alles prüfen. A probe
+            // against an unreachable server holds the queue for the
+            // 30-second request timeout, and Alles prüfen runs two of them.
+            if state.busy {
+                subtitle = (state.convertStatus ?? Text.s("Arbeitet", "Working"))
+                    + " · \(state.activePercent) %"
+            } else {
+                // No percentage: `activePercent` falls back to
+                // `renameProgress`, which after a finished rename is 1 — so
+                // a probe would announce "Arbeitet · 100 %" of work that
+                // reports no progress at all.
+                subtitle = Text.s("Arbeitet …", "Working…")
+            }
+        } else if state.hasError {
             subtitle = Text.s("Mit Fehlern beendet", "Finished with errors")
-        } else if state.busy {
-            subtitle = (state.convertStatus ?? Text.s("Arbeitet", "Working"))
-                + " · \(state.activePercent) %"
         } else {
             subtitle = Text.s("Bereit", "Ready")
         }
@@ -1699,11 +1773,30 @@ final class AppWindow {
         // a disabled button is precisely the way to never see. "The scan
         // button does not work" is what that looks like from the outside.
         let hasSource = !coordinator.settings.sourceFolder.isEmpty
-        gtk_widget_set_sensitive(scanButton, state.busy ? 0 : 1)
+        // The buttons that START work are gated on `isWorking`, not on
+        // `busy`. They were already gated — this only extends the gate to
+        // the four commands that hold the queue without setting `busy`.
+        //
+        // Undo is the one that matters, and it is not cosmetic. `undoLast`
+        // never sets `busy`, so the button stayed live for the whole
+        // duration of an undo. The queue is serial, so a second press waited
+        // and then ran — but by then `finishUndo` had removed the
+        // transaction the first press worked from, so `journal.last` was the
+        // next older one. The second press therefore did not harmlessly
+        // repeat: it reversed a batch the user never asked to reverse. On a
+        // slow cross-volume move the window invited that press twice a
+        // second while the header said "Bereit".
+        //
+        // The stop buttons are deliberately NOT gated: a button whose whole
+        // job is to interrupt the work must be pressable while the work is
+        // running.
+        gtk_widget_set_sensitive(scanButton, state.isWorking ? 0 : 1)
         gtk_widget_set_sensitive(stopScanButton, state.busy ? 1 : 0)
-        gtk_widget_set_sensitive(applyButton, (!rowChecks.isEmpty && !state.busy) ? 1 : 0)
-        gtk_widget_set_sensitive(undoButton, state.busy ? 0 : 1)
-        gtk_widget_set_sensitive(downloadButton, (!hasSource || state.busy) ? 0 : 1)
+        gtk_widget_set_sensitive(applyButton,
+                                 (!rowChecks.isEmpty && !state.isWorking) ? 1 : 0)
+        gtk_widget_set_sensitive(undoButton, state.isWorking ? 0 : 1)
+        gtk_widget_set_sensitive(downloadButton,
+                                 (!hasSource || state.isWorking) ? 0 : 1)
         gtk_widget_set_sensitive(cancelDownloadButton, state.downloading ? 1 : 0)
         if state.downloading {
             // No fraction means no size was reported — a stream with no
@@ -1732,9 +1825,9 @@ final class AppWindow {
 
         // The conversion panel. Driven from the same timer as everything
         // else, so it is live whether or not it happens to be open.
-        gtk_widget_set_sensitive(convertFindButton, state.busy ? 0 : 1)
+        gtk_widget_set_sensitive(convertFindButton, state.isWorking ? 0 : 1)
         gtk_widget_set_sensitive(convertRunButton,
-                                 (!convertRows.isEmpty && !state.busy) ? 1 : 0)
+                                 (!convertRows.isEmpty && !state.isWorking) ? 1 : 0)
         gtk_widget_set_sensitive(convertStopButton, state.converting ? 1 : 0)
         if state.converting {
             let detail = [state.currentFile, state.convertDetail]

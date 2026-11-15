@@ -143,10 +143,10 @@ final class FolderInspectorTests: XCTestCase {
         // The work item lands on its own thread; wait for the cache rather
         // than for a fixed time.
         let deadline = Date().addingTimeInterval(3)
-        while inspector.cachedFacts(for: "/mnt/slow") == nil, Date() < deadline {
+        while inspector.cachedFactsForTesting(for: "/mnt/slow") == nil, Date() < deadline {
             usleep(10_000)
         }
-        XCTAssertEqual(inspector.cachedFacts(for: "/mnt/slow")?.exists, true,
+        XCTAssertEqual(inspector.cachedFactsForTesting(for: "/mnt/slow")?.exists, true,
                        "the answer that did arrive never reached the cache")
         XCTAssertEqual(inspector.facts(for: ["/mnt/slow"])["/mnt/slow"]?.exists, true,
                        "a fresh probe after recovery still read as unreachable")
