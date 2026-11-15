@@ -87,7 +87,14 @@ for _ in $(seq 1 20); do
   sleep 0.5
 done
 if kill -0 "$PID" 2>/dev/null; then
-  fail "--watch did not stop on SIGTERM"
+  # SIGKILL first, and only then fail. Without this the cleanup trap's
+  # `wait` blocks on a process that is ignoring SIGTERM -- which is exactly
+  # what happened, and a check that hangs for six hours is worse than no
+  # check: it reports nothing, and it holds the runner while doing it.
+  kill -9 "$PID" 2>/dev/null || true
+  wait "$PID" 2>/dev/null || true
+  PID=""
+  fail "--watch did not stop on SIGTERM (it had to be killed)"
 fi
 PID=""
 

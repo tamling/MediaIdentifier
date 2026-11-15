@@ -455,8 +455,12 @@ jobs:
             "$dropped/elsewhere/Dark.S01E01.GERMAN.1080p.WEB-DL.mkv" \
             "$dropped/library/Dark - S01E02.mkv" 2>&1 \
             | tee dropped.log
-          grep -q "^mediafin: drop: 1 handed to the engine" dropped.log || {
-            echo "FAIL: the drop never reached the engine"; exit 1; }
+          # Two files are handed over now: the release note's film, and an
+          # already-filed episode with Jellyfin's own sidecar beside it.
+          grep -q "^mediafin: drop: 2 handed to the engine" dropped.log || {
+            echo "FAIL: the drop never reached the engine"
+            grep "^mediafin: drop:" dropped.log || echo "(no drop line)"
+            exit 1; }
           got="$(sed -n 's/^proposals: \([0-9]*\)$/\1/p' dropped.log)"
           echo "proposals from the drop: ${got:-none}"
           test "${got:-0}" -ge 1 || {

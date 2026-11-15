@@ -38,6 +38,30 @@ guard arguments.count == 1, let mode = arguments.first else {
     exit(64)
 }
 
+/// Keeps the signal sources alive for the whole process.
+///
+/// Not a local: see `--watch` below. A released source is a cancelled
+/// source, and with the default action set to SIG_IGN the signal is then
+/// ignored and the service cannot be stopped.
+enum StopSignals {
+    private static var sources: [DispatchSourceSignal] = []
+
+    /// Stops the process cleanly on SIGTERM and SIGINT, running `before`
+    /// first. Returns once the handlers are armed.
+    static func install(before: @escaping @Sendable () -> Void) {
+        sources = [SIGTERM, SIGINT].map { number in
+            signal(number, SIG_IGN)
+            let source = DispatchSource.makeSignalSource(signal: number)
+            source.setEventHandler {
+                before()
+                exit(0)
+            }
+            source.resume()
+            return source
+        }
+    }
+}
+
 switch mode {
 case "--help", "-h":
     print(usage())
@@ -64,17 +88,15 @@ case "--watch":
     // `signal(2)`: the handler then runs on an ordinary queue, where it may
     // take locks and write files, which a real signal handler may not.
     // Without this the service lost the tail of its history on every stop.
-    let stopSignals = [SIGTERM, SIGINT].map { number -> DispatchSourceSignal in
-        signal(number, SIG_IGN)
-        let source = DispatchSource.makeSignalSource(signal: number)
-        source.setEventHandler {
-            coordinator.flushToDisk()
-            exit(0)
-        }
-        source.resume()
-        return source
-    }
-    _ = stopSignals
+    //
+    // Held in a global, and that is not a style choice. A
+    // DispatchSourceSignal that is released is cancelled, and the default
+    // action is already SIG_IGN by then — so the process would ignore
+    // SIGTERM outright and never stop at all. In a debug build the local
+    // happened to stay alive and this worked; in a release build the
+    // optimiser dropped it, `--watch` became unkillable by SIGTERM, and the
+    // smoke test's `wait` hung for six hours instead of failing.
+    StopSignals.install { coordinator.flushToDisk() }
     _ = coordinator
     dispatchMain()
 default:
