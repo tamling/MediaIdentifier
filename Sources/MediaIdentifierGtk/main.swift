@@ -416,11 +416,26 @@ case .pressConvert:
             } else {
                 Pending.failure = "the conversion list drew no row to untick"
             }
-            mainWindow.pressConvert()
+
+            // Search again before converting. A fresh search builds fresh
+            // candidates with fresh UUIDs, so the window holds the user's
+            // exclusions by PATH -- and the promise that a second Suchen
+            // does not undo what you took out is worth a check rather than
+            // a comment.
+            mainWindow.pressFindConvertible()
+            let afterSecond: @convention(c) (UnsafeMutableRawPointer?) -> gboolean = { _ in
+                mainWindow.refresh()
+                print("after second search, ticked: "
+                          + "\(mainWindow.tickedConvertCount)")
+                mainWindow.pressConvert()
+                return Gtk.sourceRemove
+            }
+            g_timeout_add(2000, afterSecond, nil)
 
             // Polled, because an encode has no fixed duration. The deadline
             // is what stops a hung FFmpeg from hanging CI instead of
-            // failing it.
+            // failing it. It starts before the second search so the poll is
+            // already running when that search's conversion begins.
             let wait: @convention(c) (UnsafeMutableRawPointer?) -> gboolean = { _ in
                 mainWindow.refresh()
                 Pending.convertTicks += 1
@@ -434,6 +449,9 @@ case .pressConvert:
                 // and quitting there would report success having waited for
                 // nothing. The result line is the engine saying it is done.
                 let status = mainWindow.statusText
+                // "Konvertiert" only: the search's own result line says how
+                // many files could be converted, and treating that as the
+                // end would report success before anything was encoded.
                 let finished = status.contains("Konvertiert")
                     || status.contains("Converted")
                     || status.contains("FFmpeg")

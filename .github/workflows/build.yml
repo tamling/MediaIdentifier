@@ -812,6 +812,17 @@ jobs:
             grep "^after untick, counts:" convert.log || echo "(no counts line)"
             exit 1
           }
+          # A second Suchen must not undo the untick. The window holds the
+          # user's exclusions by PATH, because a fresh search builds fresh
+          # candidates with fresh UUIDs -- hold them by id and this reads 2,
+          # and the file the user took out is converted anyway.
+          again="$(sed -n 's/^after second search, ticked: \([0-9]*\)$/\1/p' \
+            convert.log)"
+          test "${again:-0}" -eq 1 || {
+            echo "FAIL: searching again re-ticked what the user took out"
+            echo "      (${again:-nothing} ticked, expected 1)"
+            exit 1
+          }
           status="$(sed -n 's/^convert status: //p' convert.log)"
           echo "status: ${status:-nothing}"
           case "$status" in

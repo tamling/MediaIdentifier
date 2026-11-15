@@ -1630,6 +1630,18 @@ final class AppWindow {
             return
         }
         renderedConvertIDs = ids
+        // Exclusions are kept only for files the engine is still offering.
+        //
+        // Without this the set only ever grows, and an exclusion for a file
+        // that has left the list is invisible: nothing on screen says it is
+        // there. Let that file come back — a re-download, a drive remounted,
+        // a library folder changed back — and it would be silently skipped
+        // by a decision the user made about a different sitting and cannot
+        // see. Pruning here is also what keeps "a second Suchen does not
+        // undo what you took out" true, because the fresh list is the set
+        // being pruned to.
+        let offered = Set(candidates.map(\.source.path))
+        convertExcludedPaths.formIntersection(offered)
 
         isSeedingRows = true
         defer { isSeedingRows = false }
