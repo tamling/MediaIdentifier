@@ -271,6 +271,45 @@ final class ReplaceRollbackTests: XCTestCase {
                        "and the ordinary replacement still works")
     }
 
+    // MARK: A library root that is not there
+
+    /// `ensureParentDirectory` creates whatever is missing, roots included,
+    /// so a mistyped library path or one whose mount point is gone was
+    /// silently brought into being and filled, and the run reported success.
+    func testARenameIntoALibraryRootThatIsNotThereIsRefused() throws {
+        let incoming = source.appendingPathComponent("Tenet.2020.2160p.mkv")
+        try Data("x".utf8).write(to: incoming)
+        let absent = root.appendingPathComponent("not-mounted")
+        let plan = RenamePlanner().makePlan(
+            for: MediaScanner().scan(urls: [incoming]),
+            outputRoot: absent, libraryRoot: absent)
+        let (executor, log, _) = makeExecutor()
+
+        let outcome = executor.execute(plan: plan, policy: .skip)
+
+        XCTAssertEqual(outcome.succeeded, 0)
+        XCTAssertEqual(outcome.skipped, 1)
+        XCTAssertFalse(fm.fileExists(atPath: absent.path),
+                       "the library root was created")
+        XCTAssertTrue(fm.fileExists(atPath: incoming.path),
+                      "the file left the import folder anyway")
+        let said = log.entries.compactMap(\.errorDescription).joined()
+        XCTAssertTrue(said.contains("existiert nicht"), said)
+        XCTAssertTrue(said.contains("angelegt"), said)
+    }
+
+    /// Renaming in place has no root to create, so it must not be caught by
+    /// the same check.
+    func testARenameInPlaceIsNotRefused() throws {
+        let incoming = source.appendingPathComponent("Tenet.2020.2160p.mkv")
+        try Data("x".utf8).write(to: incoming)
+        let plan = RenamePlanner().makePlan(
+            for: MediaScanner().scan(urls: [incoming]), outputRoot: nil)
+        let (executor, _, _) = makeExecutor()
+
+        XCTAssertEqual(executor.execute(plan: plan, policy: .skip).succeeded, 1)
+    }
+
     // MARK: Helpers
 
     /// Refuses to move anything whose destination name contains a given

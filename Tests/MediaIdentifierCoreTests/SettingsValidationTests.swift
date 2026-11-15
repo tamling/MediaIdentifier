@@ -163,6 +163,49 @@ final class SettingsValidationTests: XCTestCase {
         XCTAssertEqual(good.first { $0.id == "settings" }?.state, .ok)
     }
 
+    // MARK: The fourth library root
+
+    /// `musicFolder` is a destination the program moves files into and a
+    /// first-class mode in the window, and it was the one root with no lamp
+    /// and no probe — so the panel looked complete while covering three of
+    /// four. With films or series missing the user is told "Laufwerk nicht
+    /// eingebunden?" and stops; with music, nothing was said at all.
+    func testTheMusicRootHasALampLikeTheOthers() throws {
+        var settings = valid()
+        settings.musicFolder = root.appendingPathComponent("music-not-there").path
+        let checks = SystemChecks.all(
+            settings: settings, ffmpegAvailable: true, secrets: [], probes: [:],
+            folders: FolderInspector().facts(for: [settings.musicFolder]))
+        let lamp = try XCTUnwrap(checks.first { $0.id == "music" },
+                                 "there is no music lamp on the panel")
+        XCTAssertEqual(lamp.state, .failed)
+        XCTAssertTrue(lamp.detail.contains("eingebunden"), lamp.detail)
+    }
+
+    /// Grey with nothing set: music is a mode the user may never touch, and
+    /// the films lamp is amber there only because renaming in place is a
+    /// real fallback — for music there is no such thing.
+    func testTheMusicLampIsGreyWhenNoMusicFolderIsSet() throws {
+        let checks = SystemChecks.all(settings: valid(), ffmpegAvailable: true,
+                                      secrets: [], probes: [:])
+        XCTAssertEqual(checks.first { $0.id == "music" }?.state, .off)
+    }
+
+    /// And the engine really probes the path, which is what fills the lamp:
+    /// the inspector was given three of the four roots.
+    func testTheMusicRootIsProbed() throws {
+        var settings = valid()
+        let music = root.appendingPathComponent("music")
+        try fm.createDirectory(at: music, withIntermediateDirectories: true)
+        settings.musicFolder = music.path
+        coordinator.executeForTesting(.saveSettings(settings))
+        coordinator.refreshSystemChecksForTesting()
+
+        let lamp = try XCTUnwrap(coordinator.systemChecks.first { $0.id == "music" })
+        XCTAssertEqual(lamp.state, .ok,
+                       "the music lamp has no facts to show: \(lamp.detail)")
+    }
+
     // MARK: Trimming
 
     /// Three of the four folder paths were trimmed and this one was not.

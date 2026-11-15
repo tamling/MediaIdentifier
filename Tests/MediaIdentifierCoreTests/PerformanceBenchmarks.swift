@@ -164,6 +164,10 @@ final class PerformanceBenchmarks: XCTestCase {
         let folder = try populate(workloadSize, companions: true)
         let files = MediaScanner().scan(urls: [folder])
         let library = root.appendingPathComponent("library")
+        // Created, because the executor refuses to bring a library root
+        // into being: a mistyped path or a missing mount point used to be
+        // created and filled, and the run reported success.
+        try fm.createDirectory(at: library, withIntermediateDirectories: true)
         var planned = 0
         try seconds("plan \(workloadSize) items") {
             planned = RenamePlanner().makePlan(for: files, outputRoot: library,
@@ -201,6 +205,10 @@ final class PerformanceBenchmarks: XCTestCase {
     func testRenamingAThousandFiles() throws {
         let folder = try populate(workloadSize, companions: true)
         let library = root.appendingPathComponent("library")
+        // Created, because the executor refuses to bring a library root
+        // into being: a mistyped path or a missing mount point used to be
+        // created and filled, and the run reported success.
+        try fm.createDirectory(at: library, withIntermediateDirectories: true)
         let files = MediaScanner().scan(urls: [folder])
         let plan = RenamePlanner().makePlan(for: files, outputRoot: library,
                                             libraryRoot: library)

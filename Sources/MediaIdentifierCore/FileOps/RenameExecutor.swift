@@ -150,6 +150,29 @@ public final class RenameExecutor {
                         + "Rename it by hand or delete it.")))
         }
 
+        /// The library roots this plan writes into that are not there.
+        ///
+        /// `ensureParentDirectory` creates whatever is missing, roots
+        /// included, so a mistyped library path or one whose mount point is
+        /// gone was silently brought into being and filled — and the run
+        /// reported success. Creating a library root is not this program's
+        /// job; filing things inside one is.
+        ///
+        /// What this does NOT catch, and nothing can: a share that is down
+        /// while its mount point is still there. That mount point is an
+        /// ordinary empty directory, and an empty directory is also what a
+        /// new library looks like. The lamp cannot tell them apart either.
+        let missingRoots = Set(
+            plan.filter { $0.isAccepted }
+                .map(\.outputRoot)
+                .filter { root in
+                    var isDirectory: ObjCBool = false
+                    let exists = fileManager.fileExists(atPath: root.path,
+                                                        isDirectory: &isDirectory)
+                    return !(exists && isDirectory.boolValue)
+                }
+                .map(\.path))
+
         /// Set once a stop has been honoured. Nothing after it is
         /// attempted, so the plan's tail is reported as untouched rather
         /// than half done.
@@ -163,6 +186,24 @@ public final class RenameExecutor {
             defer {
                 completed += 1
                 progress?(total == 0 ? 1 : Double(completed) / Double(total))
+            }
+
+            if missingRoots.contains(
+                plan.first(where: { $0.id == owner })?.outputRoot.path ?? "") {
+                outcome.skipped += 1
+                if isPrimary { fates[owner] = .stayed }
+                log.append(RenameLogEntry(
+                    oldName: move.source.lastPathComponent, newName: "—",
+                    status: .skipped,
+                    errorDescription: Text.s(
+                        "Der Bibliotheksordner existiert nicht, also wurde nichts "
+                            + "verschoben. Entweder ist das Laufwerk nicht "
+                            + "eingebunden, oder der Ordner muss noch angelegt "
+                            + "werden.",
+                        "The library folder does not exist, so nothing was moved. "
+                            + "Either the drive is not mounted, or the folder has "
+                            + "yet to be created.")))
+                continue
             }
 
             // Asked at an item's first file only: a release must not be torn

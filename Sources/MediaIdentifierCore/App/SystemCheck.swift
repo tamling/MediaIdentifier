@@ -135,6 +135,28 @@ public enum SystemChecks {
                                 "No folder chosen — series are renamed where they lie."),
                              missingState: .warning,
                              facts: folders[settings.seriesFolder]))
+        // The fourth root, which had no lamp at all.
+        //
+        // `musicFolder` is a destination the program moves files into and a
+        // first-class mode in the window, and the folder lamp exists
+        // precisely so an unmounted library is red before anything is
+        // moved. With the share down, its mount point is an ordinary empty
+        // local directory: the tracks were filed onto it, the share came
+        // back and shadowed them, and the history said "umbenannt" while
+        // undo could not find them. With films in the same state the user
+        // gets "Laufwerk nicht eingebunden?" and stops.
+        //
+        // Grey rather than amber when it is empty: music is a mode the user
+        // may never touch, and the films and series lamps are amber there
+        // because renaming in place is a real fallback — for music there is
+        // no such thing, the mode simply is not in use.
+        checks.append(folder(id: "music", name: Text.s("Musik", "Music"),
+                             path: settings.musicFolder,
+                             missingDetail: Text.s(
+                                "Kein Ordner gewählt — Musik wird nicht einsortiert.",
+                                "No folder chosen — music is not filed."),
+                             missingState: .off,
+                             facts: folders[settings.musicFolder]))
 
         checks.append(SystemCheck(
             id: "ffmpeg", name: "FFmpeg",

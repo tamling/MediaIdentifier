@@ -2038,6 +2038,9 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
 
         let facts = folderInspector.facts(for: [
             settings.sourceFolder, settings.moviesFolder, settings.seriesFolder,
+            // The fourth, which was missing: the music lamp had no facts to
+            // show because nothing probed the path.
+            settings.musicFolder,
         ])
         let checks = SystemChecks.all(settings: settings,
                                       ffmpegAvailable: ffmpegAvailable,
