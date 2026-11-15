@@ -247,6 +247,10 @@ gtk_widget_show_all(mainWindow.widget)
 switch options.mode {
 case .interactive:
     gtk_main()
+    // Closing the window drops out of gtk_main and falls off the end of
+    // main. The history's writes are coalesced with a trailing write, which
+    // is no use to a process that is already gone.
+    coordinator.flushToDisk()
 
 case .pressScan:
     // Two timeouts, not one. The first lets GTK finish laying the window out

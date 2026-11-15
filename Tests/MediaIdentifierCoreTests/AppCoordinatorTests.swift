@@ -502,6 +502,48 @@ final class AppCoordinatorTests: XCTestCase {
                        coordinator.snapshot.lastResult ?? "")
     }
 
+
+    // MARK: Leaving
+
+    /// `mediafin --once` finishes a scheduled rename and exits; closing the
+    /// window drops out of gtk_main and falls off the end of main. The
+    /// history coalesces its writes over a quarter of a second with a
+    /// trailing write, and a trailing write needs the process to still be
+    /// there — so the record of an unattended run was the one most likely to
+    /// be missing its tail.
+    func testTheHistoryIsOnDiskAfterAFlush() throws {
+        // Several files, not one: the first append is written out at once,
+        // and it is the ones after it that are coalesced into the trailing
+        // write a departing process never waits for. With a single file this
+        // test passed with the flush commented out.
+        for name in ["Tenet.2020.1080p.BluRay.x264-GROUP.mkv",
+                     "Arrival.2016.1080p.BluRay.x264-GROUP.mkv",
+                     "Dune.2021.1080p.BluRay.x264-GROUP.mkv",
+                     "Heat.1995.1080p.BluRay.x264-GROUP.mkv",
+                     "Alien.1979.1080p.BluRay.x264-GROUP.mkv"] {
+            _ = try makeFile(name)
+        }
+        run(.saveSettings(configuredSettings()))
+        run(.scanSourceFolder)
+        run(.applyProposedRenames(accepting: nil))
+        XCTAssertEqual(coordinator.logEntries.count, 5, "not everything was renamed")
+
+        let file = config.appendingPathComponent("rename-log.json")
+        // Read straight after the rename, inside the coalescing window:
+        // the state a process about to exit is in.
+        let beforeFlush = (try? Data(contentsOf: file))?.count ?? 0
+
+        coordinator.flushToDisk()
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let decoded = try decoder.decode([RenameLogEntry].self,
+                                         from: try Data(contentsOf: file))
+        XCTAssertEqual(decoded.count, coordinator.logEntries.count,
+                       "the file on disk has \(decoded.count) of the "
+                           + "\(coordinator.logEntries.count) entries in memory "
+                           + "(it held \(beforeFlush) bytes before the flush)")
+    }
 }
 
 /// Tests the watch folder: that it starts and stops with the setting, that it
@@ -656,5 +698,6 @@ final class WatchFolderTests: XCTestCase {
         XCTAssertTrue(coordinator.isWatching)
         XCTAssertTrue(coordinator.snapshot.watchActive)
     }
+
 
 }

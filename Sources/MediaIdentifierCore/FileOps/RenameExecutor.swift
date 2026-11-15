@@ -76,6 +76,19 @@ public final class RenameExecutor {
         var completed = 0
         var outcome = RenameOutcome()
         var performed: [RenameTransaction.Move] = []
+        // The batch's identity, fixed before the first file moves, so every
+        // move can be written down as it happens. See `beginBatch`: the
+        // journal used to be written once, after the last file, which left
+        // an interrupted batch with its files in the library and nothing
+        // anywhere saying where they came from.
+        let batchID = UUID()
+        let batchDate = Date()
+        journal.beginBatch(id: batchID, date: batchDate)
+        /// One move, remembered in this run and on disk in the same breath.
+        func remember(_ move: RenameTransaction.Move) {
+            performed.append(move)
+            journal.appendToBatch(move)
+        }
         /// What each item's primary move did, so its companions can follow.
         ///
         /// Each move used to be resolved on its own, and under the "rename"
@@ -180,13 +193,14 @@ public final class RenameExecutor {
                         base: completed, total: total, progress: progress)
                     // Before the main move, so undo restores it after the main
                     // move has been undone and the destination is free again.
-                    if let backup { performed.append(backup) }
+                    if let backup { remember(backup) }
                 } else {
                     try moveWithProgress(from: move.source, to: resolution.destination,
                                          base: completed, total: total, progress: progress)
                 }
 
-                performed.append(.init(from: move.source, to: resolution.destination, createdDirectories: createdDirs))
+                remember(.init(from: move.source, to: resolution.destination,
+                               createdDirectories: createdDirs))
                 movedSources.insert(move.source.standardizedFileURL.path)
                 // The resolved destination, not the planned one: under the
                 // "rename" policy the file is now "… (1).mkv" — and that is
@@ -215,7 +229,8 @@ public final class RenameExecutor {
         }
 
         if !performed.isEmpty {
-            let transaction = RenameTransaction(moves: performed)
+            let transaction = RenameTransaction(id: batchID, date: batchDate,
+                                                moves: performed)
             journal.record(transaction)
             outcome.transaction = transaction
             // In the history, not only in a field nobody reads: the files
@@ -233,6 +248,11 @@ public final class RenameExecutor {
                             + "session but not after a restart.")))
             }
         }
+        // The in-flight record has served its purpose now that the journal
+        // proper holds the batch — unless that write failed, in which case
+        // `endBatch` keeps the file, because it is then the only record of
+        // where these files came from.
+        journal.endBatch()
 
         // After the moves, and only for items whose primary actually landed.
         // A file that did not move still has its .nfo beside it, and that

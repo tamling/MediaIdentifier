@@ -38,9 +38,40 @@ public final class RenameJournal: @unchecked Sendable {
     private let queue = DispatchQueue(label: "MediaIdentifier.RenameJournal")
     private(set) public var transactions: [RenameTransaction] = []
 
+    /// The batch that is running right now, if one is.
+    private var inFlight: InFlight?
+    private var inFlightHandle: FileHandle?
+
+    private struct InFlight {
+        var id: UUID
+        var date: Date
+        var moves: [RenameTransaction.Move]
+    }
+
+    private struct InFlightHeader: Codable {
+        var id: UUID
+        var date: Date
+    }
+
     public init(url: URL? = nil) {
         self.url = url ?? RenameJournal.defaultURL()
         load()
+        recoverInterruptedBatch()
+    }
+
+    /// Where a running batch appends to, beside the journal itself.
+    ///
+    /// Separate from the journal because the journal is rewritten whole on
+    /// every change: writing it through after each move would cost O(n²)
+    /// bytes across a batch of n files, which is the exact shape this
+    /// project has already had to take out of the history append. This file
+    /// is append-only — one move per line, one `write(2)` each, nothing
+    /// re-encoded — so the cost per file does not depend on how many files
+    /// came before it.
+    public var inFlightURL: URL {
+        let stem = url.deletingPathExtension().lastPathComponent
+        return url.deletingLastPathComponent()
+            .appendingPathComponent("\(stem)-in-flight.jsonl")
     }
 
     public func record(_ transaction: RenameTransaction) {
@@ -50,6 +81,119 @@ public final class RenameJournal: @unchecked Sendable {
         }
     }
 
+    // MARK: A batch that is still running
+
+    /// Opens the record of a batch about to start.
+    ///
+    /// Until this existed the journal was written once, after the last file
+    /// of a batch. For the whole duration of a run the files were already in
+    /// the library and the undo journal was empty, so a process that died
+    /// part way through — the window closed on an hour-long batch over a NAS
+    /// mount, `systemctl stop` on the watcher — left every moved file with
+    /// no record at all. Worse than nothing: the next launch's Undo reached
+    /// past them to an *earlier* batch, pulled a correctly filed film back
+    /// out of the library, and reported success.
+    public func beginBatch(id: UUID, date: Date) {
+        queue.sync {
+            closeInFlight()
+            inFlight = InFlight(id: id, date: date, moves: [])
+            let fileManager = FileManager.default
+            let directory = inFlightURL.deletingLastPathComponent()
+            try? fileManager.createDirectory(
+                at: directory, withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700])
+            try? fileManager.removeItem(at: inFlightURL)
+            // 0600 from the start, like the journal: these lines are every
+            // path of the user's media library.
+            guard fileManager.createFile(
+                atPath: inFlightURL.path, contents: nil,
+                attributes: [.posixPermissions: 0o600]) else { return }
+            inFlightHandle = try? FileHandle(forWritingTo: inFlightURL)
+            writeInFlightLine(InFlightHeader(id: id, date: date))
+        }
+    }
+
+    /// Records one move that has already happened.
+    public func appendToBatch(_ move: RenameTransaction.Move) {
+        queue.sync {
+            guard inFlight != nil else { return }
+            inFlight?.moves.append(move)
+            writeInFlightLine(move)
+        }
+    }
+
+    /// Closes the batch. The durable record is the journal proper by now,
+    /// so the in-flight file is removed — unless the journal's own write
+    /// failed, in which case this file is the only record left and stays.
+    public func endBatch() {
+        queue.sync {
+            let hadMoves = !(inFlight?.moves.isEmpty ?? true)
+            closeInFlight()
+            inFlight = nil
+            if hadMoves, _lastWriteFailure != nil { return }
+            try? FileManager.default.removeItem(at: inFlightURL)
+        }
+    }
+
+    private func closeInFlight() {
+        try? inFlightHandle?.close()
+        inFlightHandle = nil
+    }
+
+    private func writeInFlightLine<T: Encodable>(_ value: T) {
+        guard let handle = inFlightHandle else { return }
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        guard var data = try? encoder.encode(value) else { return }
+        data.append(0x0A)
+        try? handle.write(contentsOf: data)
+    }
+
+    /// Folds a batch that never finished into the journal, at startup.
+    ///
+    /// A line that was half written when the process died does not decode
+    /// and is skipped; the moves before it are real and are kept.
+    private func recoverInterruptedBatch() {
+        let fileManager = FileManager.default
+        guard fileManager.fileExists(atPath: inFlightURL.path),
+              let data = try? Data(contentsOf: inFlightURL),
+              let text = String(data: data, encoding: .utf8)
+        else { return }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        var header: InFlightHeader?
+        var moves: [RenameTransaction.Move] = []
+        for line in text.split(separator: "\n") {
+            guard let lineData = String(line).data(using: .utf8) else { continue }
+            if header == nil {
+                header = try? decoder.decode(InFlightHeader.self, from: lineData)
+                continue
+            }
+            if let move = try? decoder.decode(RenameTransaction.Move.self,
+                                              from: lineData) {
+                moves.append(move)
+            }
+        }
+        defer { try? fileManager.removeItem(at: inFlightURL) }
+        guard let header, !moves.isEmpty else { return }
+        // The batch may have finished and been recorded, and only the
+        // removal of this file lost the race with the process dying.
+        guard !transactions.contains(where: { $0.id == header.id }) else { return }
+        queue.sync {
+            transactions.append(RenameTransaction(id: header.id, date: header.date,
+                                                  moves: moves))
+            persist()
+        }
+    }
+
+    /// Whether there is anything to reverse.
+    ///
+    /// Deliberately not what the Undo button is gated on. Greying the button
+    /// out would be a worse answer than the engine's own: press it with an
+    /// empty journal and the window says "Es gab nichts rückgängig zu
+    /// machen", which is readable, whereas a disabled button says "Undo is
+    /// broken". The same reasoning is written out at the scan button, which
+    /// stays live without an import folder for exactly this reason.
     public var canUndo: Bool { !transactions.isEmpty }
 
     /// The transaction an undo would reverse, left in place.

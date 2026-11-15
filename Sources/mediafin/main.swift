@@ -48,11 +48,33 @@ case "--once":
     // Returns only once the work is finished, so the process does not exit
     // in the middle of a rename it has just started.
     coordinator.runDueWorkNow()
+    // And the history reaches the disk before the process goes. Its writes
+    // are coalesced with a trailing write, which needs somebody to still be
+    // running when it fires; exiting here used to drop the tail of the one
+    // record an unattended run leaves behind.
+    coordinator.flushToDisk()
 case "--watch":
     let coordinator = AppCoordinator(configDirectory: MediafinPaths.configDirectory())
     // The timer is already running inside the coordinator; this thread only
     // has to stay alive. dispatchMain never returns, which is exactly right
     // for a service, and parks the thread rather than spinning.
+    //
+    // `systemctl stop` sends SIGTERM, whose default action is to end the
+    // process on the spot. Taken through a Dispatch source rather than
+    // `signal(2)`: the handler then runs on an ordinary queue, where it may
+    // take locks and write files, which a real signal handler may not.
+    // Without this the service lost the tail of its history on every stop.
+    let stopSignals = [SIGTERM, SIGINT].map { number -> DispatchSourceSignal in
+        signal(number, SIG_IGN)
+        let source = DispatchSource.makeSignalSource(signal: number)
+        source.setEventHandler {
+            coordinator.flushToDisk()
+            exit(0)
+        }
+        source.resume()
+        return source
+    }
+    _ = stopSignals
     _ = coordinator
     dispatchMain()
 default:

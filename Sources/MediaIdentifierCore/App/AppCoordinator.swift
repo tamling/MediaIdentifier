@@ -1411,6 +1411,23 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         refreshSnapshotCounts()
     }
 
+    /// Writes anything still only in memory to disk, for a process that is
+    /// about to end.
+    ///
+    /// The history coalesces its writes over a quarter of a second, with a
+    /// trailing write so the last append is never the one that is lost — but
+    /// a trailing write needs the process to still be there when it fires.
+    /// `mediafin --once` finishes a scheduled rename and exits immediately;
+    /// closing the window drops out of `gtk_main` and falls off the end of
+    /// main. In both cases the tail of the history went with it, so the one
+    /// record of an unattended run was the one most likely to be incomplete.
+    ///
+    /// `flush()` has existed for exactly this since the coalescing was
+    /// added, and had callers only in the tests.
+    public func flushToDisk() {
+        log.flush()
+    }
+
     private func clearHistory() {
         log.clear()
         journal.clear()
