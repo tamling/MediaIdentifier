@@ -108,6 +108,14 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
     /// Convert commands submitted but not yet taken off the queue, so a cancel
     /// can tell "stop the run that is coming" from "there is nothing to stop".
     private var _queuedConversionRuns = 0
+    /// Set for the whole of a conversion run, FFmpeg up or not.
+    ///
+    /// `_runningConversion` is nil between two files and for the stretch at
+    /// the start of a run before the first encoder launches, and
+    /// `_queuedConversionRuns` is already back to zero by then -- so a Stopp
+    /// pressed in either gap armed nothing and answered "Es konvertiert
+    /// gerade nichts." while the bar was moving.
+    private var _conversionRunning = false
     /// The running FFmpeg, so a cancel can end it.
     private var _runningConversion: Process?
     private var _runningDownload: Process?
@@ -1699,10 +1707,28 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         let all = convertible
         let pending = all.filter { accepting.contains($0.id) }
         guard !pending.isEmpty else {
-            clearCancelRequest()
-            update { $0.lastResult = Text.s(
-                "Es war nichts angehakt, also wurde nichts konvertiert.",
-                "No files were ticked, so nothing was converted.") }
+            // Only when the user really ticked nothing.
+            //
+            // `pending` is also empty when the ids no longer match
+            // `_convertible`, which is what a SECOND queued run sees:
+            // the first run drops every file it converted off that list.
+            // So two clicks on Konvertieren closer together than the
+            // refresh timer ended with the footer saying "Es war nichts
+            // angehakt, also wurde nichts konvertiert." after six hours of
+            // encoding -- and a user who believed it pressed Suchen, was
+            // offered the untouched originals again, and re-encoded the lot
+            // into "… (2).mkv" duplicates.
+            if accepting.isEmpty {
+                update { $0.lastResult = Text.s(
+                    "Es war nichts angehakt, also wurde nichts konvertiert.",
+                    "No files were ticked, so nothing was converted.") }
+            }
+            // The same care as at the end of a real run, and for the same
+            // reason: a cancel that arrived while this run was queued is
+            // meant for whatever is still queued behind it.
+            lock.lock()
+            if _queuedConversionRuns == 0 { _cancelConversions = false }
+            lock.unlock()
             return
         }
         let options = settings.conversion.options
@@ -1711,7 +1737,9 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
             clearCancelRequest()
             update {
                 $0.lastResult = FFmpegConverter.ConverterError.ffmpegNotFound
-                    .errorDescription ?? "FFmpeg was not found."
+                    .errorDescription
+                    ?? Text.s("FFmpeg wurde nicht gefunden.",
+                              "FFmpeg was not found.")
             }
             return
         }
@@ -1722,6 +1750,24 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         // converts everything.
         var done = 0
         var failed = 0
+        // What this run actually dealt with, rather than a count of the
+        // first N candidates. A file the user stopped was neither
+        // converted nor failed, and it has to stay on the list.
+        var finished: Set<UUID> = []
+
+        // So Stopp has something to arm between two files.
+        //
+        // `cancelConversions` looked at `_runningConversion` and
+        // `_queuedConversionRuns`, and both are nil/0 in the gap between
+        // one encode ending and the next FFmpeg launching -- and for the
+        // whole stretch at the start of a run, because the queue counter is
+        // decremented the moment the run begins. A Stopp pressed there
+        // armed nothing and answered "Es konvertiert gerade nichts." while
+        // the bar was visibly moving.
+        lock.lock(); _conversionRunning = true; lock.unlock()
+        // A backstop only. The flag is cleared below under the same lock
+        // that drops the cancel flag; this catches a future early return.
+        defer { lock.lock(); _conversionRunning = false; lock.unlock() }
 
         for (index, candidate) in pending.enumerated() {
             lock.lock()
@@ -1762,14 +1808,38 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
                     }
                 )
                 done += 1
+                finished.insert(candidate.id)
                 log.append(RenameLogEntry(oldName: candidate.fileName,
                                           newName: destination.lastPathComponent,
                                           status: .converted))
             } catch {
-                failed += 1
                 // A half-written output is worse than none: it would look like
                 // a finished file to a media server.
                 try? FileManager.default.removeItem(at: destination)
+                // Our own Stopp is not a failure of the file.
+                //
+                // `cancelConversions` terminates the encoder, so the
+                // process exits non-zero and lands here -- and this used to
+                // count the user's own Stopp as an error: red row in the
+                // history with an FFmpeg exit code, "Mit Fehlern beendet"
+                // in the header, and the stopped file dropped off the
+                // candidate list although nothing had been done to it. The
+                // run already knows which it was; it reads the flag two
+                // dozen lines below.
+                lock.lock()
+                let weStoppedIt = _cancelConversions
+                lock.unlock()
+                guard !weStoppedIt else {
+                    log.append(RenameLogEntry(
+                        oldName: candidate.fileName,
+                        newName: candidate.fileName,
+                        status: .skipped,
+                        errorDescription: Text.s("Gestoppt, nicht angefasst.",
+                                                 "Stopped, left alone.")))
+                    break
+                }
+                failed += 1
+                finished.insert(candidate.id)
                 log.append(RenameLogEntry(oldName: candidate.fileName,
                                           newName: destination.lastPathComponent,
                                           status: .failure,
@@ -1778,10 +1848,18 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
             lock.lock(); _runningConversion = nil; lock.unlock()
         }
 
-        let converted = Set(pending.prefix(done + failed).map(\.id))
         lock.lock()
-        _convertible.removeAll { converted.contains($0.id) }
+        _convertible.removeAll { finished.contains($0.id) }
         let stopped = _cancelConversions
+        // Under the same lock acquisition as the line below, and that is the
+        // point. `cancelConversions` runs on the CALLER's thread -- it
+        // deliberately bypasses the serial queue so a Stopp cannot queue
+        // behind the run it is meant to stop -- so marking the run finished
+        // and dropping its cancel flag have to be one step. Two steps leave
+        // a window in which a Stopp sees a run in flight, arms the flag,
+        // and nothing clears it: the user's next conversion would die on
+        // the spot.
+        _conversionRunning = false
         // The declaration of this flag already says why: it is
         // "deliberately not cleared when a run starts" so that a
         // cancel pressed while a run was still queued is not lost. Clearing
@@ -1937,7 +2015,12 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         // Only arm the flag when there is something it can apply to: a run in
         // flight, or one waiting on the queue. Otherwise a stray press while
         // idle would sit there and stop the next run the user asks for.
-        let hasTarget = _runningConversion != nil || _queuedConversionRuns > 0
+        //
+        // `_conversionRunning` is what covers the gaps: between two files,
+        // and from the start of a run until FFmpeg is actually up, both
+        // `_runningConversion` and `_queuedConversionRuns` read empty.
+        let hasTarget = _conversionRunning || _runningConversion != nil
+            || _queuedConversionRuns > 0
         if hasTarget { _cancelConversions = true }
         let process = _runningConversion
         lock.unlock()

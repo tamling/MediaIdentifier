@@ -107,7 +107,8 @@ private func usage() -> String {
                                        and print what it says each time
       mediafin-gtk --press-convert     open the conversion panel, look for
                                        files, untick one, convert the rest,
-                                       and print what came of it
+                                       then tick everything and convert the
+                                       remainder, printing what came of it
       mediafin-gtk --press-clear-history
                                        press "Leeren", cancel the question,
                                        press it again and confirm, printing
@@ -118,6 +119,10 @@ private func usage() -> String {
       mediafin-gtk --drop FILE…        hand these files to the window as a
                                        drop would, and print what came of it
       mediafin-gtk --help              this text
+
+    --press-convert, --press-clear-history and --press-apply change files,
+    so they refuse to run against your real library: point them at a
+    throwaway one with MEDIAFIN_CONFIG_DIR, or pass --demo.
 
     Needs a display. Without one it exits 2 rather than hanging, so it is safe
     to run from a script; under a headless CI use xvfb-run.
@@ -441,6 +446,13 @@ case .pressConvert:
             print("convert rows: \(mainWindow.convertRowCount)")
             print("convert counts: \(mainWindow.convertCountText)")
             print("ticked: \(mainWindow.tickedConvertCount)")
+            // What the panel says after a search, which for an empty result
+            // used to be the never-searched sentence -- a panel identical
+            // to the one the user opened, telling them to press the button
+            // they just pressed.
+            for line in mainWindow.convertListTexts {
+                print("convert list after search: \(line)")
+            }
             // Untick the first one. The assertion worth making about a tick
             // is that pressing the widget changes what the engine is asked
             // to convert, and that can only be checked through the widget.
@@ -482,6 +494,11 @@ case .pressConvert:
                     // apart from a button that is never pressable.
                     print("stop pressable while converting: "
                               + "\(mainWindow.convertStopIsPressable)")
+                    // The other half of the percentage rule: a job that
+                    // DOES measure itself must still say so. The check in
+                    // --press-check covers the silent side, where the
+                    // header used to print a stale 100 %.
+                    print("converting subtitle: \(mainWindow.subtitleText)")
                     return Gtk.sourceContinue
                 }
                 // Not merely "not converting": that is also true in the
@@ -499,13 +516,59 @@ case .pressConvert:
                 if !finished, Pending.convertTicks < 120 {
                     return Gtk.sourceContinue
                 }
-                defer { gtk_main_quit() }
                 print("convert status: \(status)")
+                for line in mainWindow.convertListTexts {
+                    print("convert list after run: \(line)")
+                }
                 print("convert bar after: \(mainWindow.convertBarText)")
                 print("convertible left: \(coordinator.convertible.count)")
                 if !finished {
                     Pending.failure = "the conversion never finished: " + status
+                    gtk_main_quit()
+                    return Gtk.sourceRemove
                 }
+
+                // One more run, with everything ticked, so the list empties.
+                //
+                // Two things only this can see. An emptied list is the third
+                // empty state, and all three used to draw "Noch nichts
+                // gesucht — „Suchen" drücken.", so a finished run left a
+                // panel that denied it had happened. And a run whose
+                // candidates have all gone takes the `pending.isEmpty`
+                // branch, which announced "Es war nichts angehakt, also
+                // wurde nichts konvertiert." over the top of a run that had
+                // just encoded everything -- that branch is now only for a
+                // genuinely empty tick set.
+                mainWindow.pressTickEverything()
+                print("after Alle, ticked: \(mainWindow.tickedConvertCount)")
+                mainWindow.pressConvert()
+                Pending.convertTicks = 0
+                let second: @convention(c) (UnsafeMutableRawPointer?)
+                    -> gboolean = { _ in
+                    mainWindow.refresh()
+                    Pending.convertTicks += 1
+                    let state = coordinator.snapshot
+                    if state.converting { return Gtk.sourceContinue }
+                    let done = mainWindow.statusText
+                    let over = done.contains("Konvertiert")
+                        || done.contains("Converted")
+                    if !over, Pending.convertTicks < 120 {
+                        return Gtk.sourceContinue
+                    }
+                    defer { gtk_main_quit() }
+                    print("second run status: \(done)")
+                    print("convertible after the second run: "
+                              + "\(coordinator.convertible.count)")
+                    for line in mainWindow.convertListTexts {
+                        print("convert list when empty: \(line)")
+                    }
+                    if !over {
+                        Pending.failure = "the second conversion never "
+                            + "finished: " + done
+                    }
+                    return Gtk.sourceRemove
+                }
+                g_timeout_add(500, second, nil)
                 return Gtk.sourceRemove
             }
             g_timeout_add(500, wait, nil)
@@ -731,6 +794,7 @@ case .pressApply:
         print("conversion read: \(mainWindow.conversionText)")
         print("media server read: \(mainWindow.mediaServerText)")
         print("estimate: \(mainWindow.estimateText)")
+        print("apply button on screen: \(mainWindow.applyButtonIsOnScreen)")
         mainWindow.pressApply()
         print("applied once: \(mainWindow.appliedText)")
         // A second press a second later. The question is not whether the

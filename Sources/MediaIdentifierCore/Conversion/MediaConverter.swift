@@ -250,16 +250,28 @@ public final class FFmpegConverter {
         case ffmpegNotFound
         case conversionFailed(code: Int32, message: String)
 
+        /// Through `Text.s`, like every other message the user can see.
+        ///
+        /// These two were raw English until the feature had an entrance.
+        /// The window draws `lastResult` verbatim, and ffmpeg missing is
+        /// this feature's most likely failure as well as the only message
+        /// carrying the fix — so an English-only sentence here was the
+        /// first thing a German user would have met.
         public var errorDescription: String? {
             switch self {
             case .ffmpegNotFound:
-                return """
-                FFmpeg was not found. Install it — `apt install ffmpeg` on Debian \
-                or Ubuntu, `brew install ffmpeg` on macOS — or set its path in \
-                the settings.
-                """
+                return Text.s("""
+                FFmpeg wurde nicht gefunden. Installieren — `apt install \
+                ffmpeg` unter Debian oder Ubuntu, `brew install ffmpeg` \
+                unter macOS — oder den Pfad in den Einstellungen setzen.
+                """, """
+                FFmpeg was not found. Install it — `apt install ffmpeg` on \
+                Debian or Ubuntu, `brew install ffmpeg` on macOS — or set \
+                its path in the settings.
+                """)
             case let .conversionFailed(code, message):
-                return "FFmpeg exited with code \(code): \(message)"
+                return Text.s("FFmpeg endete mit Code \(code): \(message)",
+                              "FFmpeg exited with code \(code): \(message)")
             }
         }
     }

@@ -270,9 +270,6 @@ enum Gtk {
                               payload, release, GConnectFlags(rawValue: 0))
     }
 
-    /// Makes a widget accept files dragged from a file manager.
-    ///
-    /// The C side does the GTK half; this only turns the paths it reports into
     /// Asks the user to confirm something, modally, and returns their answer.
     ///
     /// Through the C shim, because `gtk_message_dialog_new` is a C variadic
@@ -296,6 +293,9 @@ enum Gtk {
         mediafin_answer_dialog(accept ? 1 : 0) != 0
     }
 
+    /// Makes a widget accept files dragged from a file manager.
+    ///
+    /// The C side does the GTK half; this only turns the paths it reports into
     /// URLs. Same ownership dance as `onClick`: the owner is captured in an
     /// ordinary Swift closure and only the non-generic `Drop` crosses into C,
     /// because a @convention(c) function has nowhere to put type metadata.

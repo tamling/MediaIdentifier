@@ -653,6 +653,20 @@ jobs:
           echo "first: ${first:-nothing}"
           echo "second: ${second:-nothing}"
           test -n "$first" || { echo "FAIL: Apply said nothing at all"; exit 1; }
+          # The button itself, mapped and not merely built. The press goes
+          # through `gtk_button_clicked` now rather than calling the handler
+          # -- it used to call `saveFolders()` behind the button's back, so
+          # this whole ~120-line step was a test of that method and would
+          # have passed with Übernehmen unwired or packed into a container
+          # nobody shows. Clicking proves the wiring; this proves it is on
+          # screen, which matters because the same change moved it out of
+          # the scroller into the panel footer.
+          on_screen="$(sed -n 's/^apply button on screen: //p' applied.log)"
+          test "$on_screen" = "true" || {
+            echo "FAIL: the settings panel's Apply button is not on screen "
+            echo "      (read: ${on_screen:-nothing})"
+            exit 1
+          }
           test "$first" != "$second" || {
             echo "FAIL: the second Apply looked exactly like the first"
             exit 1
@@ -681,12 +695,68 @@ jobs:
             echo "  got: ${server:-nothing}"
             exit 1
           }
-          # And what the file says afterwards: two Applies must not have
-          # rewritten a field the user never touched.
+          # A refused Apply, and the corrected retry after it.
+          #
+          # The mode now makes two edits in one press -- a codec it means to
+          # keep and a quality with a typo in it -- because `save()` refuses
+          # the WHOLE write on any problems() and the window used to carry
+          # on regardless. It printed "Übernommen um HH:MM:SS" with a moving
+          # clock for a save that never happened (the refusal's own text
+          # goes to the main window, behind the panel being looked at), and
+          # it advanced its merge baseline to the values it had just failed
+          # to write -- so on the corrected retry the codec compared equal
+          # to that baseline and was silently dropped. One typo lost the
+          # other edit made in the same breath.
+          typo_estimate="$(sed -n 's/^estimate with a typo: //p' applied.log)"
+          case "$typo_estimate" in
+            *"Zahl zwischen 0 und 51"*|*"number between 0 and 51"*) : ;;
+            *) echo "FAIL: the estimate answered 'what will this do' for an "
+               echo "      unreadable quality instead of saying so:"
+               echo "      ${typo_estimate:-nothing}"
+               exit 1 ;;
+          esac
+          refused="$(sed -n 's/^refused apply says: //p' applied.log)"
+          case "$refused" in
+            *"Nicht übernommen"*|*"Not applied"*) : ;;
+            *) echo "FAIL: a refused save still reported success:"
+               echo "      ${refused:-nothing}"
+               exit 1 ;;
+          esac
+          after_refusal="$(sed -n 's/^engine after the refusal: //p' applied.log)"
+          case "$after_refusal" in
+            *"quality=28"*) : ;;
+            *) echo "FAIL: the refused save changed the stored settings:"
+               echo "      ${after_refusal:-nothing}"
+               exit 1 ;;
+          esac
+          corrected="$(sed -n 's/^corrected apply says: //p' applied.log)"
+          case "$corrected" in
+            *"Übernommen um"*|*"Applied at"*) : ;;
+            *) echo "FAIL: the corrected Apply did not report a save:"
+               echo "      ${corrected:-nothing}"
+               exit 1 ;;
+          esac
+          retried="$(sed -n 's/^engine after the retry: //p' applied.log)"
+          echo "engine after the retry: ${retried:-nothing}"
+          case "$retried" in
+            *"codec=h264"*) : ;;
+            *) echo "FAIL: the codec edit made in the refused press was "
+               echo "      silently dropped by the retry. Read: ${retried:-nothing}"
+               exit 1 ;;
+          esac
+          case "$retried" in
+            *"quality=24"*) : ;;
+            *) echo "FAIL: the corrected quality never reached the engine:"
+               echo "      ${retried:-nothing}"
+               exit 1 ;;
+          esac
+
+          # And what the file says afterwards: the retry must have written
+          # exactly the two edited fields and left every other one alone.
           python3 - "$applied/settings.json" <<'CHECK'
           import json, sys
           stored = json.load(open(sys.argv[1]))
-          want = {"videoCodec": "av1", "quality": 28, "preset": "veryfast",
+          want = {"videoCodec": "h264", "quality": 24, "preset": "veryfast",
                   "targetHeight": 720, "audioMode": "opus",
                   "stripSubtitles": True, "ffmpegPath": "/opt/ffmpeg/bin/ffmpeg"}
           for key, value in want.items():
@@ -697,7 +767,8 @@ jobs:
           if stored["jellyfinBaseURL"] != "http://192.168.3.9:8096":
               sys.exit("FAIL: Apply wiped jellyfinBaseURL: "
                        + repr(stored["jellyfinBaseURL"]))
-          print("settings.json kept every conversion field and the server address")
+          print("settings.json kept every untouched conversion field, took "
+                "both edits from the refused press, and kept the server address")
           CHECK
           # The estimate line, which is the only thing that says what the
           # chosen settings will do before a run starts. The fixture chooses
@@ -775,8 +846,36 @@ jobs:
             env MEDIAFIN_CONFIG_DIR="$conv/config" \
             .build/release/mediafin-gtk --press-convert | tee convert.log
 
-          grep -q "^pressed stop while idle: yes" convert.log || {
-            echo "FAIL: the Stopp button was never pressed"; exit 1; }
+          # A value, not a constant. This used to grep for "pressed stop
+          # while idle: yes", printed unconditionally two lines after the
+          # press -- an assertion that could only fail if the process had
+          # already died, which pipefail catches anyway. Deleting the
+          # Stopp button's whole wiring left it passing.
+          stop_idle="$(sed -n 's/^stop pressable while idle: //p' convert.log)"
+          test "$stop_idle" = "false" || {
+            echo "FAIL: the panel's Stopp was pressable with nothing "
+            echo "      converting (read: $stop_idle)"
+            exit 1
+          }
+          stop_busy="$(sed -n \
+            's/^stop pressable while converting: //p' convert.log | head -1)"
+          test "$stop_busy" = "true" || {
+            echo "FAIL: the panel's Stopp was NOT pressable during a "
+            echo "      conversion (read: ${stop_busy:-nothing}). A button "
+            echo "      that is grey while a 40-minute encode runs is the "
+            echo "      fault that matters, and a one-sided check cannot "
+            echo "      tell it from a correctly gated one."
+            exit 1
+          }
+          # A job that measures itself must say so, which is the other half
+          # of the rule --press-check asserts from the silent side.
+          sub="$(sed -n 's/^converting subtitle: //p' convert.log | head -1)"
+          case "$sub" in
+            *%*) : ;;
+            *) echo "FAIL: no percentage in the header during a conversion"
+               echo "      (read: ${sub:-nothing})"
+               exit 1 ;;
+          esac
           # Before anything is searched for, the list has to say so. It
           # shipped drawing nothing at all — the first refresh compared an
           # empty id list against an empty id list, decided nothing had
@@ -847,6 +946,93 @@ jobs:
             echo "FAIL: the file taken out of the run was converted anyway"
             exit 1
           }
+
+          # The second run, with everything ticked, which empties the list.
+          #
+          # Two faults only this can see. An emptied list is the third
+          # empty state, and all three used to draw "Noch nichts gesucht —
+          # „Suchen" drücken." -- so a finished run left a panel denying it
+          # had happened, and the user pressed the button they had just
+          # pressed. And a run whose candidates have all gone takes the
+          # `pending.isEmpty` branch, which announced "Es war nichts
+          # angehakt, also wurde nichts konvertiert." over the top of a run
+          # that had encoded everything.
+          second="$(sed -n 's/^second run status: //p' convert.log)"
+          case "$second" in
+            *Konvertiert*|*Converted*) : ;;
+            *) echo "FAIL: the second run did not report a conversion "
+               echo "      (read: ${second:-nothing})"
+               exit 1 ;;
+          esac
+          case "$second" in
+            *angehakt*|*ticked*)
+              echo "FAIL: a finished run ended by saying nothing was ticked:"
+              echo "      $second"
+              exit 1 ;;
+          esac
+          left="$(sed -n \
+            's/^convertible after the second run: \([0-9]*\)$/\1/p' convert.log)"
+          test "${left:-1}" -eq 0 || {
+            echo "FAIL: ${left:-?} candidates left after converting them all"
+            exit 1
+          }
+          empty="$(sed -n 's/^convert list when empty: //p' convert.log)"
+          test -n "$empty" || {
+            echo "FAIL: the panel said nothing at all after the run"; exit 1; }
+          case "$empty" in
+            *"Noch nichts gesucht"*|*"Nothing looked for yet"*)
+              echo "FAIL: after converting everything the panel still says "
+              echo "      nothing has been searched for: $empty"
+              exit 1 ;;
+          esac
+          echo "panel after the run: $empty"
+          test -f "$conv/movies/Film A (2020).x264.mkv" || {
+            echo "FAIL: the second run did not convert the file that was "
+            echo "      unticked in the first"
+            exit 1
+          }
+
+          echo "=== the conversion panel when a search finds nothing ==="
+          # The third empty state. Searched and found nothing used to draw
+          # the never-searched sentence, so the panel was identical to the
+          # one the user had just opened.
+          #
+          # The mode exits non-zero here on purpose -- it has no row to
+          # untick -- so what is checked is the log, not the status.
+          none="$(mktemp -d)"
+          mkdir -p "$none/config" "$none/src" "$none/movies"
+          python3 - "$none" > "$none/config/settings.json" <<'EMPTY'
+          import json, sys
+          root = sys.argv[1]
+          print(json.dumps({
+              "sourceFolder": root + "/src", "moviesFolder": root + "/movies",
+              "seriesFolder": "", "musicFolder": "", "libraryMode": "video",
+              "identification": "offline", "language": "de",
+              "localLLMBaseURL": "", "localLLMModel": "", "jellyfinBaseURL": "",
+              "conflictPolicy": "skip", "watchSourceFolder": False,
+              "conversion": {"videoCodec": "h264", "quality": 28,
+                             "preset": "ultrafast", "targetHeight": None,
+                             "audioMode": "passthrough",
+                             "stripSubtitles": False, "ffmpegPath": ""},
+              "schedule": {"isEnabled": False, "alsoRename": False,
+                           "cadence": "daily", "hour": 3, "minute": 0,
+                           "everyHours": 6},
+          }))
+          EMPTY
+          timeout 120 xvfb-run -a --server-args="-screen 0 1280x900x24" \
+            env MEDIAFIN_CONFIG_DIR="$none/config" \
+            .build/release/mediafin-gtk --press-convert > none.log 2>&1 || true
+          cat none.log
+          searched="$(sed -n 's/^convert list after search: //p' none.log | head -1)"
+          test -n "$searched" || {
+            echo "FAIL: the panel said nothing after a search"; exit 1; }
+          case "$searched" in
+            *"Noch nichts gesucht"*|*"Nothing looked for yet"*)
+              echo "FAIL: a search that found nothing still tells the user "
+              echo "      to press Suchen: $searched"
+              exit 1 ;;
+          esac
+          echo "panel after an empty search: $searched"
 
           echo "=== the window while the engine holds its queue ==="
           # Four commands hold the engine's serial queue without ever setting
@@ -947,6 +1133,63 @@ jobs:
             echo "FAIL: Scan was still pressable while work was in flight"
             exit 1
           }
+          # The other direction of the same gate. Asserted only as "false",
+          # "Undo is gated correctly" is indistinguishable from "Undo is
+          # never pressable at all" -- the same shape as the fault this
+          # whole change is about. The line was already printed and nothing
+          # read it.
+          idle_undo="$(sed -n 's/^idle undo pressable: //p' check.log)"
+          test "$idle_undo" = "true" || {
+            echo "FAIL: Undo was not pressable even with the engine idle."
+            echo "      A permanently dead button passes a one-sided gate "
+            echo "      check."
+            exit 1
+          }
+          idle_clear="$(sed -n 's/^idle clear-history pressable: //p' check.log)"
+          test "$idle_clear" = "true" || {
+            echo "FAIL: Leeren was not pressable with the engine idle"; exit 1; }
+          during_clear="$(sed -n 's/^during clear-history pressable: //p' check.log)"
+          test "$during_clear" = "false" || {
+            echo "FAIL: Leeren was still pressable while work was in flight."
+            echo "      It destroys the undo journal, and the count its "
+            echo "      question names is read at press time while the "
+            echo "      clearing runs after the rename on the queue -- so "
+            echo "      the dialog can promise 'nothing to undo' and then "
+            echo "      destroy the undo for the rename that was running."
+            exit 1
+          }
+          # And the gate closing WITHOUT waiting for the refresh timer.
+          # This is the one the old check could not see: it called refresh()
+          # itself before reading, so it only ever observed the state after
+          # a tick. These two lines are read with no refresh in between, and
+          # both read "true" before the press handler closed the gate
+          # itself -- which is the half-second window an ordinary
+          # double-click lands in.
+          after_undo="$(sed -n \
+            's/^undo pressable straight after the press: //p' check.log)"
+          test "$after_undo" = "false" || {
+            echo "FAIL: Undo stayed pressable immediately after the press."
+            echo "      The gate is only applied by the 500 ms refresh "
+            echo "      timer, so a double-click queues two undos and the "
+            echo "      second reverses the next older batch."
+            exit 1
+          }
+          after_clear="$(sed -n \
+            's/^clear-history pressable straight after the press: //p' check.log)"
+          test "$after_clear" = "false" || {
+            echo "FAIL: Leeren stayed pressable immediately after the press"
+            exit 1
+          }
+          # A job that measures nothing must not borrow a percentage.
+          # `activePercent` falls back to `renameProgress`, which is 1 after
+          # every finished rename and never reset, so the header announced
+          # "Arbeitet · 100 %" of work that reports no progress at all.
+          case "$during" in
+            *%*)
+              echo "FAIL: the header printed a percentage for a job that "
+              echo "      measures none: $during"
+              exit 1 ;;
+          esac
 
           echo "=== clearing the history, and the question before it ==="
           # clearHistory empties the rename journal too, so the undo steps go

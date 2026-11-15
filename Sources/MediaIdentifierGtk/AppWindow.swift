@@ -48,6 +48,8 @@ final class AppWindow {
     private let saveButton: UnsafeMutablePointer<GtkWidget>
     /// "Alles prüfen", for the same reason.
     private let checkButton: UnsafeMutablePointer<GtkWidget>
+    /// The conversion panel's "Alle", for the same reason.
+    private let convertAllButton: UnsafeMutablePointer<GtkWidget>
     private let urlEntry: UnsafeMutablePointer<GtkWidget>
     private let downloadButton: UnsafeMutablePointer<GtkWidget>
     private let cancelDownloadButton: UnsafeMutablePointer<GtkWidget>
@@ -124,6 +126,23 @@ final class AppWindow {
     /// no "Noch nichts gesucht" in it. nil cannot equal any real list, so
     /// the first draw always happens.
     private var renderedConvertIDs: [UUID]?
+    /// Whether Suchen has been pressed in this sitting.
+    ///
+    /// An empty list meant exactly one sentence -- "Noch nichts gesucht —
+    /// „Suchen" drücken." -- and three different states drew it: never
+    /// searched, searched and found nothing, and converted everything (the
+    /// engine drops each converted file off its candidate list, so a
+    /// finished run empties the panel). A user who pressed Suchen on a
+    /// library with nothing to convert saw a panel identical to the one
+    /// they had opened, telling them to press the button they had just
+    /// pressed. This is the inverse of the fault 695a4e7 fixed, in the same
+    /// panel: "it looked exactly like a working one that had searched and
+    /// found nothing".
+    private var hasSearchedConvertible = false
+    /// Whether a conversion has run since the last search.
+    private var hasRunConversion = false
+    /// The "… und N weitere" label, kept so its text can follow the ticks.
+    private var convertMoreNote: UnsafeMutablePointer<GtkWidget>?
     /// Settings, status and fetching live in windows of their own, opened from
     /// the header's menu.
     ///
@@ -547,7 +566,7 @@ final class AppWindow {
         Self.add(convertBar, to: convertCard)
 
         let convertActions = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8)!
-        let convertAllButton = gtk_button_new_with_label(Text.s("Alle", "All"))!
+        convertAllButton = gtk_button_new_with_label(Text.s("Alle", "All"))!
         let convertNoneButton = gtk_button_new_with_label(Text.s("Keine", "None"))!
         gtk_box_pack_start(Gtk.box(convertActions), convertAllButton, 0, 0, 0)
         gtk_box_pack_start(Gtk.box(convertActions), convertNoneButton, 0, 0, 0)
@@ -1058,11 +1077,32 @@ final class AppWindow {
         start(.applyProposedRenames(accepting: nil))
     }
 
-    /// Stops a scan. Goes straight to the engine without saving first: the
-    /// point of pressing this is that something is already running, and
-    /// saving would queue behind it.
+    /// Stops whatever is running. Goes straight to the engine without
+    /// saving first: the point of pressing this is that something is
+    /// already running, and saving would queue behind it.
+    ///
+    /// It used to send `.cancelScan` and nothing else, while the button it
+    /// sits behind is sensitive on `state.busy` -- which a conversion and a
+    /// download both set. So the one Stopp outside the menu lit up during a
+    /// 40-minute encode, and pressing it answered "Es wird gerade nicht
+    /// gesucht." while the bar advanced, because `cancelScan`'s own target
+    /// test deliberately covers only scans and renames. Newly reachable:
+    /// until the conversion feature had an entrance, nothing could put the
+    /// window into busy-but-not-scanning from a button.
+    ///
+    /// Dispatching here rather than widening `cancelScan` keeps each
+    /// cancel's own message right: each one knows what it can act on, and
+    /// sending all three would print two "nothing is running" lines over
+    /// the one that mattered.
     func stopScan() {
-        coordinator.submit(.cancelScan)
+        let state = coordinator.snapshot
+        if state.converting {
+            coordinator.submit(.cancelConversions)
+        } else if state.downloading {
+            coordinator.submit(.cancelDownload)
+        } else {
+            coordinator.submit(.cancelScan)
+        }
     }
 
     func undoLast() {
@@ -1334,6 +1374,9 @@ final class AppWindow {
     /// Presses "Konvertieren".
     func pressConvert() { press(convertRunButton) }
 
+    /// Presses "Alle".
+    func pressTickEverything() { press(convertAllButton) }
+
     /// Presses "Stopp".
     func pressStopConverting() { press(convertStopButton) }
 
@@ -1406,6 +1449,19 @@ final class AppWindow {
     /// not. Asking the engine would agree with itself and prove nothing.
     var undoButtonIsPressable: Bool {
         gtk_widget_get_sensitive(undoButton) != 0
+    }
+
+    /// Whether the settings panel's "Übernehmen" is actually on screen.
+    ///
+    /// Mapped, not merely built. Pressing it through `gtk_button_clicked`
+    /// proves the handler is wired but says nothing about whether the
+    /// button is anywhere a user could reach -- and this one was moved out
+    /// of the scroller into the panel footer in the same change that added
+    /// the checks, which is exactly when a control goes missing. The send
+    /// button once did, which is what `urgentButtonsAreOnTheMainSurface`
+    /// exists for.
+    var applyButtonIsOnScreen: Bool {
+        gtk_widget_get_mapped(saveButton) != 0
     }
 
     /// Types into the quality field, for the smoke modes.
@@ -1707,6 +1763,12 @@ final class AppWindow {
     /// window beats searching the ones stored when it opened.
     private func findConvertible() {
         saveFolders()
+        hasSearchedConvertible = true
+        hasRunConversion = false
+        // So the empty state is redrawn with the new sentence even when the
+        // list is empty both before and after: the guard in
+        // `refreshConvertList` compares ids, and [] equals [].
+        renderedConvertIDs = nil
         start(.findConvertible)
     }
 
@@ -1719,6 +1781,7 @@ final class AppWindow {
         //
         // The engine says "nothing was ticked" for an empty set, which is
         // the right message, so this is not guarded here.
+        hasRunConversion = true
         start(.convertFiles(accepting: tickedConvertIDs))
     }
 
@@ -1757,6 +1820,7 @@ final class AppWindow {
             refreshConvertCounts()
             return
         }
+        let hadRows = !(renderedConvertIDs ?? []).isEmpty
         renderedConvertIDs = ids
         // Exclusions are kept only for files the engine is still offering.
         //
@@ -1778,11 +1842,30 @@ final class AppWindow {
         convertNotes = []
         convertRows = []
 
+        convertMoreNote = nil
+
         if candidates.isEmpty {
-            let empty = Self.label(
-                Text.s("Noch nichts gesucht — „Suchen“ drücken.",
-                       "Nothing looked for yet — press “Look for files”."),
-                classes: "mf-dim")
+            // Which of the three empty states this is. They used to share
+            // one sentence, so "found nothing" and "converted everything"
+            // both read as "you have not searched yet".
+            let sentence: String
+            if hasRunConversion, hadRows {
+                sentence = Text.s(
+                    "Fertig. Die neuen Dateien liegen neben den Originalen; "
+                        + "zu konvertieren ist nichts mehr da.",
+                    "Done. The new files are beside the originals; there is "
+                        + "nothing left to convert.")
+            } else if hasSearchedConvertible {
+                sentence = Text.s(
+                    "Keine Dateien zum Konvertieren gefunden.",
+                    "No files to convert were found.")
+            } else {
+                sentence = Text.s(
+                    "Noch nichts gesucht — „Suchen“ drücken.",
+                    "Nothing looked for yet — press “Look for files”.")
+            }
+            let empty = Self.label(sentence, classes: "mf-dim")
+            gtk_label_set_line_wrap(Gtk.label(empty), 1)
             gtk_label_set_xalign(Gtk.label(empty), 0.5)
             gtk_box_pack_start(Gtk.box(convertListColumn), empty, 0, 0, 0)
             convertRowWidgets = [empty]
@@ -1825,17 +1908,22 @@ final class AppWindow {
                 convertRows.append((id: id, check: check))
             }
             if candidates.count > Self.visibleProposals {
-                let rest = candidates.count - Self.visibleProposals
-                let more = Self.label(
-                    Text.s("… und \(rest) weitere, hier nicht gezeichnet. Sie "
-                               + "sind angehakt und werden mit konvertiert.",
-                           "… and \(rest) more, not drawn here. They are ticked "
-                               + "and will be converted with the rest."),
-                    classes: "mf-dim")
+                // Built empty and filled by `refreshConvertCounts`, which is
+                // the only place that knows what is ticked.
+                //
+                // The sentence used to be baked in here, inside the branch
+                // that only runs when the ids change -- so it kept
+                // asserting that the undrawn files were ticked long after
+                // "Keine" had cleared every one of them, while the counts
+                // line two lines above printed the truth. Two lines of the
+                // same panel said opposite things about what the blue
+                // button was about to spend hours doing.
+                let more = Self.label("", classes: "mf-dim")
                 gtk_label_set_line_wrap(Gtk.label(more), 1)
                 gtk_box_pack_start(Gtk.box(convertListColumn), more, 0, 0, 0)
                 convertRowWidgets.append(more)
                 convertNotes.append(more)
+                convertMoreNote = more
             }
         }
         gtk_widget_show_all(convertListColumn)
@@ -1859,6 +1947,18 @@ final class AppWindow {
         Gtk.setText(convertCountLabel, Text.s(
             "\(candidates.count) gefunden · \(ticked.count) angehakt · \(size)",
             "\(candidates.count) found · \(ticked.count) ticked · \(size)"))
+
+        if let note = convertMoreNote {
+            let undrawn = candidates.dropFirst(Self.visibleProposals)
+            let tickedUndrawn = undrawn.filter {
+                !convertExcludedPaths.contains($0.source.path)
+            }.count
+            Gtk.setText(note, Text.s(
+                "… und \(undrawn.count) weitere, hier nicht gezeichnet; "
+                    + "\(tickedUndrawn) davon angehakt und mit dabei.",
+                "… and \(undrawn.count) more, not drawn here; "
+                    + "\(tickedUndrawn) of them ticked and coming along."))
+        }
     }
 
     /// Empties the history, after asking.
@@ -1930,14 +2030,24 @@ final class AppWindow {
             // Rückgängig, both connection tests, and Alles prüfen. A probe
             // against an unreachable server holds the queue for the
             // 30-second request timeout, and Alles prüfen runs two of them.
-            if state.busy {
+            // A percentage only from a job that measures one.
+            //
+            // `activePercent` is `converting ? convertProgress :
+            // renameProgress` and has no notion of "this job reports
+            // nothing", while `renameProgress` is set to 1 at the end of
+            // every rename and never reset. So the comment on the `else`
+            // branch below named the hazard and then fixed it in the wrong
+            // place: a download sets `busy` and reports into
+            // `downloadProgress`, so the header read "Arbeitet · 100 %"
+            // from the first instant of a fetch -- the very string the
+            // branch below exists to avoid -- while the panel's own bar
+            // beside it read 3 %. Suchen over a large library did the same.
+            if state.converting || state.renaming {
                 subtitle = (state.convertStatus ?? Text.s("Arbeitet", "Working"))
                     + " · \(state.activePercent) %"
+            } else if state.busy {
+                subtitle = state.convertStatus ?? Text.s("Arbeitet …", "Working…")
             } else {
-                // No percentage: `activePercent` falls back to
-                // `renameProgress`, which after a finished rename is 1 — so
-                // a probe would announce "Arbeitet · 100 %" of work that
-                // reports no progress at all.
                 subtitle = Text.s("Arbeitet …", "Working…")
             }
         } else if state.hasError {

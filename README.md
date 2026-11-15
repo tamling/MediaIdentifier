@@ -65,10 +65,15 @@ repeated in the middle of the window, because the middle is where you are
 looking when you are wondering what happened.
 
 **Umbenennen**, **Rückgängig** and **Stopp** stay on that surface and are never
-behind the menu: they are what you reach for when something is going wrong, and
-they go grey while the engine is working, so a second press cannot land on the
-wrong thing. The history on the right has a **Leeren** that asks first, because
-it takes the undo steps with it and says how many.
+behind the menu: they are what you reach for when something is going wrong.
+Umbenennen and Rückgängig go grey while the engine is working, so a second
+press cannot land on the wrong thing — in particular a second Rückgängig
+cannot reverse the batch before the one you asked about. Stopp is the
+opposite: it is live only while there is something to stop, and it stops
+whatever that is — a search, a rename, a conversion or a download. The
+history on the right has a **Leeren** that asks first and says how many undo
+steps go with it; it is greyed while the engine works, because the answer to
+that question would be out of date by the time the clearing ran.
 
 ### Converting
 
