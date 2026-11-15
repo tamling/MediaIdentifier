@@ -176,8 +176,11 @@ final class AppWindow {
         stopScanButton = gtk_button_new_with_label(Text.s("Stopp", "Stop"))!
         gtk_widget_set_tooltip_text(
             stopScanButton,
-            Text.s("Suche vor der nächsten Datei beenden",
-                   "End the search before the next file"))
+            // It stops a rename as well now, so it no longer says "search".
+            // The old wording was the reason nobody noticed that pressing it
+            // during a rename answered "Es wird gerade nicht gesucht".
+            Text.s("Vor der nächsten Datei anhalten — Suche oder Umbenennen",
+                   "Stop before the next file — search or rename"))
         // Packed after Scan, so in a header's end group it sits to its left:
         // the thing you reach for second is not in front of the thing you
         // reach for first.

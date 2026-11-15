@@ -9,6 +9,13 @@ public struct RenameOutcome: Sendable {
     /// that number is read as "files renamed", and a deletion is not one.
     public var deleted: Int
     public var transaction: RenameTransaction?
+    /// Whether the run was stopped before it had worked through the plan.
+    ///
+    /// The files it did not reach are counted as skipped, like a conflict
+    /// the policy declined, but this is said separately: "übersprungen 300"
+    /// after pressing Stop reads as 300 name clashes rather than 300 files
+    /// nobody got to.
+    public var stoppedEarly: Bool
     /// Where each item's primary file now is, for the items whose primary
     /// move actually happened.
     ///
@@ -23,12 +30,14 @@ public struct RenameOutcome: Sendable {
     public init(succeeded: Int = 0, failed: Int = 0, skipped: Int = 0,
                 deleted: Int = 0,
                 transaction: RenameTransaction? = nil,
+                stoppedEarly: Bool = false,
                 landed: [UUID: URL] = [:]) {
         self.succeeded = succeeded
         self.failed = failed
         self.skipped = skipped
         self.deleted = deleted
         self.transaction = transaction
+        self.stoppedEarly = stoppedEarly
         self.landed = landed
     }
 }
@@ -59,11 +68,19 @@ public final class RenameExecutor {
     ///   - progress: overall completion fraction 0...1, updated continuously so
     ///     slow cross-volume moves show real progress (FR19).
     @discardableResult
+    /// - Parameter shouldStop: asked at each item's first file. A rename of
+    ///   400 files to a NAS mount runs for a long time and `moveItem` cannot
+    ///   be interrupted, so this is the only place a stop can take effect:
+    ///   at an item boundary, where every release is either moved whole and
+    ///   journalled, or not touched at all. The window used to light its
+    ///   Stop button for the whole of a rename and then answer that nothing
+    ///   was running.
     public func execute(
         plan: [RenameItem],
         policy: ConflictPolicy,
         askResolution: ((PlannedMove) -> ConflictPolicy)? = nil,
-        progress: ((Double) -> Void)? = nil
+        progress: ((Double) -> Void)? = nil,
+        shouldStop: (() -> Bool)? = nil
     ) -> RenameOutcome {
         // Each move carries the item it belongs to, and whether it is that
         // item's primary file, so the outcome can say where each item ended
@@ -112,11 +129,28 @@ public final class RenameExecutor {
         var movedSources: Set<String> = []
         progress?(0)
 
+        /// Set once a stop has been honoured. Nothing after it is
+        /// attempted, so the plan's tail is reported as untouched rather
+        /// than half done.
+        var stopping = false
+        /// Not logged one by one: a stop in a batch of 5,000 would push the
+        /// whole real history out of a file that keeps 2,000 entries. One
+        /// line at the end says how many were left alone.
+        var untouched = 0
         for (owner, isPrimary, plannedMove) in moves {
             var move = plannedMove
             defer {
                 completed += 1
                 progress?(total == 0 ? 1 : Double(completed) / Double(total))
+            }
+
+            // Asked at an item's first file only: a release must not be torn
+            // in half by a stop landing between a film and its subtitle.
+            if isPrimary, !stopping, shouldStop?() == true { stopping = true }
+            if stopping {
+                outcome.skipped += 1
+                untouched += 1
+                continue
             }
 
             if !isPrimary {
@@ -247,6 +281,16 @@ public final class RenameExecutor {
                         "The undo journal could not be written. Undo works in this "
                             + "session but not after a restart.")))
             }
+        }
+        if stopping {
+            outcome.stoppedEarly = true
+            log.append(RenameLogEntry(
+                oldName: "—", newName: "—", status: .skipped,
+                errorDescription: Text.s(
+                    "Vorzeitig gestoppt: \(untouched) Datei"
+                        + (untouched == 1 ? "" : "en") + " nicht angefasst.",
+                    "Stopped early: \(untouched) file"
+                        + (untouched == 1 ? "" : "s") + " left alone.")))
         }
         // The in-flight record has served its purpose now that the journal
         // proper holds the batch — unless that write failed, in which case

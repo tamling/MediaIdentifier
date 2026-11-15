@@ -120,11 +120,19 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
     /// waiting its turn on the queue would otherwise be discarded and the
     /// run would go ahead after the interface had already said it was
     /// stopping.
-    private var _cancelScan = false
+    private var _stopRequested = false
     /// Scans submitted but not yet taken off the queue, so a cancel can tell
     /// "stop the one that is coming" from "there is nothing to stop".
     private var _queuedScans = 0
-    private var _scanRunning = false
+    private var _scanDepth = 0
+    /// Whether a rename is running. Stop applies to it as well: the window
+    /// lights the button for the whole of a rename, and it used to answer
+    /// "Es wird gerade nicht gesucht" and carry on.
+    private var _renameRunning = false
+    /// Renames submitted and still waiting their turn, counted like queued
+    /// scans so a Stop pressed before the run starts is not thrown away as
+    /// "nothing is running".
+    private var _queuedRenames = 0
     private var _probes: [ProbeSubject: ProbeResult] = [:]
     /// Set only by the test hook below.
     private var _providerOverride: MetadataProvider?
@@ -309,6 +317,9 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         if case .convertFiles = command {
             lock.lock(); _queuedConversionRuns += 1; lock.unlock()
         }
+        if case .applyProposedRenames = command {
+            lock.lock(); _queuedRenames += 1; lock.unlock()
+        }
         if case .downloadURL = command {
             lock.lock(); _queuedDownloads += 1; lock.unlock()
         }
@@ -418,18 +429,14 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         case .testJellyfinConnection:
             testJellyfin()
         case .scanSourceFolder:
-            // The bookkeeping lives here rather than inside the two
-            // functions, so there is one place that knows a scan is running
-            // and one place that decides when the cancel flag may be cleared.
-            startedScanning()
+            // Only the queue accounting here. Whether a scan is running, and
+            // when the stop flag may be cleared, is the scan's own business
+            // — see `scanSourceFolder`.
+            startedQueuedScan()
             scanSourceFolder()
-            reportIfScanWasCancelled()
-            finishedScanning()
         case .addFiles(let urls):
-            startedScanning()
+            startedQueuedScan()
             addFiles(urls)
-            reportIfScanWasCancelled()
-            finishedScanning()
         case .applyProposedRenames(let accepting):
             applyRenames(accepting: accepting)
         case .undoLastRename:
@@ -670,6 +677,17 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
     ///   means renaming and sending a list nobody has looked at.
     @discardableResult
     private func scanSourceFolder() -> Bool {
+        // The bookkeeping is here, inside the scan, and not at the command
+        // that asked for it. It used to be at the two command cases, and
+        // `scanSourceFolder` has three other callers — the watch poll, the
+        // scan after a download, and the scheduled run — none of which
+        // touched it. So for all three, `_scanDepth` stayed at zero while the
+        // window showed "Identifying…" and lit Stop, and pressing Stop
+        // answered "Es wird gerade nicht gesucht" and changed nothing.
+        // Nothing said afterwards that a search had been interrupted either,
+        // because the sentence for that was also at the command.
+        beginScan()
+        defer { reportIfScanWasCancelled(); endScan() }
         let settings = self.settings
         let source = settings.sourceFolder
         guard !source.isEmpty else {
@@ -800,6 +818,8 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
     /// the one the user means, wherever it lives — which is the whole reason
     /// this exists beside the folder scan.
     private func addFiles(_ handed: [URL]) {
+        beginScan()
+        defer { reportIfScanWasCancelled(); endScan() }
         let settings = self.settings
         let manager = FileManager.default
         let sorted = Self.sorting(
@@ -964,7 +984,7 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         for (index, var file) in mediaFiles.enumerated() {
             // Between files, never inside one: a request already sent is
             // bounded by its own timeout and interrupting it buys nothing.
-            if scanIsCancelled {
+            if stopRequested {
                 // The rest keep the names they were parsed with, so a
                 // cancelled scan still shows what it had found.
                 enriched.append(contentsOf: mediaFiles[index...])
@@ -1179,6 +1199,7 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
     /// - Returns: the outcome, or nil when nothing was attempted.
     @discardableResult
     private func applyRenames(accepting: Set<UUID>?) -> RenameOutcome? {
+        lock.lock(); _queuedRenames = max(0, _queuedRenames - 1); lock.unlock()
         var plan = items
         guard !plan.isEmpty else {
             update { $0.lastResult = Text.s(
@@ -1228,13 +1249,29 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
 
         let policy = settings.conflictPolicy.policy
         update { $0.busy = true; $0.renaming = true; $0.renameProgress = 0; $0.hasError = false }
+        lock.lock(); _renameRunning = true; lock.unlock()
+        defer {
+            lock.lock()
+            _renameRunning = false
+            // Same rule as a scan: a stop aimed at something still queued
+            // must not be eaten by the run finishing now.
+            if _scanDepth == 0, _queuedScans == 0, _queuedRenames == 0 {
+                _stopRequested = false
+            }
+            lock.unlock()
+        }
 
         let outcome = executor.execute(plan: plan, policy: policy,
                                        progress: { [weak self] fraction in
             self?.update { $0.renameProgress = fraction }
-        })
+        }, shouldStop: { [weak self] in self?.stopRequested ?? false })
 
-        let applied = Set(plan.map(\.id))
+        // Only the ones that actually moved leave the list. It used to be
+        // every id in the plan, which after a stop would have cleared the
+        // 300 files nobody had touched out of the window.
+        let applied = outcome.stoppedEarly
+            ? Set(outcome.landed.keys)
+            : Set(plan.map(\.id))
         lock.lock(); _items.removeAll { applied.contains($0.id) }; lock.unlock()
         update {
             $0.busy = false
@@ -1248,6 +1285,12 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
                 + (outcome.failed > 0
                     ? Text.s(", fehlgeschlagen \(outcome.failed)",
                              ", failed \(outcome.failed)")
+                    : "")
+                // Said in the sentence, not left to be read out of
+                // "übersprungen 300", which looks like 300 name clashes.
+                + (outcome.stoppedEarly
+                    ? Text.s(" — vorzeitig gestoppt, der Rest ist unberührt",
+                             " — stopped early, the rest is untouched")
                     : "")
                 // Named in the sentence, never only in the history: the one
                 // thing here that cannot be undone has to be read out.
@@ -1607,8 +1650,9 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         // Only arm the flag when there is something for it to apply to, as
         // for conversions: a stray press while idle would otherwise sit
         // there and kill the next scan the user actually asks for.
-        let hasTarget = _scanRunning || _queuedScans > 0
-        if hasTarget { _cancelScan = true }
+        let hasTarget = _scanDepth > 0 || _queuedScans > 0
+            || _renameRunning || _queuedRenames > 0
+        if hasTarget { _stopRequested = true }
         lock.unlock()
 
         guard hasTarget else {
@@ -1635,7 +1679,7 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
     /// Says so, instead of leaving the run's own "N files ready" sentence
     /// standing as if nothing had been interrupted.
     private func reportIfScanWasCancelled() {
-        guard scanIsCancelled else { return }
+        guard stopRequested else { return }
         update {
             $0.busy = false
             $0.convertStatus = nil
@@ -1649,29 +1693,45 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
     }
 
     /// Whether a cancel is armed. Read between files, never cached.
-    private var scanIsCancelled: Bool {
-        lock.lock(); defer { lock.unlock() }; return _cancelScan
+    private var stopRequested: Bool {
+        lock.lock(); defer { lock.unlock() }; return _stopRequested
     }
 
-    /// Marks a scan as started and clears nothing. Returns the token to pass
-    /// to `finishedScanning`.
-    private func startedScanning() {
+    /// A submitted scan command has reached the front of the queue.
+    ///
+    /// Separate from `beginScan` because the two answer different questions:
+    /// this one is about a command that was waiting its turn, and there is
+    /// no such command behind the watch poll, the scheduled run or the scan
+    /// after a download.
+    private func startedQueuedScan() {
         lock.lock()
-        _scanRunning = true
         _queuedScans = max(0, _queuedScans - 1)
-        // A note from the previous run must not be attached to this one.
-        _identificationNote = nil
         lock.unlock()
     }
 
-    /// Clears the cancel only when no further scan is waiting, so a cancel
-    /// aimed at a queued run is not consumed by the one finishing now. The
-    /// conversion path learned this the hard way and re-encoded everything
-    /// the user had just stopped.
-    private func finishedScanning() {
+    /// A scan is running, whoever asked for it.
+    ///
+    /// A depth rather than a flag: the scheduled run scans and then renames,
+    /// and nesting must not clear the stop flag half way through.
+    private func beginScan() {
         lock.lock()
-        _scanRunning = false
-        if _queuedScans == 0 { _cancelScan = false }
+        _scanDepth += 1
+        // A note from the previous run must not be attached to this one.
+        if _scanDepth == 1 { _identificationNote = nil }
+        lock.unlock()
+    }
+
+    /// Clears the stop request only when nothing else is running or waiting,
+    /// so a stop aimed at a queued run is not consumed by the one finishing
+    /// now. The conversion path learned this the hard way and re-encoded
+    /// everything the user had just stopped.
+    private func endScan() {
+        lock.lock()
+        _scanDepth = max(0, _scanDepth - 1)
+        if _scanDepth == 0, _queuedScans == 0, _queuedRenames == 0,
+           !_renameRunning {
+            _stopRequested = false
+        }
         lock.unlock()
     }
 
@@ -2080,12 +2140,26 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
     /// The work of one unattended run. Separate from `runIfDue` so the tests
     /// can run it without waiting for a timer or faking a clock.
     func performScheduledRun(_ schedule: Schedule) {
+        // The whole run counts as one piece of work: a scan, and the rename
+        // it leads to. Without this the scan's own bookkeeping reaches zero
+        // between the two and clears the stop flag, so a Stop pressed during
+        // identification was honoured by the scan — and then the rename went
+        // ahead and moved every file into the library under a parse-only
+        // name, which is the one thing the press was meant to prevent.
+        beginScan()
+        defer { endScan() }
         // A scan that could not run at all — no import folder, the folder
         // gone, ffprobe missing — leaves the previous plan in place. Acting
         // on it would rename and send a list the user last saw hours ago,
         // against a folder that has moved on since. So the run stops here
         // and the reason it gives is the scan's own.
         guard scanSourceFolder() else { return }
+        // Stop means stop, including the rename this run was going to do.
+        // Without this the press was answered ("Stoppt vor der nächsten
+        // Datei"), identification was indeed abandoned — and then every file
+        // was moved into the library under a parse-only name anyway, which
+        // is the one outcome the user was trying to prevent.
+        guard !stopRequested else { return }
         let scanned = items.filter(\.isAccepted)
         guard !scanned.isEmpty else { return }
 
@@ -2215,11 +2289,29 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         let appeared = watchScanner.poll(directory: root).filter(VideoFileTypes.isVideo)
         guard !appeared.isEmpty else { return }
 
+        // One piece of work, so the scan's own bookkeeping does not clear a
+        // stop before the lines below can see it.
+        beginScan()
+        defer { endScan() }
         scanSourceFolder()
+        // Not over the top of the cancellation the scan has just reported:
+        // "5 new files are waiting for you" would bury it, and this is the
+        // path on which nobody is watching the window anyway.
+        guard !stopRequested else { return }
         let count = appeared.count
         update {
-            $0.lastResult = "\(count) new file\(count == 1 ? "" : "s") appeared in the import "
-                + "folder and \($0.totalItems == 1 ? "is" : "are") waiting for you to confirm."
+            // Through Text.s like everything else. This one sentence was
+            // written in English only, in a program whose first language is
+            // German, and it is the sentence the watch path shows most.
+            $0.lastResult = count == 1
+                ? Text.s("Eine neue Datei im Importordner wartet auf deine "
+                             + "Bestätigung.",
+                         "One new file appeared in the import folder and is "
+                             + "waiting for you to confirm.")
+                : Text.s("\(count) neue Dateien im Importordner warten auf deine "
+                             + "Bestätigung.",
+                         "\(count) new files appeared in the import folder and are "
+                             + "waiting for you to confirm.")
         }
     }
 
