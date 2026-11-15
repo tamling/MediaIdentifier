@@ -106,18 +106,34 @@ final class AppCoordinatorTests: XCTestCase {
         XCTAssertTrue(paths.contains { $0.contains("S01E03") }, "\(paths)")
     }
 
+    /// Named by file, not derived from the item.
+    ///
+    /// This used to compute its expectation inside the loop, from the item
+    /// under test: `item.mediaFile.parsed.kind == .episode ? series : movies`
+    /// — and the planner picks outputRoot from that same `parsed.kind`, so
+    /// the assertion checked self-consistency ("whatever kind you decided,
+    /// you routed to the matching folder") and not the claim in its name.
+    /// A misrouted episode could only fail it by also being misclassified.
+    /// There was no count assertion either, so an empty `items` made the
+    /// loop body unreachable and the test green.
     func testEpisodesAndMoviesGetTheirOwnLibraryRoot() throws {
         _ = try makeFile("The.Matrix.1999.mkv")
         _ = try makeFile("the.last.of.us.s01e03.mkv")
         run(.saveSettings(configuredSettings()))
         run(.scanSourceFolder)
 
-        for item in coordinator.items {
-            let expected = item.mediaFile.parsed.kind == .episode ? series! : movies!
-            XCTAssertEqual(item.outputRoot.standardizedFileURL.path,
-                           expected.standardizedFileURL.path,
-                           item.originalFileName)
-        }
+        XCTAssertEqual(coordinator.items.count, 2,
+                       "nothing was scanned, so the assertions below say nothing")
+        let roots = Dictionary(
+            uniqueKeysWithValues: coordinator.items.map {
+                ($0.originalFileName, $0.outputRoot.standardizedFileURL.path)
+            })
+        XCTAssertEqual(roots["The.Matrix.1999.mkv"],
+                       movies.standardizedFileURL.path,
+                       "the film did not go to the films folder")
+        XCTAssertEqual(roots["the.last.of.us.s01e03.mkv"],
+                       series.standardizedFileURL.path,
+                       "the episode did not go to the series folder")
     }
 
     func testScanInSubfoldersAndIgnoresNonVideo() throws {

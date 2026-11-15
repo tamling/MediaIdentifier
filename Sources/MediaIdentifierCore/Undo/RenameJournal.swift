@@ -82,6 +82,26 @@ public final class RenameJournal: @unchecked Sendable {
             .appendingPathComponent("\(stem)-in-flight-\(pid).jsonl")
     }
 
+    /// How many transactions are kept.
+    ///
+    /// The history beside this file got `maximumEntries = 2_000` and
+    /// coalesced writes after 2,000 appends were measured at 18 seconds and
+    /// ~360 MB written to produce a 357 KB file. This file, in the same
+    /// directory, written by the same `applyRenames`, holding the same kind
+    /// of path data, got neither: it grew for ever and was re-encoded whole
+    /// on every rename.
+    ///
+    /// Ten, not two thousand, because of what the grown part is for:
+    /// `undoLast` reads `journal.last` and nothing else, so everything
+    /// before the newest transaction is already write-only. Ten leaves room
+    /// for an undo that steps back further without keeping a year of them.
+    static let maximumTransactions = 10
+
+    /// And a cap on the total moves, because one transaction can hold
+    /// thousands: ten batches of 5,000 files would be a 10 MB file
+    /// re-encoded on every rename.
+    static let maximumMoves = 20_000
+
     /// The file whose lock serialises writers.
     ///
     /// A separate file, not the journal itself: `AtomicFile.write` finishes
@@ -105,6 +125,7 @@ public final class RenameJournal: @unchecked Sendable {
                 mergeFromDisk()
                 transactions.append(transaction)
                 sortByDate()
+                trim()
                 persist()
             }
         }
@@ -132,6 +153,20 @@ public final class RenameJournal: @unchecked Sendable {
     /// it. Undo asks for exactly that.
     private func sortByDate() {
         transactions.sort { $0.date < $1.date }
+    }
+
+    /// Drops the oldest transactions past the caps. Called with the lock
+    /// held, after sorting, before persisting.
+    private func trim() {
+        if transactions.count > Self.maximumTransactions {
+            transactions.removeFirst(transactions.count - Self.maximumTransactions)
+        }
+        var moves = transactions.reduce(0) { $0 + $1.moves.count }
+        // Never the last one, whatever its size: that is the one undo acts
+        // on, and dropping it would be the data loss this file prevents.
+        while moves > Self.maximumMoves, transactions.count > 1 {
+            moves -= transactions.removeFirst().moves.count
+        }
     }
 
     // MARK: A batch that is still running
@@ -274,6 +309,7 @@ public final class RenameJournal: @unchecked Sendable {
                 transactions.append(RenameTransaction(id: header.id, date: header.date,
                                                       moves: moves))
                 sortByDate()
+                trim()
                 persist()
             }
         }

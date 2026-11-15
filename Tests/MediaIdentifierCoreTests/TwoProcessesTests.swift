@@ -185,6 +185,60 @@ final class TwoProcessesTests: XCTestCase {
         XCTAssertEqual(RenameLog(url: logURL).entries.count, 0)
     }
 
+    // MARK: Bounded
+
+    /// The history beside this file got a cap and coalesced writes after
+    /// 2,000 appends were measured at 18 seconds and ~360 MB written to
+    /// produce 357 KB. This file, in the same directory, written by the same
+    /// code, holding the same kind of paths, got neither — and the grown
+    /// part can never be used, because undo reads `last` and nothing else.
+    func testTheJournalIsBoundedTheWayTheHistoryBesideItIs() throws {
+        let journal = RenameJournal(url: journalURL)
+        for index in 0..<(RenameJournal.maximumTransactions + 15) {
+            journal.record(RenameTransaction(
+                date: Date(timeIntervalSince1970: TimeInterval(index)),
+                moves: [move("Film\(index).mkv")]))
+        }
+
+        XCTAssertEqual(journal.transactions.count,
+                       RenameJournal.maximumTransactions)
+        // The newest are the ones kept, because the newest is what undo acts on.
+        XCTAssertEqual(journal.last?.moves.first?.from.lastPathComponent,
+                       "Film\(RenameJournal.maximumTransactions + 14).mkv")
+        XCTAssertEqual(try transactionsOnDisk().count,
+                       RenameJournal.maximumTransactions)
+    }
+
+    /// And the total moves are bounded too, because one transaction can hold
+    /// thousands: ten batches of 5,000 files is a 10 MB file re-encoded on
+    /// every rename.
+    func testTheTotalNumberOfMovesIsBoundedAsWell() throws {
+        let journal = RenameJournal(url: journalURL)
+        let big = (0..<9_000).map { move("Film\($0).mkv") }
+        for index in 0..<4 {
+            journal.record(RenameTransaction(
+                date: Date(timeIntervalSince1970: TimeInterval(index)), moves: big))
+        }
+
+        let total = journal.transactions.reduce(0) { $0 + $1.moves.count }
+        XCTAssertLessThanOrEqual(total, RenameJournal.maximumMoves)
+        XCTAssertFalse(journal.transactions.isEmpty,
+                       "the cap took everything, including the one undo needs")
+    }
+
+    /// A single transaction larger than the cap is kept whole: it is the one
+    /// undo acts on, and dropping it is the data loss this file prevents.
+    func testOneOversizedTransactionIsStillKept() {
+        let journal = RenameJournal(url: journalURL)
+        let huge = (0..<(RenameJournal.maximumMoves + 5_000)).map {
+            move("Film\($0).mkv")
+        }
+        journal.record(RenameTransaction(moves: huge))
+
+        XCTAssertEqual(journal.transactions.count, 1)
+        XCTAssertEqual(journal.last?.moves.count, huge.count)
+    }
+
     // MARK: The credentials file
 
     /// `load()` swallows every failure and returns an empty dictionary, and
