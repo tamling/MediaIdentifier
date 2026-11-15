@@ -34,6 +34,17 @@ jobs:
           # sanitising, with every settings rule, with the history's flush
           # and with its write-failure field. A new one fails the build now.
           python3 tools/check-unused.py
+          # And the sharper version of the same fault: not a declaration
+          # with no caller, but a whole FEATURE with no entrance. Five of
+          # the engine's eighteen commands had no sender anywhere in the
+          # program -- the entire conversion feature, the Jellyfin test and
+          # clearing the history -- because they had been reachable from a
+          # web front end that was removed. Every handler was tested and
+          # green, because the tests call the engine directly. An audit of
+          # 38 findings read all of them and asked whether they were right,
+          # which they were. Nothing asked whether anything could ask for
+          # them.
+          python3 tools/check-reachable.py
 
   test:
     name: Core tests
