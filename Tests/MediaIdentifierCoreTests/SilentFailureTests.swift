@@ -88,6 +88,91 @@ final class SilentFailureTests: XCTestCase {
         XCTAssertFalse(coordinator.snapshot.hasError, said)
     }
 
+    // MARK: The warning the unattended run used to lose
+
+    /// `enriching` deliberately keeps the give-up warning out of
+    /// `lastResult` — its comment says the run "would overwrite this one,
+    /// which is exactly what happened" — and hands it to the scan, which
+    /// appends it to `lastResult`. On the scheduled path `applyRenames` then
+    /// replaces that line wholesale and sets `hasError = false`. The run's
+    /// own `notes` array exists for exactly this hazard, with a comment
+    /// saying a warning put there first "vanishe[s] unread", and was never
+    /// given this note. `enriching` wrote nothing to the history either, so
+    /// there was no second channel at all.
+    func testAScheduledRenameKeepsTheGaveUpWarning() throws {
+        for index in 1...5 {
+            try Data("x".utf8).write(
+                to: source.appendingPathComponent("Film.20\(10 + index).1080p.mkv"))
+        }
+        let coordinator = AppCoordinator(configDirectory: config, lampInterval: 0)
+        Text.language = .german
+        var settings = configured()
+        settings.identification = .localLLM
+        settings.localLLMBaseURL = "http://127.0.0.1:1"
+        settings.localLLMModel = "test"
+        coordinator.executeForTesting(.saveSettings(settings))
+        coordinator.setEnrichmentProviderForTesting(SilentProvider())
+
+        coordinator.performScheduledRun(
+            Schedule(isEnabled: true, hour: 3, alsoRename: true))
+
+        let said = coordinator.snapshot.lastResult ?? ""
+        XCTAssertTrue(said.contains("Umbenannt"),
+                      "the run did not rename, so the overwrite never happened "
+                          + "and this proves nothing: \(said)")
+        XCTAssertTrue(said.contains("antwortet nicht") || said.contains("aufgehört"),
+                      "the give-up warning was replaced by the rename summary: "
+                          + "\(said)")
+        XCTAssertTrue(coordinator.snapshot.hasError,
+                      "the rename cleared hasError over the warning")
+        // And the durable channel, which is the one that matters when
+        // nobody is looking at the window.
+        XCTAssertTrue(coordinator.logEntries.contains {
+            ($0.errorDescription ?? "").contains("aufgehört zu fragen")
+        }, "nothing in the history says identification gave up")
+    }
+
+    /// A server that answers must leave no warning behind, or the sentence
+    /// appears on every run and stops meaning anything.
+    func testAnUnattendedRunWithAWorkingServerSaysNothingAboutIt() throws {
+        for index in 1...3 {
+            try Data("x".utf8).write(
+                to: source.appendingPathComponent("Film.20\(10 + index).1080p.mkv"))
+        }
+        let coordinator = AppCoordinator(configDirectory: config, lampInterval: 0)
+        Text.language = .german
+        var settings = configured()
+        settings.identification = .localLLM
+        settings.localLLMBaseURL = "http://127.0.0.1:1"
+        settings.localLLMModel = "test"
+        coordinator.executeForTesting(.saveSettings(settings))
+        coordinator.setEnrichmentProviderForTesting(AnsweringProvider())
+
+        coordinator.performScheduledRun(
+            Schedule(isEnabled: true, hour: 3, alsoRename: true))
+
+        let said = coordinator.snapshot.lastResult ?? ""
+        XCTAssertFalse(said.contains("antwortet nicht"), said)
+        XCTAssertFalse(said.contains("aufgehört"), said)
+    }
+
+    /// Answers nothing, which is what a model server that has gone quiet
+    /// looks like from here.
+    private struct SilentProvider: MetadataProvider, Sendable {
+        func identify(_ parsed: ParsedRelease, at url: URL?) async throws
+            -> MediaMetadata? { nil }
+    }
+
+    /// Answers something different every time, so the give-up rule — which
+    /// counts replies that say nothing OR repeat the input — is not tripped.
+    private struct AnsweringProvider: MetadataProvider, Sendable {
+        func identify(_ parsed: ParsedRelease, at url: URL?) async throws
+            -> MediaMetadata? {
+            MediaMetadata(title: "Found " + parsed.originalFileName, year: 1999,
+                          kind: .movie, source: "test")
+        }
+    }
+
     // MARK: Two rips of one film
 
     /// The preview must say so, because the apply step certainly will.

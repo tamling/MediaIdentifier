@@ -789,7 +789,7 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
 
         lock.lock(); _items = applyingExclusions(to: plan); lock.unlock()
         // Read out before `update`, which takes the same non-recursive lock.
-        let identification = takeIdentificationNote()
+        let identification = identificationNote()
         update {
             $0.busy = false
             $0.convertStatus = nil
@@ -962,7 +962,7 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         lock.unlock()
 
         // Read out before `update`, which takes the same non-recursive lock.
-        let identification = takeIdentificationNote()
+        let identification = identificationNote()
         update {
             $0.busy = false
             $0.convertStatus = nil
@@ -1085,6 +1085,21 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
                     // ready to rename" instead. A warning the user cannot
                     // see is the same as no warning.
                     lock.lock()
+                    // In the history as well. `enriching` wrote nothing
+                    // here, so the footer sentence was the only channel —
+                    // and on the unattended run nobody is looking at the
+                    // footer, which is then replaced anyway.
+                    log.append(RenameLogEntry(
+                        oldName: "—", newName: "—", status: .skipped,
+                        errorDescription: Text.s(
+                            "Die Identifizierung hat nach "
+                                + "\(Self.identificationGiveUpAfter) erfolglosen "
+                                + "Versuchen aufgehört zu fragen. Die restlichen "
+                                + "Namen sind nur geparst, nicht nachgeschlagen.",
+                            "Identification stopped asking after "
+                                + "\(Self.identificationGiveUpAfter) replies that "
+                                + "said nothing. The remaining names are parsed "
+                                + "only, not looked up.")))
                     _identificationNote = Text.s(
                         "Die Erkennung antwortet nicht (\(failedInARow)× nichts) — "
                             + "der Rest des Laufs benutzt nur die Dateinamen.",
@@ -1795,12 +1810,21 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
     }
 
     /// The note `enriching` left, cleared as it is taken.
-    private func takeIdentificationNote() -> String {
-        lock.lock()
-        let note = _identificationNote
-        _identificationNote = nil
-        lock.unlock()
-        guard let note else { return "" }
+    /// The note `enriching` left, read without consuming it.
+    ///
+    /// It used to be taken here, which was enough for a scan the user asked
+    /// for and not for the unattended run: the scan appended it to
+    /// `lastResult`, and `applyRenames` then replaced that line wholesale
+    /// and set `hasError = false`. The run's own `notes` array exists for
+    /// exactly this hazard — its comment says a warning put in `lastResult`
+    /// first "vanishe[s] unread" — and was never given this note.
+    ///
+    /// Cleared by `endScan` when the outermost scan finishes, so the
+    /// scheduled run, which brackets its whole piece of work, can still read
+    /// it after the scan inside it has returned.
+    private func identificationNote() -> String {
+        lock.lock(); defer { lock.unlock() }
+        guard let note = _identificationNote else { return "" }
         return " " + note
     }
 
@@ -1874,6 +1898,12 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
     private func endScan() {
         lock.lock()
         _scanDepth = max(0, _scanDepth - 1)
+        if _scanDepth == 0 {
+            // Not when the inner scan returns: the scheduled run brackets
+            // the scan AND the rename, and it reads this note after the
+            // scan to put it in its own summary.
+            _identificationNote = nil
+        }
         if _scanDepth == 0, _queuedScans == 0, _queuedRenames == 0,
            !_renameRunning {
             _stopRequested = false
@@ -1998,8 +2028,11 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
                 $0.downloadDetail = nil
                 $0.lastResult = message
             }
-            // Straight into the ordinary pipeline.
-            scanSourceFolder()
+            // Straight into the ordinary pipeline — adding the file that
+            // arrived, not rescanning the folder. A rescan replaces the
+            // whole plan, so finishing a download threw away whatever else
+            // was in the list.
+            addFiles([file])
         } catch {
             lock.lock()
             _runningDownload = nil
@@ -2355,6 +2388,14 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
             }
         }
 
+        // Before the rename, which replaces `lastResult` and clears
+        // hasError: this is the hazard `notes` exists for.
+        let identification = identificationNote()
+        if !identification.isEmpty {
+            failedSomething = true
+            notes.append(identification.trimmingCharacters(in: .whitespaces))
+        }
+
         guard schedule.alsoRename else { return }
 
         // Without a library root the planner proposes a folder beside the
@@ -2475,7 +2516,16 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         // stop before the lines below can see it.
         beginScan()
         defer { endScan() }
-        scanSourceFolder()
+        // What appeared, added — not a rescan that replaces the plan.
+        //
+        // `scanSourceFolder` assigns `_items = plan` wholesale, so a poll
+        // every fifteen seconds threw away everything the user had dropped
+        // in from elsewhere and was working through. `addFiles` promises the
+        // opposite in its own comment — "a drop that cleared the list would
+        // lose the twenty proposals already being worked through" — and a
+        // watch poll did clear it. It also re-made every item with a fresh
+        // UUID, which is what made the window rebuild its rows.
+        addFiles(appeared)
         // Not over the top of the cancellation the scan has just reported:
         // "5 new files are waiting for you" would bury it, and this is the
         // path on which nobody is watching the window anyway.

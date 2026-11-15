@@ -161,6 +161,55 @@ final class SelectionSurvivalTests: XCTestCase {
         XCTAssertEqual(coordinator.snapshot.ready, 1)
     }
 
+    // MARK: A poll must not take the list away
+
+    /// `scanSourceFolder` assigns the whole plan, so a poll every fifteen
+    /// seconds threw away everything that had been dropped in from
+    /// elsewhere and was being worked through. `addFiles` promises the
+    /// opposite in its own comment — "a drop that cleared the list would
+    /// lose the twenty proposals already being worked through" — and a watch
+    /// poll did clear it.
+    func testAWatchPollKeepsWhatWasDroppedInFromElsewhere() throws {
+        var watching = configured()
+        watching.watchSourceFolder = true
+        coordinator.executeForTesting(.saveSettings(watching))
+
+        // Dropped from somewhere that is not the import folder.
+        let elsewhere = root.appendingPathComponent("elsewhere")
+        try fm.createDirectory(at: elsewhere, withIntermediateDirectories: true)
+        let dropped = elsewhere.appendingPathComponent("Dropped.2019.1080p.mkv")
+        try Data("x".utf8).write(to: dropped)
+        coordinator.executeForTesting(.addFiles([dropped]))
+        XCTAssertEqual(coordinator.items.count, 1)
+
+        // And now a file appears in the import folder and the timer fires.
+        try makeFile("Appeared.2020.1080p.mkv")
+        coordinator.pollWatchFolderForTesting()
+        coordinator.pollWatchFolderForTesting()
+
+        let names = coordinator.items.map(\.originalFileName).sorted()
+        XCTAssertEqual(names, ["Appeared.2020.1080p.mkv", "Dropped.2019.1080p.mkv"],
+                       "the poll replaced the list instead of adding to it")
+    }
+
+    /// And an exclusion made before the poll survives it, which is the half
+    /// the fresh UUIDs used to undo.
+    func testAnExclusionSurvivesAWatchPoll() throws {
+        var watching = configured()
+        watching.watchSourceFolder = true
+        coordinator.executeForTesting(.saveSettings(watching))
+        try makeFile("Alpha.2001.1080p.mkv")
+        coordinator.executeForTesting(.scanSourceFolder)
+        try untick("Alpha.2001.1080p.mkv")
+
+        try makeFile("Bravo.2002.1080p.mkv")
+        coordinator.pollWatchFolderForTesting()
+        coordinator.pollWatchFolderForTesting()
+
+        XCTAssertEqual(coordinator.items.count, 2)
+        XCTAssertEqual(excluded(), ["Alpha.2001.1080p.mkv"])
+    }
+
     // MARK: The list has a ceiling
 
     /// Nothing bounded the accumulated list. `FolderScan.maximumFiles` is a
