@@ -426,17 +426,34 @@ jobs:
           dropped="$(mktemp -d)"
           mkdir -p "$dropped/config" "$dropped/elsewhere"
           : > "$dropped/elsewhere/Dark.S01E01.GERMAN.1080p.WEB-DL.mkv"
-          # A release note beside it. Jellyfin reads *.nfo as its own
-          # metadata sidecar, so this one is deleted rather than carried
-          # into the library -- and the row has to SAY so before anybody
-          # presses Umbenennen, which is what is asserted below.
-          : > "$dropped/elsewhere/Dark.S01E01.GERMAN.1080p.WEB-DL.nfo"
+          # Two .nfo files, and the whole point is that they are different.
+          # The group's own note is ASCII art and gets deleted; Jellyfin's
+          # own sidecar carries the same extension, the same stem rule, and
+          # everything the user ever corrected by hand, and must be kept.
+          # An EMPTY .nfo used to stand here, which proved nothing at all
+          # about how the two are told apart.
+          printf '%s\n' \
+            '+===============================================+' \
+            '|  Source ..: WEB-DL      Video ..: x264        |' \
+            '|  Audio ...: DD5.1       Runtime : 51 min      |' \
+            '+===============================================+' \
+            > "$dropped/elsewhere/Dark.S01E01.GERMAN.1080p.WEB-DL.nfo"
+          mkdir -p "$dropped/library"
+          : > "$dropped/library/Dark - S01E02.mkv"
+          printf '%s\n' \
+            '<?xml version="1.0" encoding="utf-8" standalone="yes"?>' \
+            '<episodedetails>' \
+            '  <title>Luegen</title>' \
+            '  <plot>Corrected by hand. Not recoverable by undo.</plot>' \
+            '</episodedetails>' \
+            > "$dropped/library/Dark - S01E02.nfo"
           printf '{"identification":"offline","language":"en"}\n' \
             > "$dropped/config/settings.json"
           timeout 90 xvfb-run -a --server-args="-screen 0 1280x900x24" \
             env MEDIAFIN_CONFIG_DIR="$dropped/config" \
             .build/release/mediafin-gtk --drop \
-            "$dropped/elsewhere/Dark.S01E01.GERMAN.1080p.WEB-DL.mkv" 2>&1 \
+            "$dropped/elsewhere/Dark.S01E01.GERMAN.1080p.WEB-DL.mkv" \
+            "$dropped/library/Dark - S01E02.mkv" 2>&1 \
             | tee dropped.log
           grep -q "^mediafin: drop: 1 handed to the engine" dropped.log || {
             echo "FAIL: the drop never reached the engine"; exit 1; }
@@ -444,6 +461,31 @@ jobs:
           echo "proposals from the drop: ${got:-none}"
           test "${got:-0}" -ge 1 || {
             echo "FAIL: a dropped film produced no proposal"; exit 1; }
+          # Jellyfin's own sidecar, read off the row that says it stays.
+          # This is the assertion that would have caught the bug where
+          # tidying up an existing library destroyed its metadata: the
+          # extension was checked twice and the content never.
+          grep -q "^kept notes: 1" dropped.log || {
+            echo "FAIL: the row says nothing about the sidecar it keeps"
+            grep -E "^(kept notes|keeps|deletion notes|deletes):" dropped.log \
+              || echo "(no note lines at all)"
+            exit 1
+          }
+          grep -q "^keeps: .*Dark - S01E02.nfo" dropped.log || {
+            echo "FAIL: the kept note does not name Jellyfin's own sidecar"
+            grep "^keeps:" dropped.log || echo "(no keeps line)"
+            exit 1
+          }
+          # And it must not be on the deletion list under any wording.
+          if grep -q "^deletes: .*Dark - S01E02.nfo" dropped.log; then
+            echo "FAIL: Jellyfin's own metadata sidecar is planned for deletion"
+            grep -E "^(deletes|keeps):" dropped.log
+            exit 1
+          fi
+          # The file itself, not only the label: nothing has been pressed,
+          # so both .nfo files must still be there.
+          test -s "$dropped/library/Dark - S01E02.nfo" || {
+            echo "FAIL: the sidecar is gone from disk"; exit 1; }
           # The row has to say WHERE, absolutely. It used to read
           # "-> Dark/Season 01/…" and say nothing about the folder that sits
           # under, which is the difference between a library and burying the

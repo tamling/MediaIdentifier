@@ -117,6 +117,8 @@ final class AppWindow {
     /// The "will be deleted" label of each row that has one, so a test can
     /// read the warning off the widget rather than off the engine.
     private var rowDeletionNotes: [UnsafeMutablePointer<GtkWidget>] = []
+    /// The rows' "this one stays" labels, for the same reason.
+    private var rowKeptNotes: [UnsafeMutablePointer<GtkWidget>] = []
     /// The second line of the empty list, kept so what just happened can be
     /// said in the middle of the window rather than only in the footer.
     ///
@@ -858,6 +860,11 @@ final class AppWindow {
         rowDeletionNotes.map { String(cString: gtk_label_get_text(Gtk.label($0))) }
     }
 
+    /// What the rows say about the `.nfo` files they are leaving alone.
+    var keptNoteTexts: [String] {
+        rowKeptNotes.map { String(cString: gtk_label_get_text(Gtk.label($0))) }
+    }
+
     /// What the settings panel says about the last time Apply was pressed,
     /// read back off that label.
     var appliedText: String {
@@ -1263,6 +1270,7 @@ final class AppWindow {
         rowWidgets = []
         rowDestinations = []
         rowDeletionNotes = []
+        rowKeptNotes = []
         emptyDetail = nil
         rowChecks = []
 
@@ -1298,6 +1306,7 @@ final class AppWindow {
                 rowChecks.append((id: item.id, check: built.check))
                 rowDestinations.append(built.destination)
                 if let note = built.deletionNote { rowDeletionNotes.append(note) }
+                if let note = built.keptNote { rowKeptNotes.append(note) }
             }
         }
         // New widgets start hidden; the window was already shown.
@@ -1315,8 +1324,10 @@ final class AppWindow {
         -> (row: UnsafeMutablePointer<GtkWidget>,
             destination: UnsafeMutablePointer<GtkWidget>,
             check: UnsafeMutablePointer<GtkWidget>,
-            deletionNote: UnsafeMutablePointer<GtkWidget>?) {
+            deletionNote: UnsafeMutablePointer<GtkWidget>?,
+            keptNote: UnsafeMutablePointer<GtkWidget>?) {
         var deletionNote: UnsafeMutablePointer<GtkWidget>?
+        var keptNote: UnsafeMutablePointer<GtkWidget>?
         let row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10)!
         Styling.style(row, "mf-row")
         if banded { Styling.style(row, "mf-row-alt") }
@@ -1378,15 +1389,31 @@ final class AppWindow {
             let names = item.companionDeletions.map(\.lastPathComponent)
                 .joined(separator: ", ")
             let note = Self.label(
-                Text.s("Wird gelöscht: \(names) — Jellyfin würde die Datei als "
-                           + "eigene Metadaten lesen",
-                       "Will be deleted: \(names) — Jellyfin would read it as its "
-                           + "own metadata"),
+                Text.s("Wird gelöscht: \(names) — Infodatei der Release-Gruppe, "
+                           + "die Jellyfin für eigene Metadaten halten würde",
+                       "Will be deleted: \(names) — the release group's note, "
+                           + "which Jellyfin would mistake for its own metadata"),
                 classes: "mf-warn")
             gtk_label_set_ellipsize(Gtk.label(note), PANGO_ELLIPSIZE_END)
             gtk_widget_set_tooltip_text(note, names)
             gtk_box_pack_start(Gtk.box(text), note, 0, 0, 0)
             deletionNote = note
+        }
+
+        // The other half of the same sentence. Somebody who has just read
+        // that .nfo files get deleted is entitled to see, in the same row,
+        // that their own metadata is not one of them.
+        if !item.companionKeptNotes.isEmpty {
+            let names = item.companionKeptNotes.map(\.lastPathComponent)
+                .joined(separator: ", ")
+            let kept = Self.label(
+                Text.s("Bleibt liegen: \(names) — Jellyfins eigene Metadaten",
+                       "Stays where it is: \(names) — Jellyfin's own metadata"),
+                classes: "mf-dim")
+            gtk_label_set_ellipsize(Gtk.label(kept), PANGO_ELLIPSIZE_END)
+            gtk_widget_set_tooltip_text(kept, names)
+            gtk_box_pack_start(Gtk.box(text), kept, 0, 0, 0)
+            keptNote = kept
         }
 
         // The sample is not deleted and not moved, so the row says where it
@@ -1426,7 +1453,8 @@ final class AppWindow {
         Gtk.onClick(revealButton, self) { $0.reveal(folder) }
         gtk_box_pack_end(Gtk.box(row), revealButton, 0, 0, 0)
 
-        return (row, destination: to, check, deletionNote: deletionNote)
+        return (row, destination: to, check, deletionNote: deletionNote,
+                keptNote: keptNote)
     }
 
     /// Hands a folder to the desktop's file manager.

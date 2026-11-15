@@ -257,21 +257,43 @@ public final class RenameExecutor {
     /// This is the one call in the program that destroys a file, so the
     /// extension is verified again, a directory is refused outright, and a
     /// file that is already gone is not an error.
+    ///
+    /// And the file is read before it is destroyed. The extension says
+    /// nothing: Jellyfin's own metadata sidecar is also `*.nfo`, is also
+    /// named after the video, and holds every correction the user ever made
+    /// by hand. The planner has already asked the same question, so a
+    /// refusal here means the file changed between the preview and the
+    /// button — rare, and exactly why the question is asked twice.
     private func deleteReleaseNote(at url: URL) -> Bool {
         guard url.pathExtension.lowercased() == "nfo" else { return false }
         var isDirectory: ObjCBool = false
         guard fileManager.fileExists(atPath: url.path, isDirectory: &isDirectory)
         else { return false }
         guard !isDirectory.boolValue else { return false }
+        let kind = NfoContent.kind(of: url)
+        guard kind == .releaseNote else {
+            log.append(RenameLogEntry(
+                oldName: url.lastPathComponent, newName: "—", status: .skipped,
+                errorDescription: kind == .metadataSidecar
+                    ? Text.s(
+                        "Nicht gelöscht: das ist Jellyfins eigene Metadatendatei, "
+                            + "keine Infodatei der Release-Gruppe.",
+                        "Not deleted: this is Jellyfin's own metadata file, not a "
+                            + "release group's note.")
+                    : Text.s(
+                        "Nicht gelöscht: Datei ist leer oder nicht lesbar.",
+                        "Not deleted: the file is empty or could not be read.")))
+            return false
+        }
         do {
             try fileManager.removeItem(at: url)
             log.append(RenameLogEntry(
                 oldName: url.lastPathComponent, newName: "—", status: .deleted,
                 errorDescription: Text.s(
-                    "Release-Infodatei gelöscht — Jellyfin würde sie als eigene "
-                        + "Metadaten lesen.",
-                    "Release note deleted — Jellyfin would read it as its own "
-                        + "metadata.")))
+                    "Infodatei der Release-Gruppe gelöscht — Jellyfin würde sie "
+                        + "als eigene Metadaten lesen und daran scheitern.",
+                    "Release group's note deleted — Jellyfin would read it as its "
+                        + "own metadata and fail on it.")))
             return true
         } catch {
             log.append(RenameLogEntry(

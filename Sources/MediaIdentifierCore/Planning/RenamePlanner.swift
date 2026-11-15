@@ -42,7 +42,9 @@ public struct RenamePlanner {
             for: item.mediaFile,
             primaryDestination: item.primaryDestination
         )
-        updated.companionDeletions = Self.companionDeletions(for: item.mediaFile)
+        let notes = Self.companionNotes(for: item.mediaFile)
+        updated.companionDeletions = notes.delete
+        updated.companionKeptNotes = notes.keep
         // Refresh the on-disk conflict state for the edited destination. Batch
         // duplicate detection is left to `makePlan`.
         let primaryPath = updated.primaryDestination.standardizedFileURL.path
@@ -80,14 +82,15 @@ public struct RenamePlanner {
         let relativePath = namer.relativePath(for: mediaFile.parsed, fileExtension: ext)
         let primaryDestination = root.appendingPathComponent(relativePath)
         let companions = companionMoves(for: mediaFile, primaryDestination: primaryDestination)
-        let deletions = Self.companionDeletions(for: mediaFile)
+        let notes = Self.companionNotes(for: mediaFile)
 
         return RenameItem(
             mediaFile: mediaFile,
             outputRoot: root,
             proposedRelativePath: relativePath,
             companionMoves: companions,
-            companionDeletions: deletions
+            companionDeletions: notes.delete,
+            companionKeptNotes: notes.keep
         )
     }
 
@@ -128,16 +131,29 @@ public struct RenamePlanner {
         }
     }
 
-    /// The companions that are deleted instead of moved.
+    /// Splits the `.nfo` companions into the ones that are deleted instead
+    /// of moved, and the ones that are deliberately left where they are.
     ///
-    /// Only `.nfo`, and the extension is checked again here rather than
-    /// trusted from the role: this list is what the executor deletes, and a
-    /// mistake in the scanner's role table must not be able to reach
-    /// `removeItem` with a video in it.
-    static func companionDeletions(for mediaFile: MediaFile) -> [URL] {
-        mediaFile.companions
-            .filter { $0.role == .nfo && $0.url.pathExtension.lowercased() == "nfo" }
-            .map(\.url)
+    /// The extension is tested here rather than the scanner's role, so a
+    /// mistake in the role table cannot reach `removeItem` with a video in
+    /// it; and then the *content* decides, because the extension alone
+    /// cannot tell a group's ASCII art from Jellyfin's own metadata. The
+    /// executor asks again at the point of deletion — this answer is what
+    /// the preview promises, and a promise is not a permission.
+    static func companionNotes(for mediaFile: MediaFile)
+        -> (delete: [URL], keep: [URL]) {
+        var delete: [URL] = []
+        var keep: [URL] = []
+        for companion in mediaFile.companions
+        where companion.url.pathExtension.lowercased() == "nfo" {
+            switch NfoContent.kind(of: companion.url) {
+            case .releaseNote:
+                delete.append(companion.url)
+            case .metadataSidecar, .undecidable:
+                keep.append(companion.url)
+            }
+        }
+        return (delete, keep)
     }
 
     // MARK: Conflict detection (FR11)

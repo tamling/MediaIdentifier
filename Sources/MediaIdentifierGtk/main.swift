@@ -275,6 +275,13 @@ case .pressScan:
             for note in mainWindow.deletionTexts {
                 print("deletes: \(note)")
             }
+            // Printed beside the deletions, because the assertion that
+            // matters is about the pair: the group's note goes, Jellyfin's
+            // own metadata stays, and the row says both.
+            print("kept notes: \(mainWindow.keptNoteTexts.count)")
+            for note in mainWindow.keptNoteTexts {
+                print("keeps: \(note)")
+            }
             if status.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 Pending.failure = "pressing Scan left the window saying nothing"
             }
@@ -308,6 +315,13 @@ case let .drop(paths):
             print("deletion notes: \(mainWindow.deletionTexts.count)")
             for note in mainWindow.deletionTexts {
                 print("deletes: \(note)")
+            }
+            // Printed beside the deletions, because the assertion that
+            // matters is about the pair: the group's note goes, Jellyfin's
+            // own metadata stays, and the row says both.
+            print("kept notes: \(mainWindow.keptNoteTexts.count)")
+            for note in mainWindow.keptNoteTexts {
+                print("keeps: \(note)")
             }
             print("status: \(mainWindow.statusText)")
             if coordinator.items.isEmpty {

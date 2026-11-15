@@ -83,6 +83,14 @@ public struct RenameItem: Identifiable, Equatable, Sendable {
     /// deletes a file it never mentioned is the program that gets accused of
     /// sending files into the void, and rightly.
     public var companionDeletions: [URL]
+    /// The `.nfo` files beside this video that are deliberately left alone.
+    ///
+    /// The same extension carries two unrelated things, and only the content
+    /// says which (see `NfoContent`). Named rather than silently skipped, for
+    /// the same reason the deletions are named: somebody who has just read
+    /// that release notes get deleted wants to see that their own metadata
+    /// is not among them.
+    public var companionKeptNotes: [URL]
     /// Whether the user has accepted this change (FR9). Defaults to true.
     public var isAccepted: Bool
     /// Conflict detected for the primary destination, if any.
@@ -95,6 +103,7 @@ public struct RenameItem: Identifiable, Equatable, Sendable {
         proposedRelativePath: String,
         companionMoves: [PlannedMove] = [],
         companionDeletions: [URL] = [],
+        companionKeptNotes: [URL] = [],
         isAccepted: Bool = true,
         conflict: ConflictKind? = nil
     ) {
@@ -105,6 +114,7 @@ public struct RenameItem: Identifiable, Equatable, Sendable {
             JellyfinNamer.sanitizeRelativePath(proposedRelativePath)
         self.companionMoves = companionMoves
         self.companionDeletions = companionDeletions
+        self.companionKeptNotes = companionKeptNotes
         self.isAccepted = isAccepted
         self.conflict = conflict
     }
