@@ -90,6 +90,10 @@ final class AppWindow {
     /// The rows of the conversion list, and which candidate each belongs to.
     private var convertRows: [(id: UUID, check: UnsafeMutablePointer<GtkWidget>)] = []
     private var convertRowWidgets: [UnsafeMutablePointer<GtkWidget>] = []
+    /// The list's own sentences — the empty state, and the line about rows
+    /// past the drawing limit — kept apart from the rows so they can be read
+    /// back as text. See `convertListTexts`.
+    private var convertNotes: [UnsafeMutablePointer<GtkWidget>] = []
     /// Which files the user has taken *out* of the run, by path.
     ///
     /// Held here and not only in the widgets, for the reason the proposals
@@ -107,7 +111,14 @@ final class AppWindow {
     /// boxes to convert 39 is the wrong way round.
     private var convertExcludedPaths: Set<String> = []
     /// The candidate ids the list is currently drawn from.
-    private var renderedConvertIDs: [UUID] = []
+    ///
+    /// Optional, like `renderedItemIDs`, and for a reason the first version
+    /// of this got wrong: with `[]` as the starting value, the first
+    /// refresh of an empty list compares `[] != []`, decides nothing has
+    /// changed and returns — so the panel opened with a blank black box and
+    /// no "Noch nichts gesucht" in it. nil cannot equal any real list, so
+    /// the first draw always happens.
+    private var renderedConvertIDs: [UUID]?
     /// Settings, status and fetching live in windows of their own, opened from
     /// the header's menu.
     ///
@@ -688,10 +699,11 @@ final class AppWindow {
         Styling.style(saveButton, "suggested-action")
         gtk_box_pack_start(Gtk.box(saveRow), savedLabel, 1, 1, 0)
         gtk_box_pack_end(Gtk.box(saveRow), saveButton, 0, 0, 0)
-        gtk_box_pack_end(Gtk.box(settingsPage), saveRow, 0, 0, 0)
+        gtk_container_set_border_width(Gtk.container(saveRow), 12)
 
         settingsDialog = Self.panel(Text.s("Einstellungen", "Settings"),
-                                    holding: settingsPage, over: window)
+                                    holding: settingsPage, over: window,
+                                    footer: saveRow)
         statusDialog = Self.panel(Text.s("Status", "Status"),
                                   holding: statusPage, over: window)
         fetchDialog = Self.panel(Text.s("Aus dem Netz laden", "Fetch from a link"),
@@ -1011,9 +1023,17 @@ final class AppWindow {
     /// every read and fill in this file points at those entries. A closed
     /// panel that can be opened again with its text still in it is also what
     /// a person expects.
+    /// - Parameter footer: a row pinned to the bottom edge, outside the
+    ///   scrolling area. The settings panel's Apply button lives there: it
+    ///   used to be packed at the end of the scrolling content, which was
+    ///   fine with four sections and stopped being fine at six — the button
+    ///   that saves everything sat just below the fold, and a settings
+    ///   dialogue whose Apply has to be scrolled to is one people believe
+    ///   has no Apply.
     private static func panel(_ title: String,
                               holding content: UnsafeMutablePointer<GtkWidget>,
-                              over parent: UnsafeMutablePointer<GtkWidget>)
+                              over parent: UnsafeMutablePointer<GtkWidget>,
+                              footer: UnsafeMutablePointer<GtkWidget>? = nil)
         -> UnsafeMutablePointer<GtkWidget> {
         let panel = gtk_window_new(GTK_WINDOW_TOPLEVEL)!
         gtk_window_set_title(Gtk.window(panel), title)
@@ -1030,7 +1050,14 @@ final class AppWindow {
         gtk_scrolled_window_set_policy(Gtk.scrolledWindow(scroller),
                                        GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC)
         gtk_container_add(Gtk.container(scroller), content)
-        gtk_container_add(Gtk.container(panel), scroller)
+        if let footer {
+            let shell = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0)!
+            gtk_box_pack_start(Gtk.box(shell), scroller, 1, 1, 0)
+            gtk_box_pack_start(Gtk.box(shell), footer, 0, 0, 0)
+            gtk_container_add(Gtk.container(panel), shell)
+        } else {
+            gtk_container_add(Gtk.container(panel), scroller)
+        }
         // Closing hides it. Without this the window is destroyed and every
         // widget this file holds a pointer to goes with it.
         let onDelete: @convention(c) (UnsafeMutablePointer<GtkWidget>?,
@@ -1220,6 +1247,26 @@ final class AppWindow {
     /// Opens the conversion panel, as the menu does.
     func openConverting() { open(convertDialog) }
 
+    /// Opens one of the panels by name and hands it back, so `--screenshot`
+    /// can render it.
+    ///
+    /// Most of this window's surface now lives behind the menu — settings,
+    /// status, fetching, converting — and the only picture anything ever
+    /// took was of the main window. A panel that came up blank, clipped or
+    /// half-built would have been invisible to every check in CI.
+    func panelNamed(_ name: String) -> UnsafeMutablePointer<GtkWidget>? {
+        let panel: UnsafeMutablePointer<GtkWidget>
+        switch name {
+        case "settings": panel = settingsDialog
+        case "status": panel = statusDialog
+        case "fetch": panel = fetchDialog
+        case "convert": panel = convertDialog
+        default: return nil
+        }
+        open(panel)
+        return panel
+    }
+
     /// Presses "Leeren" in the history column.
     ///
     /// Blocks until the confirmation is answered, so a smoke mode has to
@@ -1241,6 +1288,19 @@ final class AppWindow {
     /// The line beside Suchen, read off the label.
     var convertCountText: String {
         String(cString: gtk_label_get_text(Gtk.label(convertCountLabel)))
+    }
+
+    /// What the conversion list is showing, read off its own labels.
+    ///
+    /// Read as text and not as a row count because the fault worth catching
+    /// is the empty list saying nothing at all: the panel shipped with its
+    /// first refresh comparing an empty id list against an empty id list,
+    /// deciding nothing had changed, and never building the empty state. It
+    /// looked exactly like a working panel with no files in it, and the
+    /// byte size of a screenshot cannot tell one missing sentence from a
+    /// short one.
+    var convertListTexts: [String] {
+        convertNotes.map { String(cString: gtk_label_get_text(Gtk.label($0))) }
     }
 
     /// What the progress bar says, read off the bar.
@@ -1575,6 +1635,7 @@ final class AppWindow {
         defer { isSeedingRows = false }
         for row in convertRowWidgets { gtk_widget_destroy(row) }
         convertRowWidgets = []
+        convertNotes = []
         convertRows = []
 
         if candidates.isEmpty {
@@ -1585,6 +1646,7 @@ final class AppWindow {
             gtk_label_set_xalign(Gtk.label(empty), 0.5)
             gtk_box_pack_start(Gtk.box(convertListColumn), empty, 0, 0, 0)
             convertRowWidgets = [empty]
+            convertNotes = [empty]
         } else {
             for (index, candidate) in candidates.prefix(Self.visibleProposals)
                 .enumerated() {
@@ -1633,6 +1695,7 @@ final class AppWindow {
                 gtk_label_set_line_wrap(Gtk.label(more), 1)
                 gtk_box_pack_start(Gtk.box(convertListColumn), more, 0, 0, 0)
                 convertRowWidgets.append(more)
+                convertNotes.append(more)
             }
         }
         gtk_widget_show_all(convertListColumn)

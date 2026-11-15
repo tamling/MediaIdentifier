@@ -76,6 +76,8 @@ private enum Mode {
 
 private struct Options {
     var mode = Mode.interactive
+    /// Which panel `--screenshot` should render instead of the main window.
+    var panel: String?
     /// Point the engine at a throwaway library of plausible files and scan it
     /// before doing anything else.
     var demo = false
@@ -91,6 +93,9 @@ private func usage() -> String {
 
       mediafin-gtk                     open the window
       mediafin-gtk --screenshot FILE   render the window to FILE (PNG) and exit
+      mediafin-gtk --panel NAME        with --screenshot, render that panel
+                                       instead: settings, status, fetch or
+                                       convert
       mediafin-gtk --demo              work on a throwaway library of made-up
                                        files instead of your own settings
       mediafin-gtk --delay MS          how long to let the window settle
@@ -163,6 +168,14 @@ private func parse(_ arguments: [String]) -> Options {
             guard !rest.isEmpty else { fail("--drop needs at least one path", code: 64) }
             options.mode = .drop(paths: rest)
             index = arguments.endIndex
+        case "--panel":
+            let next = arguments.index(after: index)
+            guard next < arguments.endIndex else {
+                fail("--panel needs a name: settings, status, fetch or convert",
+                     code: 64)
+            }
+            options.panel = arguments[next]
+            index = next
         case "--screenshot":
             let next = arguments.index(after: index)
             guard next < arguments.endIndex else {
@@ -365,7 +378,16 @@ case .pressConvert:
     // own queue, and FFmpeg takes as long as it takes.
     let look: @convention(c) (UnsafeMutableRawPointer?) -> gboolean = { _ in
         mainWindow.openConverting()
+        mainWindow.refresh()
         print("convert bar before: \(mainWindow.convertBarText)")
+        // Before anything is searched for, the list has to SAY it has not
+        // searched yet. It shipped drawing nothing at all: the first
+        // refresh compared an empty id list against an empty id list,
+        // decided nothing had changed and never built the empty state, so
+        // the panel looked like a working one with no files in it.
+        for line in mainWindow.convertListTexts {
+            print("convert list before: \(line)")
+        }
         // Stopp first, while nothing is running. The engine deliberately
         // refuses to arm its cancel flag with no run to apply it to --
         // "otherwise a stray press while idle would sit there and stop the
@@ -660,6 +682,15 @@ case .pressApply:
 
 case let .screenshot(path):
     Pending.screenshotPath = path
+    if let name = options.panel {
+        guard let panel = mainWindow.panelNamed(name) else {
+            fail("unknown panel \(name): try settings, status, fetch or convert",
+                 code: 64)
+        }
+        // The panel is its own toplevel, so the capture is pointed at it
+        // rather than at the window behind it.
+        Pending.window = panel
+    }
     // One pass through the main loop is not enough: GTK allocates sizes and
     // paints asynchronously after the window is shown, and drawing too early
     // yields a 1x1 widget. A single timeout lets that settle, and the

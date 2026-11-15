@@ -359,6 +359,40 @@ jobs:
             echo "late capture (3000 ms): $late bytes — this now renders."
             echo "  The early-capture workaround in main.swift may be removable."
           fi
+
+          # The panels, which is where most of this window now lives:
+          # settings, status, fetching and converting are all behind the
+          # menu, and until now the only picture anything ever took was of
+          # the main surface.
+          #
+          # What this catches is a panel that draws nothing — clipped,
+          # unbuilt, or blank. It would NOT have caught the bug that
+          # prompted it: the conversion list shipped without its empty
+          # state, and one missing sentence is 16.7 kB against 19.3 kB,
+          # nowhere near any floor one could set. That one is asserted as
+          # text, in the --press-convert step below. Both are needed and
+          # neither replaces the other.
+          for panel in settings status fetch convert; do
+            timeout 60 xvfb-run -a --server-args="-screen 0 1280x900x24" \
+              .build/release/mediafin-gtk --demo --panel "$panel" \
+              --screenshot "panel-$panel.png" --delay 900 > /dev/null
+            file "panel-$panel.png" \
+              | grep -qE 'PNG image data, [0-9]{3,} x [0-9]{3,}' || {
+              echo "FAIL: the $panel panel rendered at no size at all"
+              file "panel-$panel.png" || true
+              exit 1
+            }
+            size="$(stat -c %s "panel-$panel.png")"
+            echo "$panel panel: $size bytes"
+            # Lower than the main window's floor, because a panel is smaller
+            # and plainer — but a panel drawing nothing but its background
+            # comes out under 5 kB, and every one of these is over 15 kB when
+            # it draws its contents.
+            test "$size" -gt 8000 || {
+              echo "FAIL: the $panel panel rendered blank or nearly so"
+              exit 1
+            }
+          done
       # The window's buttons, pressed for real.
       #
       # Everything above renders a picture: it proves the window draws, and it
@@ -732,6 +766,17 @@ jobs:
 
           grep -q "^pressed stop while idle: yes" convert.log || {
             echo "FAIL: the Stopp button was never pressed"; exit 1; }
+          # Before anything is searched for, the list has to say so. It
+          # shipped drawing nothing at all — the first refresh compared an
+          # empty id list against an empty id list, decided nothing had
+          # changed, and never built the empty state — so the panel looked
+          # like a working one that had found no files.
+          grep -q "^convert list before:" convert.log || {
+            echo "FAIL: the conversion list said nothing before the search."
+            echo "      An empty list with no sentence in it reads as a "
+            echo "      finished search that found nothing."
+            exit 1
+          }
           found="$(sed -n 's/^convertible found: \([0-9]*\)$/\1/p' convert.log)"
           test "${found:-0}" -eq 2 || {
             echo "FAIL: Suchen found ${found:-0} files, expected 2"; exit 1; }
@@ -1296,6 +1341,10 @@ jobs:
             window.png
             window-1024x600.png
             window-1024x420.png
+            panel-settings.png
+            panel-status.png
+            panel-fetch.png
+            panel-convert.png
           if-no-files-found: warn
       - name: Refuse to hang without a display
         shell: bash
