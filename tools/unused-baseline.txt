@@ -1,0 +1,38 @@
+# Declarations that exist in the program and are used only by tests.
+#
+# Each line is a debt, not a decision. They were found when
+# tools/check-unused.py was written, and most are remnants of the web
+# front-end that was removed: a page used to call them, the page is gone, and
+# the tests that pinned their behaviour kept them alive.
+#
+# The script fails on anything NOT in this list, which is what it is for: the
+# recurring fault in this project is a new defence with no caller. Taking a
+# line out of this file -- by deleting the declaration and its tests, or by
+# giving it a caller -- is a small change each time, and the right one.
+#
+# One name per line.
+
+# Removed web front-end: these built strings for a page that no longer exists.
+detectedTitle
+estimatedSizePercent
+formField
+heightLabel
+isWorking
+newFileName
+offeredHeights
+readableSize
+seasonEpisodeDescription
+
+# The file-type table's smaller helpers. Their tests pin the table, which is
+# worth keeping; the helpers themselves have no reader.
+isImage
+isSubtitle
+
+# Accessors that exist for the tests but are not named *ForTesting.
+isWatching
+pendingWorkCount
+stopButtonIsOnTheMainSurface
+cachedFacts
+
+# The converter's quality suggestion, which the window does not offer yet.
+suggestedQuality

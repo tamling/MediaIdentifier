@@ -612,12 +612,17 @@ final class AppWindow {
     /// fails silently for a path that no longer exists, so an unmounted drive
     /// would otherwise wipe the stored library path on the next save.
     func saveFolders() {
-        var settings = FolderSelection.applying(
+        let stored = FolderSelection.applying(
             source: Gtk.chosenFolder(sourceChooser),
             movies: Gtk.chosenFolder(moviesChooser),
             series: Gtk.chosenFolder(seriesChooser),
             to: coordinator.settings
         )
+        // Built from the widgets, then merged against what the widgets were
+        // filled with: only the fields the user really changed are written.
+        // See SettingsMerge — and the comment on `loadedSettings`, which has
+        // described this since before it was true.
+        var settings = stored
 
         // Text boxes are taken at face value, unlike the folder choosers: an
         // empty box means the user emptied it, while an empty chooser may
@@ -650,7 +655,12 @@ final class AppWindow {
             settings.libraryMode = LibraryMode.allCases[library]
         }
         settings.schedule = readScheduleFields(from: settings.schedule)
+        settings = SettingsMerge.applying(typed: settings, loaded: loadedSettings,
+                                          to: stored)
         coordinator.submit(.saveSettings(settings))
+        // So a second Apply does not re-apply what this one just wrote over
+        // somebody else's newer value.
+        loadedSettings = settings
 
         // With the time of day, and said next to the button that was just
         // pressed. "Saved." appearing where "Saved." already was is
@@ -982,7 +992,10 @@ final class AppWindow {
         let stored = coordinator.configuredSecrets.contains(.localLLMAPIKey)
         gtk_entry_set_placeholder_text(
             Gtk.entry(llmKeyEntry),
-            stored ? "gespeichert — zum Ersetzen neu eingeben" : "keiner hinterlegt"
+            stored
+                ? Text.s("gespeichert — zum Ersetzen neu eingeben",
+                         "stored — type a new one to replace it")
+                : Text.s("keiner hinterlegt", "none stored")
         )
 
         let schedule = settings.schedule

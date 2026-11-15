@@ -28,6 +28,12 @@ jobs:
           # Pango markup is XML and the text going into it is filenames. One
           # place may produce it, and that place escapes.
           ./tools/check-markup.sh
+          # And the fault this project keeps repeating: a defence with a
+          # careful name, a careful comment, three passing tests and no
+          # caller anywhere in the program. It has happened with path
+          # sanitising, with every settings rule, with the history's flush
+          # and with its write-failure field. A new one fails the build now.
+          python3 tools/check-unused.py
 
   test:
     name: Core tests
