@@ -330,7 +330,21 @@ jobs:
         with:
           script: |
             const fs = require('fs')
-            const names = ['mediafin-linux-x86_64.deb', 'mediafin-linux-x86_64.tar.gz']
+            // The platform sits NEXT to the package that carries it, and the
+            // release's title is built from the ones that really went up.
+            //
+            // It read "Latest build (macOS universal + Linux x86_64)" for
+            // months after the macOS app was dropped -- the step below even
+            // removes its leftover asset -- because the title was written
+            // once by hand and the uploads moved on without it. Anyone
+            // landing on the release page was told about a macOS build that
+            // was not there. Derived, it cannot say more than was uploaded.
+            const packages = [
+              { name: 'mediafin-linux-x86_64.deb', platform: 'Linux x86_64' },
+              { name: 'mediafin-linux-x86_64.tar.gz', platform: 'Linux x86_64' },
+            ]
+            const names = packages.map(p => p.name)
+            const uploaded = []
             const release = await github.rest.repos.getReleaseByTag(
               { ...context.repo, tag: 'latest' })
             for (const name of names) {
@@ -351,6 +365,7 @@ jobs:
                   data: fs.readFileSync(name),
                 })
                 core.info(`uploaded ${name}`)
+                uploaded.push(name)
               } catch (error) {
                 core.setFailed(
                   `could not put ${name} on the release: ${error.message}. ` +
@@ -359,4 +374,21 @@ jobs:
                   'Workflow permissions set to "Read and write permissions". ' +
                   'The package is on this run as an artefact either way.')
               }
+            }
+
+            // Last, and only when every package landed.
+            //
+            // A partial run is already red through setFailed above, and the
+            // title is then left exactly as it was: an upload can fail
+            // AFTER its delete or BEFORE it, so this run cannot tell from
+            // here whether the old asset is still on the release. Renaming
+            // on a failed run would be guessing, and guessing at the title
+            // is how it came to claim a macOS build that was not there.
+            const platforms = [...new Set(packages.map(p => p.platform))]
+            const title = `Latest build (${platforms.join(' + ')})`
+            if (uploaded.length === packages.length
+                && release.data.name !== title) {
+              await github.rest.repos.updateRelease(
+                { ...context.repo, release_id: release.data.id, name: title })
+              core.info(`renamed the release: ${release.data.name} -> ${title}`)
             }
