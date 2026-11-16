@@ -1,8 +1,0 @@
-proposals: 1
-history before: 1
-undo steps before: 1
-history after cancel: 1
-undo steps after cancel: 1
-history after confirm: 0
-undo steps after: 0
-status: Verlauf geleert. 1 Rückgängig-Schritt ist weg.

@@ -1,2 +1,0 @@
-mediafin-gtk: no display available (is DISPLAY or WAYLAND_DISPLAY set?).
-On a headless machine: xvfb-run -a mediafin-gtk --screenshot out.png

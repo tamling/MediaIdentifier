@@ -31,3 +31,13 @@ window.png
 # Python bytecode from the checks in tools/.
 __pycache__/
 *.pyc
+
+# Artefacts the CI steps write into the working copy.
+#
+# tools/replay-ci-step.py runs those steps HERE, and they drop their logs
+# and screenshots in the repository root exactly as they do on a runner.
+# Eighteen of them were committed by a careless `git add -A` and sat there
+# for three commits: build output, checked in, read by nothing. Ignored at
+# the root only, so docs/logo.png and packaging/icons/** stay tracked.
+/*.log
+/*.png
