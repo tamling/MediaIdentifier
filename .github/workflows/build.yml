@@ -1712,6 +1712,76 @@ jobs:
             panel-fetch.png
             panel-convert.png
           if-no-files-found: warn
+      - name: Refuse to touch a real library
+        shell: bash
+        run: |
+          # The guard on the three modes that move or re-encode real files,
+          # pressed -- which nothing did.
+          #
+          # Every one of the twenty mediafin-gtk invocations in this file
+          # sets MEDIAFIN_CONFIG_DIR or passes --demo, so the refusal itself
+          # had no check and was never run. Its whole test was "the variable
+          # is a non-empty string", and MEDIAFIN_CONFIG_DIR is the
+          # DOCUMENTED, first-precedence way to relocate a real Mediafin
+          # configuration -- so the supported way to point these modes at a
+          # real library satisfied the guard that exists to stop exactly
+          # that. --press-clear-history would have scanned it, renamed
+          # everything a scan proposed and then destroyed the undo journal.
+          # "A guard nothing presses is a guard somebody deletes."
+          set -uo pipefail
+          home="$(mktemp -d)"
+          mkdir -p "$home/.config/mediafin"
+          ln -s "$home/.config/mediafin" "$home/link-to-real"
+          fails=0
+          # `env` wants every -u BEFORE the NAME=VALUE assignments. The
+          # other way round it reads "-u" as the command to run and exits
+          # 127 -- which is not 64 either, so a refusal check written that
+          # way passes while testing nothing. (It did, in the first draft of
+          # this step.)
+          refuse() {
+            local label="$1"; shift
+            local code=0
+            timeout 20 env -u XDG_CONFIG_HOME "$@" HOME="$home" \
+              .build/release/mediafin-gtk --press-clear-history \
+              > refusal.log 2>&1 || code=$?
+            if [ "$code" != 64 ]; then
+              echo "FAIL: $label was not refused (exit $code)"
+              sed -n '1,3p' refusal.log
+              fails=1
+            else
+              echo "ok   : $label refused"
+            fi
+          }
+          refuse "an unset MEDIAFIN_CONFIG_DIR" -u MEDIAFIN_CONFIG_DIR
+          refuse "the real configuration directory" \
+            MEDIAFIN_CONFIG_DIR="$home/.config/mediafin"
+          refuse "a symlink to the real configuration directory" \
+            MEDIAFIN_CONFIG_DIR="$home/link-to-real"
+          refuse "a relative path" MEDIAFIN_CONFIG_DIR=.
+          refuse "a path with a trailing dot segment" \
+            MEDIAFIN_CONFIG_DIR="$home/.config/mediafin/."
+          # And the other direction, or a guard that refuses everything
+          # would pass all of the above: a throwaway directory has to get
+          # through. Exactly 2, not merely "not 64": every way of failing to
+          # start the binary at all is also not 64, so "not 64" would be a
+          # check that cannot fail. 2 is the no-display exit, which the
+          # program only reaches after the guard has let it past.
+          code=0
+          timeout 20 env -u XDG_CONFIG_HOME -u DISPLAY -u WAYLAND_DISPLAY \
+            MEDIAFIN_CONFIG_DIR="$home/throwaway" HOME="$home" \
+            .build/release/mediafin-gtk --press-clear-history \
+            > allowed.log 2>&1 || code=$?
+          if [ "$code" != 2 ]; then
+            echo "FAIL: a throwaway directory did not get past the guard to "
+            echo "      the no-display exit; got $code"
+            sed -n '1,3p' allowed.log
+            fails=1
+          else
+            echo "ok   : a throwaway directory gets through to gtk_init"
+          fi
+          rm -rf "$home"
+          exit $fails
+
       - name: Refuse to hang without a display
         shell: bash
         run: |

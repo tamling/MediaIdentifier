@@ -304,11 +304,39 @@ private func describeConversion(_ c: WebConversionSettings) -> String {
 
 private func refuseARealLibrary(_ flag: String, doing what: String) {
     if options.demo { return }
-    let chosen = ProcessInfo.processInfo.environment["MEDIAFIN_CONFIG_DIR"] ?? ""
-    guard chosen.trimmingCharacters(in: .whitespaces).isEmpty else { return }
-    fail(flag + " " + what + ". Point it at a throwaway library first: "
-            + "set MEDIAFIN_CONFIG_DIR to a directory you do not mind "
-            + "losing, or add --demo.", code: 64)
+    var environment = ProcessInfo.processInfo.environment
+    let chosen = (environment["MEDIAFIN_CONFIG_DIR"] ?? "")
+        .trimmingCharacters(in: .whitespaces)
+
+    func refuse(_ why: String) -> Never {
+        fail(flag + " " + what + ". " + why
+                + " Point it at a throwaway library first: set "
+                + "MEDIAFIN_CONFIG_DIR to a directory you do not mind "
+                + "losing, or add --demo.", code: 64)
+    }
+
+    guard !chosen.isEmpty else { refuse("MEDIAFIN_CONFIG_DIR is not set.") }
+    // So `.` cannot aim a file-moving mode at whatever directory the shell
+    // happens to be in.
+    guard chosen.hasPrefix("/") else {
+        refuse("MEDIAFIN_CONFIG_DIR is not an absolute path (\(chosen)).")
+    }
+    // "The variable is set" was the whole test, and it is not a test at all:
+    // `MEDIAFIN_CONFIG_DIR` is the DOCUMENTED, first-precedence way to
+    // relocate a real Mediafin configuration (`MediafinPaths` takes it ahead
+    // of XDG and Application Support, and says so). So the supported way to
+    // point these modes at a real library satisfied the guard that exists to
+    // stop exactly that, and --press-clear-history would scan it, rename
+    // everything and then destroy the undo journal.
+    environment["MEDIAFIN_CONFIG_DIR"] = nil
+    let real = MediafinPaths.configDirectory(environment: environment)
+        .standardizedFileURL.resolvingSymlinksInPath()
+    let picked = URL(fileURLWithPath: chosen, isDirectory: true)
+        .standardizedFileURL.resolvingSymlinksInPath()
+    guard picked.path != real.path else {
+        refuse("MEDIAFIN_CONFIG_DIR points at the configuration directory "
+                   + "the program would have used anyway (\(real.path)).")
+    }
 }
 
 private let coordinator = AppCoordinator(configDirectory: configDirectory)
