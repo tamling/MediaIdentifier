@@ -39,15 +39,6 @@ enum Styling {
           color: @mf_text;
         }
 
-        /* The line around the window, in the brand's red.
-           On a desk of grey windows this is what the eye finds first, and
-           it costs three pixels. Panels get it too, because a settings
-           panel that has drifted behind the main window is the thing
-           people hunt for. */
-        window {
-          border: 3px solid @mf_accent;
-        }
-
         /* Flat, no gradient: the gradient is what makes a GTK3 window look
            like it was built a decade ago. */
         headerbar {

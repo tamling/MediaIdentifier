@@ -83,8 +83,8 @@ final class PaletteTests: XCTestCase {
     }
 
     /// And the accent has to be visible ON the window, not only under its
-    /// own text: it is the line around the window and the fill of the
-    /// primary button.
+    /// own text: it is the fill of the primary button, sitting on a dark
+    /// surface.
     func testTheAccentStandsOutFromTheBackground() {
         XCTAssertGreaterThan(contrast(Palette.accent, Palette.background), 3,
                              "the accent does not separate from the window "

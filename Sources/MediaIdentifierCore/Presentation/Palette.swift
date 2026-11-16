@@ -41,7 +41,7 @@ public enum Palette {
     /// Failed.
     public static let error = "#e05a4f"
 
-    /// The brand: the primary action, and the line around the window.
+    /// The brand: the primary action.
     ///
     /// Separate from `ok`, which it used to be. One colour cannot be both
     /// "this is the button you want" and "nothing is wrong": the three
@@ -49,6 +49,10 @@ public enum Palette {
     /// green is also the accent has no spare meaning left. Keeping them
     /// apart is what lets the accent be red at all — beside an `error` that
     /// is also red, a red *success* would be unreadable.
+    ///
+    /// It was briefly a line round the whole window as well. That was too
+    /// much of it -- the frame competed with the thing inside it, and the
+    /// buttons are where the colour does its job.
     public static let accent = "#e30613"
 
     /// Text drawn on top of `accent`.
