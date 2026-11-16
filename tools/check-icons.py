@@ -25,6 +25,7 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 DRAWER = ROOT / "tools/make_icon.py"
 PACKAGER = ROOT / "tools/build-deb.sh"
+PALETTE = ROOT / "Sources/MediaIdentifierCore/Presentation/Palette.swift"
 
 
 def png_size(path):
@@ -80,6 +81,29 @@ def main() -> int:
             problems.append(f"{path.relative_to(ROOT)} is "
                             f"{measured[0]}x{measured[1]}, not {size}x{size}")
 
+    # The brand colour, in the drawing and in the interface.
+    #
+    # The icon is drawn in Python and the window is painted from a Swift
+    # palette, so the one colour that ties them together lives in two files
+    # and in two languages. Nearly the same red in the two places is worse
+    # than two obviously different colours: nobody would see it, and the
+    # application menu and the window would quietly stop matching.
+    swift = PALETTE.read_text(encoding="utf-8")
+    match = re.search(r'static let accent = "(#[0-9a-fA-F]{6})"', swift)
+    if not match:
+        problems.append("Palette.swift has no `accent` colour to match "
+                        "the icon against")
+    else:
+        in_palette = match.group(1).lower()
+        match = re.search(r'^ACCENT = "(#[0-9a-fA-F]{6})"', drawer, re.M)
+        if not match:
+            problems.append("make_icon.py has no ACCENT constant")
+        elif match.group(1).lower() != in_palette:
+            problems.append(f"make_icon.py draws {match.group(1)} and "
+                            f"Palette.accent is {in_palette} -- the icon and "
+                            f"the window would be nearly, but not quite, the "
+                            f"same red")
+
     # A check that finds nothing to check is a check that cannot fail.
     if not drawn:
         problems.append("SIZES is empty, so this check asserts nothing")
@@ -90,8 +114,8 @@ def main() -> int:
             print(f"        {problem}")
         return 1
 
-    print(f"ok    : icon `{wanted}` ships at {sorted(drawn)} and the entry "
-          f"asks for that name")
+    print(f"ok    : icon `{wanted}` ships at {sorted(drawn)}, the entry asks "
+          f"for that name, and it is drawn in the palette's accent")
     return 0
 
 

@@ -1,8 +1,8 @@
 mediafin: drop: 2 handed to the engine
 mediafin: drop: submitted
 proposals: 2
-destination: → /tmp/tmp.RzECxMRO8Y/elsewhere/Dark/Season 01/Dark - S01E01.mkv
-destination: → /tmp/tmp.RzECxMRO8Y/library/Dark/Season 01/Dark - S01E02.mkv
+destination: → /tmp/tmp.KGCXT8vqB2/elsewhere/Dark/Season 01/Dark - S01E01.mkv
+destination: → /tmp/tmp.KGCXT8vqB2/library/Dark/Season 01/Dark - S01E02.mkv
 deletion notes: 1
 deletes: Will be deleted: Dark.S01E01.GERMAN.1080p.WEB-DL.nfo — the release group's note, which Jellyfin would mistake for its own metadata
 kept notes: 1

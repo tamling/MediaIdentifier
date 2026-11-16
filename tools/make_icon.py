@@ -6,11 +6,11 @@
 Python 3.12 on purpose: Pillow here is built for it, and plain `python3` is
 3.11, where `from PIL import Image` fails on the C extension.
 
-The icon is a white card with the M on it and a few coloured cards peeking
-out from behind -- the library the program sorts, with the one you are
-looking at on top. It replaces a dark green clapperboard that only ever
-appeared in the README: nothing installed it, and the application menu
-showed a stock icon from the user's theme instead.
+The icon is a white card with the M on it, a red line round it, and a few
+coloured cards peeking out from behind -- the library the program sorts,
+with the one you are looking at on top. The red is the brand's: the same
+line runs round the window and fills its primary button, so the thing in the
+application menu and the thing on screen are recognisably one program.
 
 The restraint in the cards is the whole design. An earlier pass had seven of
 them all round the tile, which looks lively at 1024 px and turns to noise at
@@ -37,9 +37,13 @@ BLUE = (56, 130, 246)
 PINK = (233, 70, 148)
 GREEN = (31, 201, 143)
 TEAL = (45, 170, 190)
-# Darker than the interface's accent: the accent is for lamps and bars on a
-# dark window, and on white it reads as washed out.
-INK = (10, 117, 88)
+# The brand red, the same value as `Palette.accent` in Core -- the window's
+# primary button and the line around the window are this colour, and the icon
+# is the third place it appears. tools/check-icons.py refuses a drift between
+# the two files, because a logo that is nearly the brand colour is worse than
+# one that is obviously something else.
+ACCENT = "#e30613"
+INK = tuple(int(ACCENT[i:i + 2], 16) for i in (1, 3, 5))
 
 # x, y, width, height, angle, colour. Each one peeks past the tile by a
 # sliver; see the note above about why they are not bigger.
@@ -108,10 +112,16 @@ def make():
                       point[0] + width // 2, point[1] + width // 2],
                      fill=INK + (255,))
 
-    # So the card has an edge of its own on a white desktop.
+    # The red line round the card, matching the one round the window.
+    #
+    # Eight pixels at 1024, which is the weight that survives being shrunk:
+    # measured against 12 and 18, both of which close up at 32 px until the
+    # tile reads as a red blob with a white hole in it. It is also what gives
+    # the icon an edge of its own on a white desktop, which a hairline used
+    # to do and which the frame now does better.
     ImageDraw.Draw(icon).rounded_rectangle(
         [INSET, INSET, S - INSET, S - INSET], radius=RADIUS,
-        outline=(16, 34, 28, 30), width=3)
+        outline=INK + (255,), width=8)
     return icon
 
 
