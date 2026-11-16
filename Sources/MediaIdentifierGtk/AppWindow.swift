@@ -142,9 +142,31 @@ final class AppWindow {
     /// The ids cannot carry this: an empty library gives the same empty id
     /// list before the search, during it and after it.
     private enum ConvertListState {
-        case fresh, searching, searched, converted
+        case fresh, searching, searched, refused, converted
     }
     private var convertListState: ConvertListState = .fresh
+    /// The engine's search generation as it stood when Suchen was pressed.
+    ///
+    /// The flip out of `.searching` used to key on `isWorking`, which is
+    /// `busy || queuedWork > 0` -- "the engine is idle", not "the search is
+    /// over". Any unrelated job in flight held the panel on "Wird gesucht
+    /// …" (Alles prüfen is never greyed and runs two probes with a
+    /// 30-second timeout each), and a search the engine REFUSED -- no
+    /// library folder configured, where it returns at its first guard
+    /// without ever setting `busy` -- flipped straight to "Keine Dateien
+    /// zum Konvertieren gefunden.", which is a claim about a library
+    /// nothing had looked at. A counter only the search itself advances can
+    /// be confused with neither.
+    private var convertSearchGenerationAtPress = 0
+    /// What Übernehmen asked the engine to write, and the widgets it was
+    /// read from, while the write is still in flight.
+    ///
+    /// `submit` is asynchronous, so the window used to print "Übernommen um
+    /// HH:MM:SS" for a write that had not been attempted yet, and advance
+    /// its merge baseline to values that were never stored. Both are
+    /// decided here instead, once the engine has said what happened.
+    private var pendingSave: (typed: WebSettings, announce: Bool)?
+    private var settingsSaveGenerationAtPress = 0
     /// The "… und N weitere" label, kept so its text can follow the ticks.
     private var convertMoreNote: UnsafeMutablePointer<GtkWidget>?
     /// Settings, status and fetching live in windows of their own, opened from
@@ -876,6 +898,7 @@ final class AppWindow {
             source: Gtk.chosenFolder(sourceChooser),
             movies: Gtk.chosenFolder(moviesChooser),
             series: Gtk.chosenFolder(seriesChooser),
+            music: Gtk.chosenFolder(musicChooser),
             to: coordinator.settings
         )
         // Built from the widgets, then merged against what the widgets were
@@ -905,11 +928,6 @@ final class AppWindow {
         if mode >= 0, mode < IdentificationMode.allCases.count {
             settings.identification = IdentificationMode.allCases[mode]
         }
-        // The music folder goes through the same folding as the others: a
-        // blank chooser means GTK could not show the path, not that the
-        // user cleared it.
-        let chosenMusic = Gtk.chosenFolder(musicChooser)
-        if !chosenMusic.isEmpty { settings.musicFolder = chosenMusic }
         let library = Int(gtk_combo_box_get_active(Gtk.comboBox(libraryModeCombo)))
         if library >= 0, library < LibraryMode.allCases.count {
             settings.libraryMode = LibraryMode.allCases[library]
@@ -954,29 +972,83 @@ final class AppWindow {
             Gtk.setText(savedLabel,
                         Text.s("Nicht übernommen: ", "Not applied: ")
                             + problems.map(\.message).joined(separator: " "))
+            // A write from an earlier press may still be in flight. It must
+            // still move the merge baseline when it lands -- it really was
+            // stored -- but it must not put "Übernommen um HH:MM:SS" over
+            // the top of this refusal. The label belongs to the press the
+            // user just made.
+            if pendingSave != nil { pendingSave?.announce = false }
             return
         }
 
+        // Asked for, not done: the write happens on the engine's queue and
+        // can still be refused by it. `confirmPendingSave`, called from
+        // every refresh, is where the clock and the new merge baseline are
+        // decided -- from the engine's answer.
+        //
+        // Both used to be decided here, which meant "Übernommen um
+        // HH:MM:SS" for a write that failed afterwards, and a baseline
+        // moved to values that were never stored. The merge writes back
+        // only fields that differ from that baseline, so after such a
+        // failure every edit in the next press compared equal and was
+        // dropped: the user could not even correct it.
+        settingsSaveGenerationAtPress = coordinator.snapshot.settingsSave.generation
+        pendingSave = (typed: settings, announce: true)
         coordinator.submit(.saveSettings(settings))
-        // So a second Apply does not re-apply what this one just wrote over
-        // somebody else's newer value.
-        loadedSettings = settings
+        Gtk.setText(savedLabel, Text.s("Wird übernommen …", "Applying …"))
+        pendingLanguageChange = languageChanged
+        // So the answer is not held back for up to half a second when the
+        // queue is already empty.
+        refresh()
+    }
 
-        // With the time of day, and said next to the button that was just
-        // pressed. "Saved." appearing where "Saved." already was is
-        // indistinguishable from nothing happening, which is what was
-        // reported: "no idea whether that saved or not". A clock that moves
-        // is the only version of this sentence that answers the question.
+    /// Whether the write still in flight also changes the language.
+    private var pendingLanguageChange = false
+
+    /// Reports what became of the settings write, once the engine has said.
+    ///
+    /// Called from `refresh`, so it runs on the same 500 ms tick everything
+    /// else does.
+    private func confirmPendingSave() {
+        guard let pending = pendingSave else { return }
+        let report = coordinator.snapshot.settingsSave
+        guard report.generation != settingsSaveGenerationAtPress else { return }
+        pendingSave = nil
+
+        guard !report.failed else {
+            // The engine's own sentence, in the panel the button is in.
+            // `lastResult` is drawn on the main window, behind this one.
+            if pending.announce {
+                Gtk.setText(savedLabel, Text.s("Nicht übernommen: ", "Not applied: ")
+                                + (coordinator.snapshot.lastResult ?? ""))
+            }
+            // And the baseline stays where it was, so the next press still
+            // sees the edits as changes and writes them.
+            return
+        }
+
+        // Only now, and from what was actually stored: a second Apply must
+        // not re-apply what this one wrote over somebody else's newer value.
+        loadedSettings = pending.typed
+
+        // With the time of day, and said next to the button that was
+        // pressed. "Gespeichert." appearing where "Gespeichert." already
+        // was is indistinguishable from nothing happening, which is what
+        // was reported: "no idea whether that saved or not". A clock that
+        // moves is the only version of this sentence that answers the
+        // question.
+        guard pending.announce else { return }
         let formatter = DateFormatter()
         formatter.dateFormat = "HH:mm:ss"
         Gtk.setText(savedLabel, Text.s(
             "Übernommen um \(formatter.string(from: Date()))",
             "Applied at \(formatter.string(from: Date()))"))
-        if languageChanged {
+        if pendingLanguageChange {
             Gtk.setText(resultLabel, Text.s(
                 "Sprache gespeichert — das Fenster zeigt sie nach einem Neustart.",
                 "Language saved — the window shows it after a restart."))
         }
+        pendingLanguageChange = false
     }
 
     /// Reads the schedule fields.
@@ -1768,6 +1840,7 @@ final class AppWindow {
     private func findConvertible() {
         saveFolders()
         convertListState = .searching
+        convertSearchGenerationAtPress = coordinator.snapshot.convertSearch.generation
         // So the empty state is redrawn with the new sentence even when the
         // list is empty both before and after: the guard in
         // `refreshConvertList` compares ids, and [] equals [].
@@ -1824,8 +1897,10 @@ final class AppWindow {
         // redraw has to be forced. Without this the panel would sit on
         // "Wird gesucht …" for as long as it stayed open, because the ids
         // are equal before and after a search of an empty library.
-        if convertListState == .searching, !coordinator.snapshot.isWorking {
-            convertListState = .searched
+        let search = coordinator.snapshot.convertSearch
+        if convertListState == .searching,
+           search.generation != convertSearchGenerationAtPress {
+            convertListState = search.refused ? .refused : .searched
             renderedConvertIDs = nil
         }
         let candidates = coordinator.convertible
@@ -1868,11 +1943,51 @@ final class AppWindow {
             case .searching:
                 sentence = Text.s("Wird gesucht …", "Looking for files…")
             case .converted:
+                // From the engine's own counts, not from "the list went
+                // empty".
+                //
+                // The list emptied for a failed file as readily as for a
+                // converted one, so this sentence was printed after runs in
+                // which every single file had failed and nothing had been
+                // written -- with the only contradiction on the main
+                // window, behind this panel. A failed file now stays on the
+                // list, so an empty list really does mean everything
+                // converted; the counts are what this says it from, because
+                // inferring it from the list is the mistake itself.
+                let run = coordinator.snapshot.convertRun
+                if run.converted > 0, run.failed == 0 {
+                    sentence = Text.s(
+                        "Fertig. \(run.converted) neue Datei"
+                            + "\(run.converted == 1 ? "" : "en") "
+                            + "liegt neben den Originalen; zu konvertieren "
+                            + "ist nichts mehr da.",
+                        "Done. \(run.converted) new file"
+                            + "\(run.converted == 1 ? "" : "s") beside the "
+                            + "originals; there is nothing left to convert.")
+                } else if run.converted == 0 {
+                    sentence = Text.s(
+                        "Es wurde nichts konvertiert. Die Originale sind "
+                            + "unberührt — warum, steht in der Statuszeile "
+                            + "im Hauptfenster.",
+                        "Nothing was converted. The originals are untouched "
+                            + "— the status line on the main window says why.")
+                } else {
+                    sentence = Text.s(
+                        "\(run.converted) konvertiert, \(run.failed) "
+                            + "fehlgeschlagen. Die Originale sind alle noch da.",
+                        "\(run.converted) converted, \(run.failed) failed. "
+                            + "Every original is still there.")
+                }
+            case .refused:
+                // The engine's own reason, in the panel the user is looking
+                // at. It went to `lastResult` only, which is drawn on the
+                // main window BEHIND this panel, while the panel claimed
+                // the library held nothing to convert.
                 sentence = Text.s(
-                    "Fertig. Die neuen Dateien liegen neben den Originalen; "
-                        + "zu konvertieren ist nichts mehr da.",
-                    "Done. The new files are beside the originals; there is "
-                        + "nothing left to convert.")
+                    "Es wurde nicht gesucht: erst die Bibliotheksordner in "
+                        + "den Einstellungen setzen.",
+                    "Nothing was searched: set your library folders in the "
+                        + "settings first.")
             case .searched:
                 sentence = Text.s(
                     "Keine Dateien zum Konvertieren gefunden.",
@@ -1962,9 +2077,32 @@ final class AppWindow {
         }
         let bytes = ticked.reduce(Int64(0)) { $0 + $1.byteSize }
         let size = ConversionCandidate.readableSize(ofBytes: bytes)
+        // What the last run did, when there was one and files are still
+        // listed.
+        //
+        // The empty-list sentence cannot carry this: a run that failed, or
+        // one that was stopped, leaves its files on the list, so the panel
+        // shows rows and would say nothing at all about what had just
+        // happened -- the counts and the reason were on the main window,
+        // behind this panel.
+        var ran = ""
+        if convertListState == .converted {
+            let run = coordinator.snapshot.convertRun
+            if run.failed > 0 || run.stopped {
+                ran = Text.s(
+                    " — letzter Lauf: \(run.converted) konvertiert"
+                        + (run.failed > 0 ? ", \(run.failed) fehlgeschlagen" : "")
+                        + (run.stopped ? ", vorzeitig gestoppt" : "")
+                        + ". Die Originale sind alle noch da.",
+                    " — last run: \(run.converted) converted"
+                        + (run.failed > 0 ? ", \(run.failed) failed" : "")
+                        + (run.stopped ? ", stopped early" : "")
+                        + ". Every original is still there.")
+            }
+        }
         Gtk.setText(convertCountLabel, Text.s(
             "\(candidates.count) gefunden · \(ticked.count) angehakt · \(size)",
-            "\(candidates.count) found · \(ticked.count) ticked · \(size)"))
+            "\(candidates.count) found · \(ticked.count) ticked · \(size)") + ran)
 
         if let note = convertMoreNote {
             let undrawn = candidates.dropFirst(Self.visibleProposals)
@@ -2030,6 +2168,11 @@ final class AppWindow {
     /// GTK, which may only be touched from the main thread.
     func refresh() {
         let state = coordinator.snapshot
+
+        // Before anything is drawn: a settings write that has landed decides
+        // what the Apply label says and where the merge baseline sits, and
+        // both used to be guessed at press time.
+        confirmPendingSave()
 
         // What it is doing now outranks how the last thing ended.
         //

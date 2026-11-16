@@ -729,11 +729,40 @@ jobs:
                echo "      ${after_refusal:-nothing}"
                exit 1 ;;
           esac
+          # Two reads of the same press, and they have to say different
+          # things.
+          #
+          # `submit` is asynchronous: the instant the button is released
+          # nothing has been written, and the window used to print
+          # "Übernommen um HH:MM:SS" there anyway -- a clock reporting on a
+          # file nothing had touched. It is the settled read, one tick
+          # later, that may claim a save.
           corrected="$(sed -n 's/^corrected apply says: //p' applied.log)"
           case "$corrected" in
+            *"Übernommen um"*|*"Applied at"*)
+               echo "FAIL: the window reported a save the instant the button "
+               echo "      was pressed, before the engine had written "
+               echo "      anything: ${corrected:-nothing}"
+               exit 1 ;;
+          esac
+          case "$corrected" in
+            *"Wird übernommen"*|*"Applying"*) : ;;
+            *) echo "FAIL: a press that is on its way said nothing about it:"
+               echo "      ${corrected:-nothing}"
+               exit 1 ;;
+          esac
+          settled="$(sed -n 's/^corrected apply settles as: //p' applied.log)"
+          case "$settled" in
             *"Übernommen um"*|*"Applied at"*) : ;;
             *) echo "FAIL: the corrected Apply did not report a save:"
-               echo "      ${corrected:-nothing}"
+               echo "      ${settled:-nothing}"
+               exit 1 ;;
+          esac
+          instant="$(sed -n 's/^applied the instant it was pressed: //p' applied.log)"
+          case "$instant" in
+            *"Übernommen um"*|*"Applied at"*)
+               echo "FAIL: the first Apply claimed success before the engine "
+               echo "      had been asked: ${instant:-nothing}"
                exit 1 ;;
           esac
           retried="$(sed -n 's/^engine after the retry: //p' applied.log)"
@@ -751,12 +780,74 @@ jobs:
                exit 1 ;;
           esac
 
-          # And what the file says afterwards: the retry must have written
-          # exactly the two edited fields and left every other one alone.
+          # A write the engine ACCEPTS and then cannot perform.
+          #
+          # The window only ever saw `problems()`. A failing disk write --
+          # read-only configuration directory, full disk, settings.json
+          # replaced by a directory -- left "Übernommen um HH:MM:SS" on
+          # screen, with the engine's own "nicht gespeichert" on the main
+          # window behind the panel. Worse, the merge baseline had advanced
+          # to values that were never stored, and the merge writes back only
+          # fields that differ from that baseline: the next press compared
+          # every edit equal and dropped it, so the edit was lost for good
+          # and the user could not even correct it. The mode puts a
+          # directory where settings.json goes, which cannot be renamed
+          # over, presses Apply with quality=26, then removes it and presses
+          # the same thing again.
+          blocked="$(sed -n 's/^apply onto an unwritable file says: //p' applied.log)"
+          echo "unwritable: ${blocked:-nothing}"
+          case "$blocked" in
+            *"Nicht übernommen"*|*"Not applied"*) : ;;
+            *) echo "FAIL: a write the engine could not perform was still "
+               echo "      reported as applied: ${blocked:-nothing}"
+               exit 1 ;;
+          esac
+          case "$blocked" in
+            *"nicht gespeichert"*|*"could not be saved"*) : ;;
+            *) echo "FAIL: the panel did not say WHY the write failed; that "
+               echo "      sentence is on the window behind it. Read: "
+               echo "      ${blocked:-nothing}"
+               exit 1 ;;
+          esac
+          blocked_engine="$(sed -n 's/^engine after the unwritable write: //p' applied.log)"
+          case "$blocked_engine" in
+            *"quality=24"*) : ;;
+            *) echo "FAIL: a write that failed still moved the engine's "
+               echo "      settings: ${blocked_engine:-nothing}"
+               exit 1 ;;
+          esac
+          # And the edit is not lost: the same press, once the file is
+          # writable, has to arrive. This is the half the old code could not
+          # do at all.
+          recovered="$(sed -n 's/^apply once the file is writable again says: //p' applied.log)"
+          case "$recovered" in
+            *"Übernommen um"*|*"Applied at"*) : ;;
+            *) echo "FAIL: the retry after a failed write reported no save:"
+               echo "      ${recovered:-nothing}"
+               exit 1 ;;
+          esac
+          came_back="$(sed -n 's/^engine after the file came back: //p' applied.log)"
+          echo "engine after the file came back: ${came_back:-nothing}"
+          case "$came_back" in
+            *"quality=26"*) : ;;
+            *) echo "FAIL: the edit made while the file was unwritable was "
+               echo "      lost for good -- the merge baseline had moved to "
+               echo "      values that were never stored, so pressing Apply "
+               echo "      again changed nothing. Read: ${came_back:-nothing}"
+               exit 1 ;;
+          esac
+          case "$came_back" in
+            *"codec=h264"*) : ;;
+            *) echo "FAIL: the recovered write lost the codec: ${came_back:-nothing}"
+               exit 1 ;;
+          esac
+
+          # And what the file says afterwards: every field the presses never
+          # touched is still there, with the edits that were made.
           python3 - "$applied/settings.json" <<'CHECK'
           import json, sys
           stored = json.load(open(sys.argv[1]))
-          want = {"videoCodec": "h264", "quality": 24, "preset": "veryfast",
+          want = {"videoCodec": "h264", "quality": 26, "preset": "veryfast",
                   "targetHeight": 720, "audioMode": "opus",
                   "stripSubtitles": True, "ffmpegPath": "/opt/ffmpeg/bin/ffmpeg"}
           for key, value in want.items():
@@ -768,7 +859,8 @@ jobs:
               sys.exit("FAIL: Apply wiped jellyfinBaseURL: "
                        + repr(stored["jellyfinBaseURL"]))
           print("settings.json kept every untouched conversion field, took "
-                "both edits from the refused press, and kept the server address")
+                "the edits from the refused press and from the failed write, "
+                "and kept the server address")
           CHECK
           # The estimate line, which is the only thing that says what the
           # chosen settings will do before a run starts. The fixture chooses

@@ -511,6 +511,8 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         guard problems.isEmpty else {
             update {
                 $0.hasError = true
+                $0.settingsSave = SettingsSaveReport(
+                    generation: $0.settingsSave.generation + 1, failed: true)
                 $0.lastResult = Text.s(
                     "Nicht gespeichert: " + problems.map(\.message)
                         .joined(separator: " "),
@@ -538,8 +540,12 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
             if settings.language != previous.language {
                 Text.start(configured: settings.language)
             }
-            update { $0.lastResult = Text.s("Einstellungen gespeichert.",
-                                            "Settings saved.") }
+            update {
+                $0.settingsSave = SettingsSaveReport(
+                    generation: $0.settingsSave.generation + 1, failed: false)
+                $0.lastResult = Text.s("Einstellungen gespeichert.",
+                                       "Settings saved.")
+            }
             updateWatchState()
             // Only a changed schedule resets the clock. Saving an unrelated
             // setting at 02:59 must not push tonight's 03:00 run to tomorrow.
@@ -550,8 +556,13 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
             // scan.
             refreshSnapshotCounts()
         } catch {
-            update { $0.lastResult = Text.s("Einstellungen nicht gespeichert: \(error)",
-                                            "Settings could not be saved: \(error)") }
+            update {
+                $0.hasError = true
+                $0.settingsSave = SettingsSaveReport(
+                    generation: $0.settingsSave.generation + 1, failed: true)
+                $0.lastResult = Text.s("Einstellungen nicht gespeichert: \(error)",
+                                       "Settings could not be saved: \(error)")
+            }
         }
     }
 
@@ -1661,9 +1672,21 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
             .map { URL(fileURLWithPath: $0, isDirectory: true) }
 
         guard !roots.isEmpty else {
-            update { $0.lastResult = Text.s(
-                "Erst die Bibliotheksordner in den Einstellungen setzen.",
-                "Set your library folders in the settings first.") }
+            // A refusal is an answer, so it moves the generation too.
+            //
+            // Without it the panel in front of this window could only see
+            // the queue go quiet, which it read as "I looked and found
+            // nothing" -- while the one true sentence went to `lastResult`,
+            // on the window behind the panel. A fresh install hits this on
+            // the first press of Suchen.
+            update {
+                $0.lastResult = Text.s(
+                    "Erst die Bibliotheksordner in den Einstellungen setzen.",
+                    "Set your library folders in the settings first.")
+                $0.convertSearch = ConvertSearchReport(
+                    generation: $0.convertSearch.generation + 1,
+                    refused: true, found: 0)
+            }
             return
         }
 
@@ -1686,6 +1709,9 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         update {
             $0.busy = false
             $0.convertStatus = nil
+            $0.convertSearch = ConvertSearchReport(
+                generation: $0.convertSearch.generation + 1,
+                refused: false, found: found.count)
             $0.lastResult = found.isEmpty
                 ? Text.s("Keine Dateien zum Konvertieren gefunden.",
                          "No files to convert were found.")
@@ -1722,6 +1748,14 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
                 update { $0.lastResult = Text.s(
                     "Es war nichts angehakt, also wurde nichts konvertiert.",
                     "No files were ticked, so nothing was converted.") }
+            }
+            // A run that did nothing is still a finished run, so the panel
+            // waiting on this must not be left holding the counts of the
+            // run before it.
+            update {
+                $0.convertRun = ConvertRunReport(
+                    generation: $0.convertRun.generation + 1,
+                    converted: 0, failed: 0, stopped: false)
             }
             // The same care as at the end of a real run, and for the same
             // reason: a cancel that arrived while this run was queued is
@@ -1839,7 +1873,17 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
                     break
                 }
                 failed += 1
-                finished.insert(candidate.id)
+                // Not added to `finished`, so it stays on the candidate
+                // list -- like a stopped file, and for the same reason:
+                // nothing was done to it. The half-written output has just
+                // been deleted and the original is untouched, so the file
+                // is exactly as convertible as it was a minute ago, and
+                // dropping it meant the user had to search the whole
+                // library again to get back a file the program had failed
+                // to touch. It also took the panel's only way of telling
+                // "everything converted" from "everything failed": both
+                // emptied the list, and the panel read an empty list as
+                // success.
                 log.append(RenameLogEntry(oldName: candidate.fileName,
                                           newName: destination.lastPathComponent,
                                           status: .failure,
@@ -1850,6 +1894,21 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
 
         lock.lock()
         _convertible.removeAll { finished.contains($0.id) }
+        // Here and not only at the end of the loop body, because a `break`
+        // skips that line.
+        //
+        // The stop path breaks out of the `for` from inside the `catch`, and
+        // so does the cancel check at the top of each iteration. Both jumped
+        // over the one assignment that cleared this, and the tail did not
+        // clear it either, so a stopped run left the terminated Process
+        // stored for good. `cancelConversions` reads this pointer to decide
+        // whether there is anything to stop: with it dangling, every later
+        // press while idle armed the cancel flag, signalled a dead pid and
+        // answered "Stoppt nach der aktuellen Datei." with nothing running
+        // -- and the next conversion the user asked for died on its first
+        // file. It could not recover on its own: that run breaks before
+        // FFmpeg starts, so nothing overwrote the pointer.
+        _runningConversion = nil
         let stopped = _cancelConversions
         // Under the same lock acquisition as the line below, and that is the
         // point. `cancelConversions` runs on the CALLER's thread -- it
@@ -1876,6 +1935,9 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
             $0.convertDetail = nil
             $0.pendingConversions = 0
             $0.hasError = failed > 0
+            $0.convertRun = ConvertRunReport(
+                generation: $0.convertRun.generation + 1,
+                converted: done, failed: failed, stopped: stopped)
             $0.lastResult = Text.s("Konvertiert \(done)", "Converted \(done)")
                 + (failed > 0
                     ? Text.s(", \(failed) fehlgeschlagen", ", \(failed) failed") : "")

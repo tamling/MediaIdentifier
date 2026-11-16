@@ -822,11 +822,18 @@ case .pressApply:
         print("estimate: \(mainWindow.estimateText)")
         print("apply button on screen: \(mainWindow.applyButtonIsOnScreen)")
         mainWindow.pressApply()
-        print("applied once: \(mainWindow.appliedText)")
+        // Straight after the press, before the engine can have written
+        // anything. The window used to print "Übernommen um HH:MM:SS" here,
+        // which is a claim about a file nothing had touched yet -- and it
+        // stayed on screen when the write then failed.
+        print("applied the instant it was pressed: \(mainWindow.appliedText)")
         // A second press a second later. The question is not whether the
         // label has text -- it is whether pressing again is visibly a second
         // press, which is the thing a fixed "Saved." cannot show.
         let again: @convention(c) (UnsafeMutableRawPointer?) -> gboolean = { _ in
+            // Now that the engine has had its turn.
+            mainWindow.refresh()
+            print("applied once: \(mainWindow.appliedText)")
             mainWindow.pressApply()
             print("applied twice: \(mainWindow.appliedText)")
             // After two saves: still what was stored. Apply must hand back
@@ -867,9 +874,63 @@ case .pressApply:
 
                 let settled: @convention(c) (UnsafeMutableRawPointer?)
                     -> gboolean = { _ in
-                    defer { gtk_main_quit() }
+                    mainWindow.refresh()
+                    print("corrected apply settles as: \(mainWindow.appliedText)")
                     print("engine after the retry: "
                               + "\(describeConversion(coordinator.settings.conversion))")
+
+                    // The other half of the same fault: a write the engine
+                    // ACCEPTS and then cannot perform.
+                    //
+                    // The window only ever saw `problems()`; a failing disk
+                    // write -- read-only configuration directory, full
+                    // disk, settings.json replaced by a directory -- left
+                    // "Übernommen um HH:MM:SS" on screen with the engine's
+                    // own "nicht gespeichert" on the window behind the
+                    // panel. And the merge baseline had advanced to values
+                    // that were never stored, so the next press compared
+                    // every edit equal to that baseline and dropped it: the
+                    // edit was lost for good, correction included.
+                    //
+                    // A directory where settings.json goes cannot be
+                    // renamed over, which fails the write for root too.
+                    let file = configDirectory
+                        .appendingPathComponent("settings.json")
+                    try? FileManager.default.removeItem(at: file)
+                    try? FileManager.default.createDirectory(
+                        at: file, withIntermediateDirectories: true)
+                    mainWindow.typeQuality("26")
+                    mainWindow.pressApply()
+
+                    let blocked: @convention(c) (UnsafeMutableRawPointer?)
+                        -> gboolean = { _ in
+                        mainWindow.refresh()
+                        print("apply onto an unwritable file says: "
+                                  + "\(mainWindow.appliedText)")
+                        print("engine after the unwritable write: "
+                                  + "\(describeConversion(coordinator.settings.conversion))")
+                        // Writable again, and the SAME edit pressed again.
+                        // It has to arrive: that is what a baseline which
+                        // never moved buys.
+                        let file = configDirectory
+                            .appendingPathComponent("settings.json")
+                        try? FileManager.default.removeItem(at: file)
+                        mainWindow.pressApply()
+
+                        let recovered: @convention(c) (UnsafeMutableRawPointer?)
+                            -> gboolean = { _ in
+                            defer { gtk_main_quit() }
+                            mainWindow.refresh()
+                            print("apply once the file is writable again says: "
+                                      + "\(mainWindow.appliedText)")
+                            print("engine after the file came back: "
+                                      + "\(describeConversion(coordinator.settings.conversion))")
+                            return Gtk.sourceRemove
+                        }
+                        g_timeout_add(900, recovered, nil)
+                        return Gtk.sourceRemove
+                    }
+                    g_timeout_add(900, blocked, nil)
                     return Gtk.sourceRemove
                 }
                 g_timeout_add(900, settled, nil)

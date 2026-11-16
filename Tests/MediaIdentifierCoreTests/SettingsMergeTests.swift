@@ -190,6 +190,38 @@ final class SettingsMergeTests: XCTestCase {
     /// The media server address, which had no field in the window at all
     /// until the conversion panel was built: the setting existed, the merge
     /// handled it, the engine read it, and nothing could type it in.
+    /// The whole route the settings window takes, in the order it takes it.
+    ///
+    /// Not a merge test on its own: the window folds the folder choosers
+    /// first and merges second, and a field that is in neither step is lost
+    /// between them with nothing to show it. That is what happened to the
+    /// music folder -- the chooser was read into a local, the merge then
+    /// started again from `stored` and dropped it, and the label said
+    /// "Übernommen um HH:MM:SS" over the top. It was the only
+    /// `problems()`-validated field the window could not write, which also
+    /// made an invalid stored music folder a dead end: the guard refused
+    /// every Apply and no control could correct it.
+    func testEveryFolderChooserSurvivesTheWindowsRoute() {
+        let loaded = base()
+        // What the four choosers show after the user picked a music folder.
+        let stored = FolderSelection.applying(source: loaded.sourceFolder,
+                                              movies: loaded.moviesFolder,
+                                              series: loaded.seriesFolder,
+                                              music: "/srv/music",
+                                              to: loaded)
+        var typed = stored
+        typed.localLLMModel = "qwen3"
+
+        let merged = SettingsMerge.applying(typed: typed, loaded: loaded, to: stored)
+
+        XCTAssertEqual(merged.musicFolder, "/srv/music",
+                       "the chosen music folder has to reach the settings the "
+                           + "engine saves, not be dropped between the fold "
+                           + "and the merge")
+        XCTAssertEqual(merged.localLLMModel, "qwen3",
+                       "and the edit made in the same press still arrives")
+    }
+
     func testTheMediaServerAddressIsMerged() {
         let loaded = base()
         var typed = loaded

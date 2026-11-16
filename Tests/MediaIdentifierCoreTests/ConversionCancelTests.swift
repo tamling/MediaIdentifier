@@ -231,5 +231,130 @@ final class StoppedConversionTests: XCTestCase {
             ConversionOutput.destination(for: target.source,
                                          options: settings.conversion.options).path),
                        "the half-written output must be gone")
+
+        // The run is over, so the engine has to read as idle again.
+        //
+        // It did not. The stop leaves the `for` loop through a `break`,
+        // which jumps over the one line that cleared `_runningConversion`,
+        // and the run's tail never cleared it either. `cancelConversions`
+        // reads that pointer to decide whether there is anything to stop,
+        // so every later press while idle armed the flag against a dead
+        // process and answered "Stoppt nach der aktuellen Datei." with
+        // nothing running -- and the next conversion the user asked for
+        // died on its first file. Self-perpetuating, too: that run breaks
+        // before FFmpeg starts, so nothing ever overwrote the pointer.
+        coordinator.submit(.cancelConversions)
+        XCTAssertEqual(coordinator.snapshot.lastResult, "Nothing is converting.",
+                       "with the run finished there is nothing left to stop")
+        XCTAssertFalse(coordinator.cancelIsArmedForTesting,
+                       "a press while idle must not arm the flag against the "
+                           + "next run the user asks for")
+
+        // And the proof that it matters: the next run has to reach the
+        // encoder. The marker is deleted first, so its reappearance can
+        // only come from a second launch.
+        try FileManager.default.removeItem(at: marker)
+        coordinator.submit(.convertFiles(accepting: [target.id]))
+        let upAgainBy = Date().addingTimeInterval(10)
+        while !FileManager.default.fileExists(atPath: marker.path),
+              Date() < upAgainBy {
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: marker.path),
+                      "the conversion after a stopped one never started its "
+                          + "encoder: \(coordinator.snapshot.lastResult ?? "")")
+        coordinator.submit(.cancelConversions)
+        coordinator.drainForTesting()
+    }
+
+    /// A run in which the encode fails has to say so, and leave the file
+    /// alone.
+    ///
+    /// The panel in front of the main window worked out what had happened
+    /// from "the candidate list went empty", and the engine emptied it for
+    /// failures exactly as for successes -- so a run in which every single
+    /// file failed and nothing whatever was written announced "Fertig. Die
+    /// neuen Dateien liegen neben den Originalen; zu konvertieren ist
+    /// nichts mehr da." The one sentence saying otherwise was on the window
+    /// behind the panel. The files were gone from the list too, so there
+    /// was nothing to retry.
+    func testAFailedFileStaysOnTheListAndTheRunSaysSo() throws {
+        let fake = root.appendingPathComponent("broken-ffmpeg")
+        try [
+            "#!/bin/sh",
+            "# Stands in for FFmpeg refusing the file.",
+            "echo \"Invalid data found when processing input\" >&2",
+            "exit 1",
+        ].joined(separator: "\n").write(to: fake, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755],
+                                              ofItemAtPath: fake.path)
+
+        let source = root.appendingPathComponent("movies/Broken (2021).mkv")
+        try Data(repeating: 0x21, count: 4096).write(to: source)
+
+        var settings = coordinator.settings
+        settings.moviesFolder = root.appendingPathComponent("movies").path
+        settings.conversion.ffmpegPath = fake.path
+        coordinator.executeForTesting(.saveSettings(settings))
+        coordinator.executeForTesting(.findConvertible)
+        let target = try XCTUnwrap(coordinator.convertible.first)
+
+        coordinator.submit(.convertFiles(accepting: [target.id]))
+        coordinator.drainForTesting()
+
+        let run = coordinator.snapshot.convertRun
+        XCTAssertEqual(run.converted, 0, "nothing was written")
+        XCTAssertEqual(run.failed, 1, "and the run has to own the failure")
+        XCTAssertFalse(run.stopped, "nobody stopped it")
+        XCTAssertTrue(coordinator.snapshot.hasError)
+        XCTAssertEqual(coordinator.convertible.map(\.source.path),
+                       [target.source.path],
+                       "a file the program failed to convert is exactly as "
+                           + "convertible as before, so it stays offered -- "
+                           + "otherwise the user has to search the whole "
+                           + "library again for a file nothing happened to")
+        XCTAssertFalse(FileManager.default.fileExists(atPath:
+            ConversionOutput.destination(for: target.source,
+                                         options: settings.conversion.options).path),
+                       "no half-written output may be left behind")
+    }
+
+    /// The search says whether it looked, so the panel does not have to
+    /// guess from the queue going quiet.
+    func testARefusedSearchIsReportedAsARefusal() throws {
+        var settings = coordinator.settings
+        settings.moviesFolder = ""
+        settings.seriesFolder = ""
+        settings.sourceFolder = ""
+        coordinator.executeForTesting(.saveSettings(settings))
+
+        let before = coordinator.snapshot.convertSearch.generation
+        coordinator.executeForTesting(.findConvertible)
+        let after = coordinator.snapshot.convertSearch
+
+        XCTAssertEqual(after.generation, before + 1,
+                       "a refusal is an answer, so the panel has to be able "
+                           + "to see that one arrived")
+        XCTAssertTrue(after.refused,
+                      "with no library folder the engine never looked, and "
+                          + "\"found nothing\" would be a different claim")
+        XCTAssertEqual(after.found, 0)
+    }
+
+    /// And a search that really looked reports that instead.
+    func testASearchThatLooksReportsWhatItFound() throws {
+        let source = root.appendingPathComponent("movies/Film (2020).mkv")
+        try Data(repeating: 0x21, count: 2048).write(to: source)
+        var settings = coordinator.settings
+        settings.moviesFolder = root.appendingPathComponent("movies").path
+        coordinator.executeForTesting(.saveSettings(settings))
+
+        let before = coordinator.snapshot.convertSearch.generation
+        coordinator.executeForTesting(.findConvertible)
+        let after = coordinator.snapshot.convertSearch
+
+        XCTAssertEqual(after.generation, before + 1)
+        XCTAssertFalse(after.refused)
+        XCTAssertEqual(after.found, 1)
     }
 }
