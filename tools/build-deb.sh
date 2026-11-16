@@ -128,8 +128,25 @@ if [ -n "$PREBUILT_GTK" ]; then
   install -D -m 755 "$PREBUILT_GTK" "$STAGE/usr/bin/mediafin-gtk"
 
   # So it appears in the application menu rather than only on the command
-  # line. The icon is a stock name the user's icon theme already provides —
-  # shipping our own would mean an asset to maintain for no gain yet.
+  # line, with its own icon rather than a stock name borrowed from the
+  # user's theme. The sizes are committed under packaging/icons, drawn by
+  # tools/make_icon.py: packaging a .deb must not need Pillow, which the
+  # release runner does not have.
+  #
+  # A missing icon directory is a failure, not a shrug. The desktop entry
+  # below names `mediafin`, and an entry pointing at an icon nobody
+  # installed shows a blank tile in the application menu -- which looks
+  # exactly like a theme that has not refreshed yet.
+  for size in 512 256 128 64 48 32; do
+    src="packaging/icons/${size}x${size}/mediafin.png"
+    [ -f "$src" ] || {
+      echo "FAIL: $src is missing; run python3.12 tools/make_icon.py" >&2
+      exit 1
+    }
+    install -D -m 644 "$src" \
+      "$STAGE/usr/share/icons/hicolor/${size}x${size}/apps/mediafin.png"
+  done
+
   install -d -m 755 "$STAGE/usr/share/applications"
   cat > "$STAGE/usr/share/applications/mediafin.desktop" <<'DESKTOP'
 [Desktop Entry]
@@ -138,7 +155,7 @@ Name=Mediafin
 GenericName=Media renamer
 Comment=Identify and rename media files for a Jellyfin library
 Exec=mediafin-gtk
-Icon=multimedia-video-player
+Icon=mediafin
 Terminal=false
 Categories=AudioVideo;Video;Utility;
 Keywords=media;rename;jellyfin;movies;series;

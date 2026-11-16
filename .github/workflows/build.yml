@@ -45,6 +45,13 @@ jobs:
           # which they were. Nothing asked whether anything could ask for
           # them.
           python3 tools/check-reachable.py
+          # And the same shape again, in the packaging: three files have to
+          # agree about one icon name and one list of sizes, and every way
+          # they can drift apart is silent. A size added on one side only
+          # never ships; a rename on the entry's side alone leaves a blank
+          # tile in the application menu, which looks exactly like an icon
+          # theme that has not refreshed yet.
+          python3 tools/check-icons.py
 
   test:
     name: Core tests

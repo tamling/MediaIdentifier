@@ -143,6 +143,31 @@ jobs:
           check "runner needs no Swift runtime"  '! ldd /usr/bin/mediafin | grep -qi swift'
           check "desktop entry installed"      'test -f /usr/share/applications/mediafin.desktop'
           check "desktop entry points at it"   'grep -q "^Exec=mediafin-gtk$" /usr/share/applications/mediafin.desktop'
+          # The icon, at every size an icon theme looks for.
+          #
+          # The name is READ from the entry rather than written here a second
+          # time, because the way this breaks is a rename on one side only.
+          # What the user then sees is a blank tile in the application menu,
+          # which looks exactly like a theme that has not refreshed yet --
+          # and before this the entry named `multimedia-video-player`, a
+          # stock name borrowed from whatever theme happened to be
+          # installed, so there was nothing to rename and nothing to check.
+          #
+          # Asserted against the package rather than the filesystem, for the
+          # same reason as the man page: this base image carries dpkg
+          # path-exclude rules, and what matters is what a real installation
+          # would get.
+          icon="$(sed -n 's/^Icon=//p' /usr/share/applications/mediafin.desktop | tr -d '\r')"
+          echo "the desktop entry asks for icon: ${icon:-nothing}"
+          check "desktop entry names an icon"  'test -n "$icon"'
+          contents="$(dpkg-deb --contents mediafin-linux-x86_64.deb)"
+          missing=""
+          for size in 512 256 128 64 48 32; do
+            printf '%s\n' "$contents" \
+              | grep -q "usr/share/icons/hicolor/${size}x${size}/apps/${icon}.png" \
+              || missing="$missing ${size}"
+          done
+          check "icon ships at every size"     'test -z "$missing"'
           # The package must pull GTK in, or the menu entry starts nothing.
           check "GTK is a declared dependency" 'dpkg-deb --field mediafin-linux-x86_64.deb Depends | grep -q libgtk-3-0'
           # Both report the same version, which is the reason it is read from
