@@ -357,4 +357,57 @@ final class StoppedConversionTests: XCTestCase {
         XCTAssertFalse(after.refused)
         XCTAssertEqual(after.found, 1)
     }
+
+    /// Stopp during the walk for convertible files.
+    ///
+    /// The walk sets `busy` and nothing else, and the one Stopp outside the
+    /// menu is sensitive on bare `busy` -- so the button was lit for the
+    /// whole walk and pressing it answered "Es wird gerade nicht gesucht."
+    /// while the bar advanced, because `cancelScan`'s target test covered
+    /// scans and renames only. Nothing could act on the walk at all. That
+    /// is verbatim the fault `stopScan`'s dispatcher says it fixed, for the
+    /// one busy-setter it has no branch for.
+    func testStoppDuringTheConvertibleSearchHasSomethingToStop() throws {
+        let movies = root.appendingPathComponent("movies")
+        for i in 1...40 {
+            try Data(repeating: 0x21, count: 512).write(
+                to: movies.appendingPathComponent("Film \(i) (2020).mkv"))
+        }
+        var settings = coordinator.settings
+        settings.moviesFolder = movies.path
+        coordinator.executeForTesting(.saveSettings(settings))
+
+        // The press has to land while the walk is running, so the walk is
+        // held on the queue and the cancel is sent first -- the same
+        // reproducible ordering ConversionCancelTests uses.
+        let gate = DispatchSemaphore(value: 0)
+        coordinator.blockQueueForTesting(until: gate)
+        coordinator.submit(.findConvertible)
+        coordinator.submit(.cancelScan)
+
+        XCTAssertEqual(coordinator.snapshot.lastResult,
+                       "Stopping before the next file.",
+                       "a Stopp with a search queued has something to stop; "
+                           + "it used to answer \"Nothing is being searched.\" "
+                           + "with the bar moving")
+        gate.signal()
+        coordinator.drainForTesting()
+
+        let report = coordinator.snapshot.convertSearch
+        XCTAssertTrue(report.stopped,
+                      "the walk has to own up to having been stopped")
+        XCTAssertFalse(report.refused)
+        let result = coordinator.snapshot.lastResult ?? ""
+        XCTAssertTrue(result.contains("stopped"),
+                      "and say so where the user is looking: \(result)")
+        XCTAssertFalse(result.contains("No files to convert were found"),
+                       "\"nothing found\" is a claim about a library this "
+                           + "walk never finished reading: \(result)")
+        // And the flag does not carry over into the next search.
+        coordinator.executeForTesting(.findConvertible)
+        XCTAssertFalse(coordinator.snapshot.convertSearch.stopped,
+                       "a stop must not stop the search after it")
+        XCTAssertEqual(coordinator.convertible.count, 40,
+                       "the search after a stopped one has to finish")
+    }
 }

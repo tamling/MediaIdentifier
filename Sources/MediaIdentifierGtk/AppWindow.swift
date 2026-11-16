@@ -142,7 +142,7 @@ final class AppWindow {
     /// The ids cannot carry this: an empty library gives the same empty id
     /// list before the search, during it and after it.
     private enum ConvertListState {
-        case fresh, searching, searched, refused, converted
+        case fresh, searching, searched, refused, stopped, converted
     }
     private var convertListState: ConvertListState = .fresh
     /// The engine's search generation as it stood when Suchen was pressed.
@@ -1900,7 +1900,13 @@ final class AppWindow {
         let search = coordinator.snapshot.convertSearch
         if convertListState == .searching,
            search.generation != convertSearchGenerationAtPress {
-            convertListState = search.refused ? .refused : .searched
+            if search.refused {
+                convertListState = .refused
+            } else if search.stopped {
+                convertListState = .stopped
+            } else {
+                convertListState = .searched
+            }
             renderedConvertIDs = nil
         }
         let candidates = coordinator.convertible
@@ -1978,6 +1984,12 @@ final class AppWindow {
                         "\(run.converted) converted, \(run.failed) failed. "
                             + "Every original is still there.")
                 }
+            case .stopped:
+                // "Nothing found" would be a claim about a library this
+                // walk never finished reading.
+                sentence = Text.s(
+                    "Suche gestoppt, bevor etwas gefunden wurde.",
+                    "The search was stopped before it found anything.")
             case .refused:
                 // The engine's own reason, in the panel the user is looking
                 // at. It went to `lastResult` only, which is drawn on the

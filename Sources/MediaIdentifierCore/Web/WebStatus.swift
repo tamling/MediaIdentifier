@@ -14,11 +14,15 @@ public struct ConvertSearchReport: Codable, Sendable, Equatable {
     public var generation: Int
     /// The engine never looked: no library folder is configured.
     public var refused: Bool
+    /// The user stopped the walk, so `found` is however far it got.
+    public var stopped: Bool
     public var found: Int
 
-    public init(generation: Int = 0, refused: Bool = false, found: Int = 0) {
+    public init(generation: Int = 0, refused: Bool = false,
+                stopped: Bool = false, found: Int = 0) {
         self.generation = generation
         self.refused = refused
+        self.stopped = stopped
         self.found = found
     }
 }

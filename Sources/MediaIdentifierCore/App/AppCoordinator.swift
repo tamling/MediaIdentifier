@@ -129,6 +129,22 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
     /// run would go ahead after the interface had already said it was
     /// stopping.
     private var _stopRequested = false
+    /// The walk for convertible files is running.
+    ///
+    /// It sets `busy` and nothing else, and the one Stopp outside the menu is
+    /// sensitive on bare `busy` -- so the button lit up for the whole walk
+    /// and pressing it answered "Es wird gerade nicht gesucht.", because
+    /// `cancelScan`'s target test covers scans and renames only. Nothing
+    /// could act on this walk at all.
+    private var _findingConvertible = false
+    /// Walks asked for but not started, counted like `_queuedScans`.
+    ///
+    /// `submit` runs `.cancelScan` synchronously on the caller's thread -- on
+    /// purpose, so a Stopp cannot queue behind the thing it stops -- so the
+    /// press almost always lands BEFORE the walk has begun, and a flag that
+    /// is only raised once the walk runs would be false exactly when it is
+    /// read.
+    private var _queuedConvertibleSearches = 0
     /// Scans submitted but not yet taken off the queue, so a cancel can tell
     /// "stop the one that is coming" from "there is nothing to stop".
     private var _queuedScans = 0
@@ -353,6 +369,9 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         }
         if case .addFiles = command {
             lock.lock(); _queuedScans += 1; lock.unlock()
+        }
+        if case .findConvertible = command {
+            lock.lock(); _queuedConvertibleSearches += 1; lock.unlock()
         }
         if Self.isWork(command) {
             // The count is read out while the lock is held and then used
@@ -1383,7 +1402,8 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
             _renameRunning = false
             // Same rule as a scan: a stop aimed at something still queued
             // must not be eaten by the run finishing now.
-            if _scanDepth == 0, _queuedScans == 0, _queuedRenames == 0 {
+            if _scanDepth == 0, _queuedScans == 0, _queuedRenames == 0,
+               !_findingConvertible, _queuedConvertibleSearches == 0 {
                 _stopRequested = false
             }
             lock.unlock()
@@ -1666,6 +1686,11 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
     /// Lists videos in the library folders that are not already output of a
     /// previous conversion.
     private func findConvertible() {
+        // This walk is no longer queued, whatever happens below -- the
+        // refusal a few lines down included.
+        lock.lock()
+        _queuedConvertibleSearches = max(0, _queuedConvertibleSearches - 1)
+        lock.unlock()
         let settings = self.settings
         let roots = [settings.moviesFolder, settings.seriesFolder, settings.sourceFolder]
             .filter { !$0.isEmpty }
@@ -1690,11 +1715,32 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
             return
         }
 
+        // So Stopp has something it can act on, with the same rule the
+        // scans use for dropping the flag afterwards: a stop aimed at
+        // something still queued must not be eaten by the walk finishing
+        // now.
+        lock.lock(); _findingConvertible = true; lock.unlock()
+        defer {
+            lock.lock()
+            _findingConvertible = false
+            if _scanDepth == 0, _queuedScans == 0, _queuedRenames == 0,
+               !_renameRunning, _queuedConvertibleSearches == 0 {
+                _stopRequested = false
+            }
+            lock.unlock()
+        }
+
         update { $0.busy = true; $0.convertStatus = Text.s("Wird gesucht …", "Looking for files…") }
         var found: [ConversionCandidate] = []
         var seen: Set<String> = []
+        var stopped = false
         for root in roots {
+            if stopRequested { stopped = true; break }
             for url in FolderScan.videoFiles(under: root) {
+                // Between files as well as between roots: one library folder
+                // can hold the whole collection, and a Stopp that only takes
+                // effect at the next root is a Stopp that does nothing.
+                if stopRequested { stopped = true; break }
                 let path = url.standardizedFileURL.path
                 guard seen.insert(path).inserted else { continue }
                 // Never offer our own output: a second pass would re-encode
@@ -1703,6 +1749,7 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
                 let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
                 found.append(ConversionCandidate(source: url, byteSize: Int64(size)))
             }
+            if stopped { break }
         }
 
         lock.lock(); _convertible = found; lock.unlock()
@@ -1711,14 +1758,24 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
             $0.convertStatus = nil
             $0.convertSearch = ConvertSearchReport(
                 generation: $0.convertSearch.generation + 1,
-                refused: false, found: found.count)
-            $0.lastResult = found.isEmpty
-                ? Text.s("Keine Dateien zum Konvertieren gefunden.",
-                         "No files to convert were found.")
-                : Text.s(
-                    "\(found.count) Datei\(found.count == 1 ? "" : "en") "
-                        + "könnte\(found.count == 1 ? "" : "n") konvertiert werden.",
-                    "\(found.count) file\(found.count == 1 ? "" : "s") could be converted.")
+                refused: false, stopped: stopped, found: found.count)
+            if stopped {
+                // Said as a stop, not as a result: "nothing found" would be
+                // a claim about a library this walk never finished reading.
+                $0.lastResult = Text.s(
+                    "Suche gestoppt — \(found.count) Datei"
+                        + "\(found.count == 1 ? "" : "en") bis dahin gefunden.",
+                    "Search stopped — \(found.count) file"
+                        + "\(found.count == 1 ? "" : "s") found by then.")
+            } else {
+                $0.lastResult = found.isEmpty
+                    ? Text.s("Keine Dateien zum Konvertieren gefunden.",
+                             "No files to convert were found.")
+                    : Text.s(
+                        "\(found.count) Datei\(found.count == 1 ? "" : "en") "
+                            + "könnte\(found.count == 1 ? "" : "n") konvertiert werden.",
+                        "\(found.count) file\(found.count == 1 ? "" : "s") could be converted.")
+            }
         }
     }
 
@@ -1956,6 +2013,7 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         // there and kill the next scan the user actually asks for.
         let hasTarget = _scanDepth > 0 || _queuedScans > 0
             || _renameRunning || _queuedRenames > 0
+            || _findingConvertible || _queuedConvertibleSearches > 0
         if hasTarget { _stopRequested = true }
         lock.unlock()
 
@@ -2066,7 +2124,8 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
             _identificationNote = nil
         }
         if _scanDepth == 0, _queuedScans == 0, _queuedRenames == 0,
-           !_renameRunning {
+           !_renameRunning, !_findingConvertible,
+           _queuedConvertibleSearches == 0 {
             _stopRequested = false
         }
         lock.unlock()
