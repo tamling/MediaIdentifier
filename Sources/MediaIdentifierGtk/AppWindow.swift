@@ -1537,7 +1537,24 @@ final class AppWindow {
     /// button once did, which is what `urgentButtonsAreOnTheMainSurface`
     /// exists for.
     var applyButtonIsOnScreen: Bool {
+        // Mapped AND outside the scroller, because mapped alone is not the
+        // question.
+        //
+        // A GtkScrolledWindow's viewport maps its whole child whatever the
+        // scroll offset, so a button six sections below the fold reads
+        // "mapped" -- and "just below the fold" is the exact regression
+        // this exists for: `panel`'s own footer parameter says a settings
+        // dialogue whose Apply has to be scrolled to is one people believe
+        // has no Apply. Mapped was the whole test, so the check was green
+        // for the fault it was written to catch.
+        //
+        // Being outside the scroller is the invariant the footer move
+        // established, and unlike a coordinate comparison it does not
+        // depend on the window's current size or scroll position. Mapped is
+        // kept as the other half: it answers "packed and shown at all".
         gtk_widget_get_mapped(saveButton) != 0
+            && gtk_widget_get_ancestor(saveButton,
+                                       gtk_scrolled_window_get_type()) == nil
     }
 
     /// Types into the quality field, for the smoke modes.
@@ -2195,39 +2212,12 @@ final class AppWindow {
         // likeliest route to the Undo button is "some files failed, so I
         // will undo", which is exactly the case where the user most needs
         // to see that something is happening.
-        let subtitle: String
-        if state.isWorking {
-            // Two kinds of working. `busy` is set by the handlers that
-            // report progress; `isWorking` also covers the four commands
-            // that hold the engine's serial queue without ever setting it —
-            // Rückgängig, both connection tests, and Alles prüfen. A probe
-            // against an unreachable server holds the queue for the
-            // 30-second request timeout, and Alles prüfen runs two of them.
-            // A percentage only from a job that measures one.
-            //
-            // `activePercent` is `converting ? convertProgress :
-            // renameProgress` and has no notion of "this job reports
-            // nothing", while `renameProgress` is set to 1 at the end of
-            // every rename and never reset. So the comment on the `else`
-            // branch below named the hazard and then fixed it in the wrong
-            // place: a download sets `busy` and reports into
-            // `downloadProgress`, so the header read "Arbeitet · 100 %"
-            // from the first instant of a fetch -- the very string the
-            // branch below exists to avoid -- while the panel's own bar
-            // beside it read 3 %. Suchen over a large library did the same.
-            if state.converting || state.renaming {
-                subtitle = (state.convertStatus ?? Text.s("Arbeitet", "Working"))
-                    + " · \(state.activePercent) %"
-            } else if state.busy {
-                subtitle = state.convertStatus ?? Text.s("Arbeitet …", "Working…")
-            } else {
-                subtitle = Text.s("Arbeitet …", "Working…")
-            }
-        } else if state.hasError {
-            subtitle = Text.s("Mit Fehlern beendet", "Finished with errors")
-        } else {
-            subtitle = Text.s("Bereit", "Ready")
-        }
+        // The rule itself is in Core (`HeaderSubtitle`), for the same
+        // reason `SettingsMerge` and `FolderSelection` are: it is a rule
+        // about which numbers may be shown, and the only check on it ran in
+        // a state where the fault it names could not happen. As a pure
+        // function of the snapshot it has tests that fail.
+        let subtitle = HeaderSubtitle.text(for: state)
         gtk_header_bar_set_subtitle(Gtk.headerBar(header), subtitle)
 
         Gtk.setText(countsLabel, Text.s(

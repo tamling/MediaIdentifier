@@ -410,4 +410,68 @@ final class StoppedConversionTests: XCTestCase {
         XCTAssertEqual(coordinator.convertible.count, 40,
                        "the search after a stopped one has to finish")
     }
+
+    /// A second Konvertieren whose ticked ids are no longer on the list.
+    ///
+    /// The run drops every file it converted off `_convertible`, so two
+    /// presses closer together than the 500 ms refresh timer send the same
+    /// ids twice and the second run finds none of them. `pending` is then
+    /// empty for a reason that has nothing to do with ticking, and the
+    /// footer announced "Es war nichts angehakt, also wurde nichts
+    /// konvertiert." over the top of a run that had just encoded everything
+    /// -- a user who believed it pressed Suchen, was offered the untouched
+    /// originals again, and re-encoded the lot into "… (2).mkv" duplicates.
+    ///
+    /// The guard for that has had no check of any kind: the CI mode presses
+    /// Alle once and Konvertieren once, so the file is still on the list and
+    /// `pending` is never empty, and the three cancel tests that submit
+    /// `.convertFiles(accepting: [UUID()])` assert only the cancel flag.
+    func testAStaleSecondRunDoesNotClaimNothingWasTicked() throws {
+        let fake = root.appendingPathComponent("instant-ffmpeg")
+        try [
+            "#!/bin/sh",
+            "# Stands in for a successful encode.",
+            "exit 0",
+        ].joined(separator: "\n").write(to: fake, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755],
+                                              ofItemAtPath: fake.path)
+
+        let source = root.appendingPathComponent("movies/Film (2020).mkv")
+        try Data(repeating: 0x21, count: 4096).write(to: source)
+
+        var settings = coordinator.settings
+        settings.moviesFolder = root.appendingPathComponent("movies").path
+        settings.conversion.ffmpegPath = fake.path
+        coordinator.executeForTesting(.saveSettings(settings))
+        coordinator.executeForTesting(.findConvertible)
+        let ids = Set(coordinator.convertible.map(\.id))
+        XCTAssertEqual(ids.count, 1)
+
+        coordinator.executeForTesting(.convertFiles(accepting: ids))
+        XCTAssertTrue(coordinator.convertible.isEmpty,
+                      "a converted file leaves the candidate list")
+
+        // The same ids again. They name nothing now.
+        coordinator.executeForTesting(.convertFiles(accepting: ids))
+        let stale = coordinator.snapshot.lastResult ?? ""
+        XCTAssertFalse(stale.contains("ticked"),
+                       "the user ticked these files; the run found them gone "
+                           + "because the run before it converted them, and "
+                           + "saying \"nothing was ticked\" over a finished "
+                           + "run is how people re-encode their library: "
+                           + "\(stale)")
+        // And the run is still reported as having finished and done nothing,
+        // so the panel waiting on it is not left holding older counts.
+        XCTAssertEqual(coordinator.snapshot.convertRun.converted, 0)
+        XCTAssertEqual(coordinator.snapshot.convertRun.failed, 0)
+
+        // The other direction, or the assertion above would pass for a
+        // branch that never says anything at all: an empty tick really does
+        // get that sentence.
+        coordinator.executeForTesting(.convertFiles(accepting: []))
+        let nothing = coordinator.snapshot.lastResult ?? ""
+        XCTAssertTrue(nothing.contains("ticked"),
+                      "pressing Konvertieren with nothing ticked has to say "
+                          + "so: \(nothing)")
+    }
 }

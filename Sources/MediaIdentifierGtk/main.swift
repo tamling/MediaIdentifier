@@ -531,6 +531,21 @@ case .pressConvert:
                 Pending.convertTicks += 1
                 let state = coordinator.snapshot
                 if state.converting {
+                    // Painted again from a snapshot no older than the one
+                    // that decided to print.
+                    //
+                    // `refresh()` reads its own snapshot at its first line,
+                    // so the widgets read below described the engine as it
+                    // was one refresh ago -- and `refresh()` is where the
+                    // whole convert list is rebuilt. If `converting` turned
+                    // true inside that window, this branch printed widgets
+                    // drawn for "queued, nothing converting": Stopp grey,
+                    // bar "Keine Konvertierung", subtitle with no
+                    // percentage. The fixture's encode is 2 s, so the poll
+                    // can get a single sample, and CI read exactly that
+                    // one. --press-check gets this right already, with "no
+                    // refresh of our own in between".
+                    mainWindow.refresh()
                     print("converting: \(mainWindow.convertBarText)")
                     // The other direction of the same gate: a Stopp that is
                     // grey while a 40-minute encode runs is the fault that

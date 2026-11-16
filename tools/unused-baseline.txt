@@ -15,9 +15,20 @@
 #
 #   Given a caller, because the thing they were for was missing from the
 #   interface and the window needed it --
-#     estimatedSizePercent, heightLabel, offeredHeights, suggestedQuality,
+#     heightLabel, offeredHeights, suggestedQuality,
 #     readableSize   (the conversion settings card and the Konvertieren
 #                     panel; the whole feature had no way in)
+#     estimatedSizePercent
+#                    (half true, and the half that was false is why this
+#                     file says "a debt, not a decision": the window calls
+#                     the overload WITH a source height, twice, and the
+#                     no-argument one stayed dead with a test as its only
+#                     reader. The script could not see it -- a name declared
+#                     in two shapes had its mentions counted together, so
+#                     the property was satisfied by the function's call
+#                     sites and by its own body. The script counts the two
+#                     shapes apart now and the dead accessor is gone;
+#                     ConversionPlanTests names its source height.)
 #     isWorking      (the four commands that hold the engine's queue
 #                     without setting `busy`; the window said "Bereit" and
 #                     left Undo pressable, where a second press reversed a

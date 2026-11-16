@@ -54,7 +54,7 @@ Everything that is not the list lives behind the **menu button** in the header:
 
 | Menu entry | |
 |---|---|
-| **Einstellungen …** | Library folders, identification, schedule, conversion and the media server — all in one window, with one **Übernehmen** button pinned to the bottom edge that says `Übernommen um 14:52:31`. The time is there so a second press is visibly a second press. |
+| **Einstellungen …** | Library folders, identification, schedule, conversion and the media server — all in one window, with one **Übernehmen** button pinned to the bottom edge. It says `Wird übernommen …` while the write is on its way and `Übernommen um 14:52:31` once it is on disk; the time is there so a second press is visibly a second press. If the write is refused or fails, it says so and why, right there, and your edits stay in the fields so the correction is one press. |
 | **Status …** | The traffic light: one lamp per thing that can be wrong, each carrying the sentence that says what to do about it. |
 | **Aus dem Netz laden …** | Fetch a video from a link with `yt-dlp`. |
 | **Konvertieren …** | Find files worth re-encoding, tick the ones you want, watch it run, stop it. |
@@ -86,7 +86,16 @@ nothing can look at your files while a settings window is open.
 
 The **Konvertieren** panel is where a run is started. **Suchen** lists what
 could be converted, with each file's size and the total of what is ticked; the
-originals stay where they are.
+originals stay where they are. Suchen can be stopped like anything else, and a
+stopped search says it was stopped rather than reporting on a library it never
+finished reading.
+
+When the list comes back empty the panel says which kind of empty it is:
+nothing searched for yet, still searching, searched and found nothing, not
+searched at all because no library folder is set — and, after a run,
+what the run actually did. Those counts come from the engine, not from the
+list having gone empty: a file the program failed to convert stays on the
+list, because nothing was done to it and the original is untouched.
 
 ## Running by itself
 

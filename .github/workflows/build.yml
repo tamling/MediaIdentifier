@@ -653,14 +653,25 @@ jobs:
           echo "first: ${first:-nothing}"
           echo "second: ${second:-nothing}"
           test -n "$first" || { echo "FAIL: Apply said nothing at all"; exit 1; }
-          # The button itself, mapped and not merely built. The press goes
-          # through `gtk_button_clicked` now rather than calling the handler
-          # -- it used to call `saveFolders()` behind the button's back, so
-          # this whole ~120-line step was a test of that method and would
-          # have passed with Übernehmen unwired or packed into a container
-          # nobody shows. Clicking proves the wiring; this proves it is on
-          # screen, which matters because the same change moved it out of
-          # the scroller into the panel footer.
+          # The button itself: mapped, and outside the scroller.
+          #
+          # The press goes through `gtk_button_clicked` now rather than
+          # calling the handler -- it used to call `saveFolders()` behind the
+          # button's back, so this whole ~120-line step was a test of that
+          # method and would have passed with Übernehmen unwired or packed
+          # into a container nobody shows.
+          #
+          # "Mapped" alone was this check for one day and it was green for
+          # the exact regression it names: a GtkScrolledWindow's viewport
+          # maps its whole child whatever the scroll offset, so a button six
+          # sections below the fold reads mapped. Measured both ways with
+          # Übernehmen packed back into the scroller: mapped true, the
+          # tightened predicate false, and `applied once: Übernommen um …`
+          # still printed -- which is why clicking cannot catch this. The
+          # accessor now also asks that the button has no
+          # GtkScrolledWindow ancestor, which is the invariant the footer
+          # move established and does not depend on the window's size or
+          # scroll position.
           on_screen="$(sed -n 's/^apply button on screen: //p' applied.log)"
           test "$on_screen" = "true" || {
             echo "FAIL: the settings panel's Apply button is not on screen "
@@ -949,25 +960,42 @@ jobs:
             echo "      converting (read: $stop_idle)"
             exit 1
           }
-          stop_busy="$(sed -n \
-            's/^stop pressable while converting: //p' convert.log | head -1)"
-          test "$stop_busy" = "true" || {
+          # Every sample, not the first one.
+          #
+          # `head -1` read the single at-risk sample: the poll refreshes,
+          # THEN takes the snapshot that decides whether to print, so a tick
+          # that catches `converting` turning true describes widgets drawn
+          # one refresh earlier -- Stopp still grey. The mode refreshes again
+          # before reading now, and these ask that at least one sample says
+          # the right thing, plus that a sample exists at all, so neither
+          # half can quietly become vacuous.
+          samples="$(grep -c '^stop pressable while converting: ' convert.log || true)"
+          test "${samples:-0}" -ge 1 || {
+            echo "FAIL: the poll never caught the conversion running, so "
+            echo "      none of the during-a-conversion checks below ran"
+            exit 1
+          }
+          grep -q '^stop pressable while converting: true' convert.log || {
             echo "FAIL: the panel's Stopp was NOT pressable during a "
-            echo "      conversion (read: ${stop_busy:-nothing}). A button "
+            echo "      conversion, in any of $samples samples. A button "
             echo "      that is grey while a 40-minute encode runs is the "
             echo "      fault that matters, and a one-sided check cannot "
             echo "      tell it from a correctly gated one."
+            sed -n 's/^stop pressable while converting: /  read: /p' convert.log
             exit 1
           }
           # A job that measures itself must say so, which is the other half
           # of the rule --press-check asserts from the silent side.
-          sub="$(sed -n 's/^converting subtitle: //p' convert.log | head -1)"
-          case "$sub" in
-            *%*) : ;;
-            *) echo "FAIL: no percentage in the header during a conversion"
-               echo "      (read: ${sub:-nothing})"
-               exit 1 ;;
-          esac
+          test "$(grep -c '^converting subtitle: ' convert.log || true)" -ge 1 || {
+            echo "FAIL: no subtitle was read during the conversion at all"
+            exit 1
+          }
+          grep -q '^converting subtitle: .*%' convert.log || {
+            echo "FAIL: no percentage in the header during a conversion, in "
+            echo "      any sample:"
+            sed -n 's/^converting subtitle: /  read: /p' convert.log
+            exit 1
+          }
           # Before anything is searched for, the list has to say so. It
           # shipped drawing nothing at all — the first refresh compared an
           # empty id list against an empty id list, decided nothing had
@@ -1050,14 +1078,21 @@ jobs:
 
           # The second run, with everything ticked, which empties the list.
           #
-          # Two faults only this can see. An emptied list is the third
-          # empty state, and all three used to draw "Noch nichts gesucht —
-          # „Suchen" drücken." -- so a finished run left a panel denying it
-          # had happened, and the user pressed the button they had just
-          # pressed. And a run whose candidates have all gone takes the
-          # `pending.isEmpty` branch, which announced "Es war nichts
-          # angehakt, also wurde nichts konvertiert." over the top of a run
-          # that had encoded everything.
+          # What this can see: an emptied list is one of the empty states,
+          # and they all used to draw "Noch nichts gesucht — „Suchen"
+          # drücken." -- so a finished run left a panel denying it had
+          # happened, and the user pressed the button they had just pressed.
+          #
+          # What it CANNOT see, though the comment here used to claim it:
+          # the `pending.isEmpty` branch that announced "Es war nichts
+          # angehakt" over a run that had encoded everything. That branch
+          # needs ids that are no longer on the candidate list -- a second
+          # press closer together than the 500 ms refresh timer -- and this
+          # mode presses Alle once and Konvertieren once, so the file is
+          # still listed and `pending` is never empty. The guard for it is
+          # tested where it is deterministic, in
+          # StoppedConversionTests.testAStaleSecondRunDoesNotClaimNothing
+          # WasTicked. The `case` below stays as a cheap backstop.
           second="$(sed -n 's/^second run status: //p' convert.log)"
           case "$second" in
             *Konvertiert*|*Converted*) : ;;
@@ -1080,7 +1115,26 @@ jobs:
           empty="$(sed -n 's/^convert list when empty: //p' convert.log)"
           test -n "$empty" || {
             echo "FAIL: the panel said nothing at all after the run"; exit 1; }
+          # The sentence this state must produce, not one it must not.
+          #
+          # Both of these used to be a blacklist of the single sentence the
+          # four-state split replaced, so `.fresh` was the only state they
+          # could reject: `.searching`, `.searched` and `.converted` were
+          # interchangeable as far as CI was concerned, and breaking each
+          # state in turn still passed. The window has no unit tests at all,
+          # so these two `case` statements are the whole net under that
+          # state machine.
           case "$empty" in
+            *Fertig*|*"Done."*) : ;;
+            *) echo "FAIL: after converting everything the panel does not "
+               echo "      say the new files are there: $empty"
+               exit 1 ;;
+          esac
+          case "$empty" in
+            *"Wird gesucht"*|*"Looking for files"*)
+              echo "FAIL: the panel is still stuck on searching after the "
+              echo "      run finished: $empty"
+              exit 1 ;;
             *"Noch nichts gesucht"*|*"Nothing looked for yet"*)
               echo "FAIL: after converting everything the panel still says "
               echo "      nothing has been searched for: $empty"
@@ -1128,12 +1182,76 @@ jobs:
           test -n "$searched" || {
             echo "FAIL: the panel said nothing after a search"; exit 1; }
           case "$searched" in
+            *"Keine Dateien zum Konvertieren gefunden"*|*"No files to convert"*) : ;;
+            *) echo "FAIL: a search of an empty library does not say it "
+               echo "      found nothing: $searched"
+               exit 1 ;;
+          esac
+          case "$searched" in
             *"Noch nichts gesucht"*|*"Nothing looked for yet"*)
               echo "FAIL: a search that found nothing still tells the user "
               echo "      to press Suchen: $searched"
               exit 1 ;;
+            *"Wird gesucht"*|*"Looking for files"*)
+              echo "FAIL: the panel is still stuck on searching after the "
+              echo "      search ended: $searched"
+              exit 1 ;;
           esac
           echo "panel after an empty search: $searched"
+
+          # And the state the panel could not tell apart from that one: a
+          # search the engine REFUSED to run.
+          #
+          # With no library folder configured, `findConvertible` returns at
+          # its first guard without ever setting `busy`, and the flip out of
+          # "Wird gesucht …" keyed on the engine going quiet -- so the panel
+          # announced "Keine Dateien zum Konvertieren gefunden.", a claim
+          # about a library nothing had looked at. The one true sentence
+          # went to `lastResult`, which is drawn on the main window BEHIND
+          # this panel. A fresh install hits this on the first press of
+          # Suchen.
+          bare="$(mktemp -d)"
+          mkdir -p "$bare/config"
+          python3 - > "$bare/config/settings.json" <<'BARE'
+          import json
+          print(json.dumps({
+              "sourceFolder": "", "moviesFolder": "", "seriesFolder": "",
+              "musicFolder": "", "libraryMode": "video",
+              "identification": "offline", "language": "de",
+              "localLLMBaseURL": "", "localLLMModel": "", "jellyfinBaseURL": "",
+              "conflictPolicy": "skip", "watchSourceFolder": False,
+              "conversion": {"videoCodec": "h264", "quality": 28,
+                             "preset": "ultrafast", "targetHeight": None,
+                             "audioMode": "passthrough",
+                             "stripSubtitles": False, "ffmpegPath": ""},
+              "schedule": {"isEnabled": False, "alsoRename": False,
+                           "cadence": "daily", "hour": 3, "minute": 0,
+                           "everyHours": 6},
+          }))
+          BARE
+          timeout 120 xvfb-run -a --server-args="-screen 0 1280x900x24" \
+            env MEDIAFIN_CONFIG_DIR="$bare/config" \
+            .build/release/mediafin-gtk --press-convert > bare.log 2>&1 || true
+          refused_panel="$(sed -n 's/^convert list after search: //p' bare.log | head -1)"
+          test -n "$refused_panel" || {
+            echo "FAIL: the panel said nothing after a refused search"
+            sed -n '1,20p' bare.log
+            exit 1; }
+          case "$refused_panel" in
+            *"nicht gesucht"*|*"Nothing was searched"*) : ;;
+            *) echo "FAIL: the engine refused to look and the panel reported "
+               echo "      on the library anyway: $refused_panel"
+               exit 1 ;;
+          esac
+          case "$refused_panel" in
+            *Bibliotheksordner*|*"library folders"*) : ;;
+            *) echo "FAIL: the panel does not say what to do about it; that "
+               echo "      sentence is on the window behind it. Read: "
+               echo "      $refused_panel"
+               exit 1 ;;
+          esac
+          echo "panel after a refused search: $refused_panel"
+          rm -rf "$bare"
 
           echo "=== the window while the engine holds its queue ==="
           # Four commands hold the engine's serial queue without ever setting
@@ -1282,13 +1400,22 @@ jobs:
             exit 1
           }
           # A job that measures nothing must not borrow a percentage.
-          # `activePercent` falls back to `renameProgress`, which is 1 after
-          # every finished rename and never reset, so the header announced
-          # "Arbeitet · 100 %" of work that reports no progress at all.
+          #
+          # This is the queue-held state: `busy` is false here -- the step
+          # asserts exactly that seventy lines up -- so it is NOT the state
+          # the "Arbeitet · 100 %" fault needed, and the code before that fix
+          # printed the same thing here. It cannot fail for that regression,
+          # and saying otherwise is how a check that proves nothing gets
+          # kept. The rule itself now lives in Core as `HeaderSubtitle` and
+          # HeaderSubtitleTests puts the engine into the state this cannot
+          # reach: `busy` true, nothing measurable, `renameProgress` left at
+          # 1 by an earlier rename. Six of its assertions fail on the old
+          # rule. What this line still covers is the wiring -- that the
+          # header is drawn from that function at all.
           case "$during" in
             *%*)
-              echo "FAIL: the header printed a percentage for a job that "
-              echo "      measures none: $during"
+              echo "FAIL: the header printed a percentage while the queue "
+              echo "      was merely held: $during"
               exit 1 ;;
           esac
 

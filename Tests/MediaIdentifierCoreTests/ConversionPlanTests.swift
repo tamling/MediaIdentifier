@@ -163,12 +163,20 @@ final class ConversionPlanTests: XCTestCase {
         XCTAssertTrue(WebConversionSettings(ffmpegPath: "/usr/bin/ffmpeg").problems().isEmpty)
     }
 
+    /// The source height is named here rather than assumed.
+    ///
+    /// There used to be a no-argument `estimatedSizePercent` that meant
+    /// "1080p", and this test was its only reader anywhere -- the window
+    /// calls the overload with a height, twice. check-unused.py could not
+    /// see that: the bare name matched five times across Sources, and two
+    /// of those were the other overload's call sites.
     func testSizeEstimateIsReported() {
         let h265 = WebConversionSettings(videoCodec: .h265, quality: 21)
         let h264 = WebConversionSettings(videoCodec: .h264, quality: 21)
-        XCTAssertLessThan(h265.estimatedSizePercent, h264.estimatedSizePercent,
+        XCTAssertLessThan(h265.estimatedSizePercent(forSourceHeight: 1080),
+                          h264.estimatedSizePercent(forSourceHeight: 1080),
                           "H.265 should be estimated smaller than H.264")
-        XCTAssertGreaterThan(h265.estimatedSizePercent, 0)
+        XCTAssertGreaterThan(h265.estimatedSizePercent(forSourceHeight: 1080), 0)
     }
 
     // MARK: Candidates

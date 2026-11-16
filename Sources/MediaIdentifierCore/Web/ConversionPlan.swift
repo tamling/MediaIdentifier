@@ -178,12 +178,6 @@ public struct WebConversionSettings: Codable, Sendable, Equatable {
                 * 100).rounded())
     }
 
-    /// The same for a 1080p source, which is what "a normal file" means for
-    /// most libraries.
-    public var estimatedSizePercent: Int {
-        estimatedSizePercent(forSourceHeight: 1080)
-    }
-
     /// What the chosen quality number looks like, in words.
     public var qualityDescription: String {
         ConversionEstimator.quality(options: options).label

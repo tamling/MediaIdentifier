@@ -18,12 +18,6 @@ public struct FFprobeMetadataProvider: MetadataProvider {
         self.ffprobePath = ffprobePath
     }
 
-    /// First `ffprobe` binary found in a common Homebrew/system location.
-    public static func defaultPath() -> String? {
-        ["/opt/homebrew/bin/ffprobe", "/usr/local/bin/ffprobe", "/usr/bin/ffprobe"]
-            .first { FileManager.default.isExecutableFile(atPath: $0) }
-    }
-
     public func identify(_ parsed: ParsedRelease, at url: URL?) async throws -> MediaMetadata? {
         guard let url, FileManager.default.fileExists(atPath: url.path) else { return nil }
         guard let data = try runFFprobe(on: url) else { return nil }

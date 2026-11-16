@@ -60,7 +60,7 @@ EXEMPT = {
 
 DECL = re.compile(
     r"^\s*(?:@\w+\s+)*(?:public |internal |private |fileprivate |static |final |class |override |mutating |@discardableResult )*"
-    r"(?:func|var|let)\s+([A-Za-z_][A-Za-z0-9_]*)"
+    r"(func|var|let)\s+([A-Za-z_][A-Za-z0-9_]*)"
 )
 
 
@@ -76,7 +76,7 @@ def declarations():
                     match = DECL.match(line)
                     if not match:
                         continue
-                    identifier = match.group(1)
+                    identifier = match.group(2)
                     if identifier.endswith("ForTesting"):
                         continue
                     if identifier.startswith("_"):
@@ -88,7 +88,9 @@ def declarations():
                     # cheap test for that.
                     if len(line) - len(line.lstrip(" ")) > 8:
                         continue
-                    found.setdefault(identifier, []).append((path, number))
+                    kind = "func" if match.group(1) == "func" else "property"
+                    found.setdefault(identifier, []).append(
+                        (path, number, kind))
     return found
 
 
@@ -111,7 +113,37 @@ def main():
         # One mention is the declaration itself. Two or more means somebody
         # else refers to it -- or it is assigned as well as declared, which
         # is why the message says "mentions" rather than "callers".
-        uses = len(re.findall(r"\b" + re.escape(identifier) + r"\b", body))
+        name = re.escape(identifier)
+        funcs = [p for p in places if p[2] == "func"]
+        properties = [p for p in places if p[2] == "property"]
+        if funcs and properties:
+            # A name declared in two shapes: a function and a property of
+            # the same name. The bare-name count cannot tell their mentions
+            # apart, so one of them is satisfied by the other's call sites
+            # and by its own body -- which is how the no-argument
+            # `estimatedSizePercent` sat here dead, with 5 mentions against
+            # 2 declarations and a cheerful "ok". The same blind spot
+            # check-reachable.py had, where `.clearHistory` was satisfied by
+            # the window's own method name.
+            #
+            # So each shape is counted by the shape of its own mentions: a
+            # call is `name(`, a property read is `name` NOT followed by
+            # `(`. A property's own body calling the function overload is
+            # then a function mention, which is what it is.
+            calls = len(re.findall(r"\b" + name + r"\s*\(", body))
+            reads = len(re.findall(r"\b" + name + r"\b(?!\s*\()", body))
+            shapes = [("func", calls - len(funcs), funcs),
+                      ("property", reads - len(properties), properties)]
+            for _, left, where in shapes:
+                if left <= 0:
+                    if identifier not in known:
+                        unused.append((identifier, where))
+                    break
+            else:
+                if identifier in known:
+                    fixed.append(identifier)
+            continue
+        uses = len(re.findall(r"\b" + name + r"\b", body))
         if uses - len(places) <= 0:
             if identifier not in known:
                 unused.append((identifier, places))
@@ -129,7 +161,8 @@ def main():
     print("FAIL  : these are newly declared in the program and used only "
           "by tests:")
     for identifier, places in unused:
-        where = ", ".join(f"{p[len(ROOT) + 1:]}:{n}" for p, n in places)
+        where = ", ".join(f"{p[len(ROOT) + 1:]}:{n} ({k})"
+                          for p, n, k in places)
         print(f"        {identifier}  ({where})")
     print()
     print("        Each one is either dead, or a defence with no caller --")
