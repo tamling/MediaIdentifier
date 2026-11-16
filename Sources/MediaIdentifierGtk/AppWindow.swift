@@ -25,6 +25,11 @@ final class AppWindow {
     private let libraryModeCombo: UnsafeMutablePointer<GtkWidget>
     private let languageCombo: UnsafeMutablePointer<GtkWidget>
     private let scanButton: UnsafeMutablePointer<GtkWidget>
+    /// Beside Scan in the header, and only sensitive while something is
+    /// running. A scan with identification on is one blocking request per
+    /// file, so without this there was no way to stop a run that had turned
+    /// into hours of timeouts.
+    private let stopScanButton: UnsafeMutablePointer<GtkWidget>
     private let applyButton: UnsafeMutablePointer<GtkWidget>
     private let undoButton: UnsafeMutablePointer<GtkWidget>
     private let listColumn: UnsafeMutablePointer<GtkWidget>
@@ -34,23 +39,17 @@ final class AppWindow {
     private let llmKeyEntry: UnsafeMutablePointer<GtkWidget>
     private let logColumn: UnsafeMutablePointer<GtkWidget>
     private let logCountLabel: UnsafeMutablePointer<GtkWidget>
-    private let remoteEnabledCheck: UnsafeMutablePointer<GtkWidget>
-    private let remoteHostEntry: UnsafeMutablePointer<GtkWidget>
-    private let remotePortEntry: UnsafeMutablePointer<GtkWidget>
-    private let remoteUserEntry: UnsafeMutablePointer<GtkWidget>
-    private let remoteBaseEntry: UnsafeMutablePointer<GtkWidget>
-    private let remoteMoviesPathEntry: UnsafeMutablePointer<GtkWidget>
-    private let remoteSeriesPathEntry: UnsafeMutablePointer<GtkWidget>
-    private let remoteMusicPathEntry: UnsafeMutablePointer<GtkWidget>
-    private let remoteIdentityEntry: UnsafeMutablePointer<GtkWidget>
-    private let remotePasswordEntry: UnsafeMutablePointer<GtkWidget>
-    private let remoteTransportCombo: UnsafeMutablePointer<GtkWidget>
-    private let remoteAuthCombo: UnsafeMutablePointer<GtkWidget>
-    private let remoteTrustCheck: UnsafeMutablePointer<GtkWidget>
-    private let remoteRemoveLocalCheck: UnsafeMutablePointer<GtkWidget>
-    private let remoteProgress: UnsafeMutablePointer<GtkWidget>
-    private let sendButton: UnsafeMutablePointer<GtkWidget>
-    private let cancelSendButton: UnsafeMutablePointer<GtkWidget>
+    /// Empties the history — and the undo journal with it, which is why it
+    /// asks first. It was the last command the engine accepted that nothing
+    /// in the program could send.
+    private let clearHistoryButton: UnsafeMutablePointer<GtkWidget>
+    /// The settings panel's "Übernehmen", held so the smoke modes can press
+    /// the real button rather than call its handler.
+    private let saveButton: UnsafeMutablePointer<GtkWidget>
+    /// "Alles prüfen", for the same reason.
+    private let checkButton: UnsafeMutablePointer<GtkWidget>
+    /// The conversion panel's "Alle", for the same reason.
+    private let convertAllButton: UnsafeMutablePointer<GtkWidget>
     private let urlEntry: UnsafeMutablePointer<GtkWidget>
     private let downloadButton: UnsafeMutablePointer<GtkWidget>
     private let cancelDownloadButton: UnsafeMutablePointer<GtkWidget>
@@ -60,10 +59,148 @@ final class AppWindow {
     private let scheduleTimeEntry: UnsafeMutablePointer<GtkWidget>
     private let scheduleHoursEntry: UnsafeMutablePointer<GtkWidget>
     private let scheduleRenameCheck: UnsafeMutablePointer<GtkWidget>
-    private let scheduleSendCheck: UnsafeMutablePointer<GtkWidget>
     private let scheduleSummary: UnsafeMutablePointer<GtkWidget>
     private let checksColumn: UnsafeMutablePointer<GtkWidget>
     private let checksExpander: UnsafeMutablePointer<GtkWidget>
+    /// Where the media server is, so a rename can tell it to look again.
+    ///
+    /// The field was missing for as long as the window has existed: the
+    /// setting is in `WebSettings`, `SettingsMerge` writes it back, the
+    /// engine uses it — and nothing could ever type it in. The web
+    /// front-end had the field and the web front-end is gone.
+    private let jellyfinURLEntry: UnsafeMutablePointer<GtkWidget>
+    // MARK: Converting
+    //
+    // The whole conversion feature was reachable from the web front-end
+    // only, so when that went, FFmpeg driving, progress, cancelling and
+    // size estimation stayed in the binary with no way to ask for them.
+    // These are the switches that decide what a conversion does.
+    private let convertCodecCombo: UnsafeMutablePointer<GtkWidget>
+    private let convertQualityEntry: UnsafeMutablePointer<GtkWidget>
+    private let convertPresetCombo: UnsafeMutablePointer<GtkWidget>
+    private let convertHeightCombo: UnsafeMutablePointer<GtkWidget>
+    private let convertAudioCombo: UnsafeMutablePointer<GtkWidget>
+    private let convertSubtitlesCheck: UnsafeMutablePointer<GtkWidget>
+    private let ffmpegPathEntry: UnsafeMutablePointer<GtkWidget>
+    /// What the settings above will roughly do to the file size, recomputed
+    /// from the widgets on every refresh so it answers before the run rather
+    /// than after it.
+    private let convertEstimate: UnsafeMutablePointer<GtkWidget>
+    /// The panel a conversion is actually started from, and its parts.
+    private let convertDialog: UnsafeMutablePointer<GtkWidget>
+    private let convertFindButton: UnsafeMutablePointer<GtkWidget>
+    private let convertRunButton: UnsafeMutablePointer<GtkWidget>
+    private let convertStopButton: UnsafeMutablePointer<GtkWidget>
+    private let convertListColumn: UnsafeMutablePointer<GtkWidget>
+    private let convertCountLabel: UnsafeMutablePointer<GtkWidget>
+    private let convertBar: UnsafeMutablePointer<GtkWidget>
+    /// The rows of the conversion list, and which candidate each belongs to.
+    private var convertRows: [(id: UUID, check: UnsafeMutablePointer<GtkWidget>)] = []
+    private var convertRowWidgets: [UnsafeMutablePointer<GtkWidget>] = []
+    /// The list's own sentences — the empty state, and the line about rows
+    /// past the drawing limit — kept apart from the rows so they can be read
+    /// back as text. See `convertListTexts`.
+    private var convertNotes: [UnsafeMutablePointer<GtkWidget>] = []
+    /// Which files the user has taken *out* of the run, by path.
+    ///
+    /// Held here and not only in the widgets, for the reason the proposals
+    /// list learned the hard way: the list is rebuilt whenever the engine's
+    /// candidates change, and a tick that lives only in a destroyed widget
+    /// is a tick the user set and the program then quietly dropped. Unlike
+    /// the proposals there is no engine-side flag for these — `convertFiles`
+    /// takes the set from whoever asks — so this is where it lives.
+    ///
+    /// By path, and as the *exclusions*, for two reasons. A fresh search
+    /// builds fresh candidates with fresh UUIDs, so ids carry nothing over
+    /// and a second press of Suchen would silently re-tick the files the
+    /// user had just taken out. And everything found is ticked by default:
+    /// pressing Suchen is already the statement of intent, and clearing 40
+    /// boxes to convert 39 is the wrong way round.
+    private var convertExcludedPaths: Set<String> = []
+    /// The candidate ids the list is currently drawn from.
+    ///
+    /// Optional, like `renderedItemIDs`, and for a reason the first version
+    /// of this got wrong: with `[]` as the starting value, the first
+    /// refresh of an empty list compares `[] != []`, decides nothing has
+    /// changed and returns — so the panel opened with a blank black box and
+    /// no "Noch nichts gesucht" in it. nil cannot equal any real list, so
+    /// the first draw always happens.
+    private var renderedConvertIDs: [UUID]?
+    /// What an empty conversion list means, which the list itself cannot say.
+    ///
+    /// An empty list drew exactly one sentence -- "Noch nichts gesucht —
+    /// „Suchen" drücken." -- and FOUR different states reach it: never
+    /// searched, searching, searched and found nothing, and converted
+    /// everything (the engine drops each converted file off its candidate
+    /// list, so a finished run empties the panel). A user who pressed
+    /// Suchen on a library with nothing to convert saw a panel identical to
+    /// the one they had opened, telling them to press the button they had
+    /// just pressed. This is the inverse of the fault 695a4e7 fixed, in the
+    /// same panel: "it looked exactly like a working one that had searched
+    /// and found nothing".
+    ///
+    /// The ids cannot carry this: an empty library gives the same empty id
+    /// list before the search, during it and after it.
+    private enum ConvertListState {
+        case fresh, searching, searched, refused, stopped, converted
+    }
+    private var convertListState: ConvertListState = .fresh
+    /// The engine's search generation as it stood when Suchen was pressed.
+    ///
+    /// The flip out of `.searching` used to key on `isWorking`, which is
+    /// `busy || queuedWork > 0` -- "the engine is idle", not "the search is
+    /// over". Any unrelated job in flight held the panel on "Wird gesucht
+    /// …" (Alles prüfen is never greyed and runs two probes with a
+    /// 30-second timeout each), and a search the engine REFUSED -- no
+    /// library folder configured, where it returns at its first guard
+    /// without ever setting `busy` -- flipped straight to "Keine Dateien
+    /// zum Konvertieren gefunden.", which is a claim about a library
+    /// nothing had looked at. A counter only the search itself advances can
+    /// be confused with neither.
+    private var convertSearchGenerationAtPress = 0
+    /// What Übernehmen asked the engine to write, and the widgets it was
+    /// read from, while the write is still in flight.
+    ///
+    /// `submit` is asynchronous, so the window used to print "Übernommen um
+    /// HH:MM:SS" for a write that had not been attempted yet, and advance
+    /// its merge baseline to values that were never stored. Both are
+    /// decided here instead, once the engine has said what happened.
+    private var pendingSave: (typed: WebSettings, key: String, announce: Bool)?
+    private var settingsSaveGenerationAtPress = 0
+    /// The "… und N weitere" label, kept so its text can follow the ticks.
+    private var convertMoreNote: UnsafeMutablePointer<GtkWidget>?
+    /// Settings, status and fetching live in windows of their own, opened from
+    /// the header's menu.
+    ///
+    /// They used to be six cards stacked above the proposals on the main
+    /// surface. That made the main surface a form with a list at the bottom,
+    /// and it made "are these options even working, did that save" a fair
+    /// question: a settings form you are looking at all the time looks like
+    /// it should be live, and this one is not -- it is read when Apply is
+    /// pressed. Behind a menu, opened deliberately, with one Apply button and
+    /// a timestamp, it stops pretending.
+    private let settingsDialog: UnsafeMutablePointer<GtkWidget>
+    private let statusDialog: UnsafeMutablePointer<GtkWidget>
+    private let fetchDialog: UnsafeMutablePointer<GtkWidget>
+    /// The traffic light, in the bar at the bottom: a coloured dot and one
+    /// line, always visible.
+    ///
+    /// It lived behind the menu, which answers "what is wrong" only once you
+    /// have thought to go and look. The first question anyone has when a run
+    /// does nothing is whether everything is plugged in, and a panel that has
+    /// to be opened to answer it is a panel nobody opens.
+    private let lampDot: UnsafeMutablePointer<GtkWidget>
+    private let lampText: UnsafeMutablePointer<GtkWidget>
+    /// What the bar last said, so an unchanged bar is left alone rather than
+    /// rewritten twice a second.
+    private var lampShown: (state: SystemCheck.State, text: String)?
+
+    /// Says when the settings were last taken, with the time of day.
+    ///
+    /// The time is the point. "Saved." appearing where "Saved." already was
+    /// is indistinguishable from nothing happening, which is exactly what was
+    /// reported. A clock that moves proves the press landed.
+    private let savedLabel: UnsafeMutablePointer<GtkWidget>
 
     /// The log rows on screen, so they can be replaced without walking the
     /// container.
@@ -92,6 +229,25 @@ final class AppWindow {
     /// The rows currently on screen, kept so they can be destroyed without
     /// walking the container — which would mean another C callback.
     private var rowWidgets: [UnsafeMutablePointer<GtkWidget>] = []
+    /// The "→ …" label of each row, so what the window really says about
+    /// where a file is going can be read back rather than assumed.
+    private var rowDestinations: [UnsafeMutablePointer<GtkWidget>] = []
+    /// The "will be deleted" label of each row that has one, so a test can
+    /// read the warning off the widget rather than off the engine.
+    private var rowDeletionNotes: [UnsafeMutablePointer<GtkWidget>] = []
+    /// The rows' "this one stays" labels, for the same reason.
+    private var rowKeptNotes: [UnsafeMutablePointer<GtkWidget>] = []
+    /// True while the rows are being built or seeded, so the tick boxes'
+    /// own "toggled" signal is not mistaken for a press.
+    private(set) var isSeedingRows = false
+    /// The second line of the empty list, kept so what just happened can be
+    /// said in the middle of the window rather than only in the footer.
+    ///
+    /// The footer line is small, dim and at the bottom edge. Pressing Scan
+    /// with no import folder set put the answer there and nowhere else, and
+    /// "it does nothing, no status, nothing at all" is what that looks like
+    /// from a chair in front of it. The answer belongs where the eye is.
+    private var emptyDetail: UnsafeMutablePointer<GtkWidget>?
     /// Which proposal each tick box belongs to. The window holds no opinion
     /// about what is selected beyond what these say, so there is nothing to
     /// keep in step with them.
@@ -138,7 +294,19 @@ final class AppWindow {
         // The theme's own accent, not a colour of ours — it follows whatever
         // the user has set.
         Styling.style(scanButton, "suggested-action")
+        stopScanButton = gtk_button_new_with_label(Text.s("Stopp", "Stop"))!
+        gtk_widget_set_tooltip_text(
+            stopScanButton,
+            // It stops a rename as well now, so it no longer says "search".
+            // The old wording was the reason nobody noticed that pressing it
+            // during a rename answered "Es wird gerade nicht gesucht".
+            Text.s("Vor der nächsten Datei anhalten — Suche oder Umbenennen",
+                   "Stop before the next file — search or rename"))
+        // Packed after Scan, so in a header's end group it sits to its left:
+        // the thing you reach for second is not in front of the thing you
+        // reach for first.
         gtk_header_bar_pack_end(Gtk.headerBar(header), scanButton)
+        gtk_header_bar_pack_end(Gtk.headerBar(header), stopScanButton)
         gtk_window_set_titlebar(Gtk.window(window), header)
 
         // Work on the left, log on the right. The log is always there rather
@@ -150,6 +318,15 @@ final class AppWindow {
 
         let page = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10)!
         gtk_container_set_border_width(Gtk.container(page), 12)
+        // Where the settings cards go. Built here so the construction below
+        // can pack into it exactly as it used to pack into the page; the
+        // dialog that holds it is assembled at the end of this initialiser.
+        let settingsPage = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10)!
+        gtk_container_set_border_width(Gtk.container(settingsPage), 12)
+        let statusPage = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10)!
+        gtk_container_set_border_width(Gtk.container(statusPage), 12)
+        let fetchPage = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10)!
+        gtk_container_set_border_width(Gtk.container(fetchPage), 12)
         // The whole left column scrolls, and this is the fix for the bug it
         // shipped with: a GtkWindow cannot be made shorter than its content's
         // minimum height, and this column's minimum was about a thousand
@@ -184,7 +361,8 @@ final class AppWindow {
         checksColumn = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2)!
         Self.add(checksColumn, to: checks)
         let checkRow = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8)!
-        let checkButton = gtk_button_new_with_label(Text.s("Alles prüfen", "Check everything"))!
+        checkButton = gtk_button_new_with_label(Text.s("Alles prüfen",
+                                                       "Check everything"))!
         gtk_box_pack_end(Gtk.box(checkRow), checkButton, 0, 0, 0)
         Self.add(checkRow, to: checks)
         // Behind an expander, with the summary on the expander's own label.
@@ -194,9 +372,9 @@ final class AppWindow {
         // answers "is everything plugged in" in one line; opened, it says
         // which lamp and why.
         checksExpander = gtk_expander_new(Text.s("Status", "Status"))!
-        gtk_expander_set_expanded(Gtk.expander(checksExpander), expandSettings ? 1 : 0)
+        gtk_expander_set_expanded(Gtk.expander(checksExpander), 1)
         gtk_container_add(Gtk.container(checksExpander), checks)
-        gtk_box_pack_start(Gtk.box(page), checksExpander, 0, 0, 0)
+        gtk_box_pack_start(Gtk.box(statusPage), checksExpander, 1, 1, 0)
 
         // MARK: Fetching from a link
         //
@@ -220,7 +398,7 @@ final class AppWindow {
                     "Lands in the import folder and is then proposed like any other "
                         + "file found there."), classes: "mf-dim"),
                  to: fetch)
-        gtk_box_pack_start(Gtk.box(page), fetch, 0, 0, 0)
+        gtk_box_pack_start(Gtk.box(fetchPage), fetch, 0, 0, 0)
 
         // MARK: Folders
 
@@ -254,11 +432,7 @@ final class AppWindow {
         Self.add(Self.row(Text.s("Serien", "Series"), seriesChooser), to: folders)
         Self.add(Self.row(Text.s("Musik", "Music"), musicChooser), to: folders)
 
-        let saveRow = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0)!
-        let saveButton = gtk_button_new_with_label(Text.s("Übernehmen", "Apply"))!
-        gtk_box_pack_end(Gtk.box(saveRow), saveButton, 0, 0, 0)
-        Self.add(saveRow, to: folders)
-        gtk_box_pack_start(Gtk.box(page), folders, 0, 0, 0)
+        gtk_box_pack_start(Gtk.box(settingsPage), folders, 0, 0, 0)
 
         // MARK: Identification
         //
@@ -290,85 +464,9 @@ final class AppWindow {
 
         let detectionExpander = gtk_expander_new(
             Text.s("Erkennung und Modellserver", "Identification and model server"))!
-        gtk_expander_set_expanded(Gtk.expander(detectionExpander), expandSettings ? 1 : 0)
+        gtk_expander_set_expanded(Gtk.expander(detectionExpander), 1)
         gtk_container_add(Gtk.container(detectionExpander), detection)
-        gtk_box_pack_start(Gtk.box(page), detectionExpander, 0, 0, 0)
-
-        // MARK: The library on another machine
-        //
-        // Also behind an expander, for the same reason: it is configured once.
-        // The progress bar lives in here rather than in the header, because
-        // a transfer is the one job in this window that runs for minutes and
-        // the question while it does is "how far", not "is it busy".
-        remoteEnabledCheck = gtk_check_button_new_with_label(
-            "Die Bibliothek liegt auf einem Server")!
-        remoteHostEntry = Self.entry(placeholder: "nas.fritz.box")
-        remotePortEntry = Self.entry(placeholder: "22")
-        remoteUserEntry = Self.entry(placeholder: Text.s("benutzer", "user"))
-        remoteBaseEntry = Self.entry(placeholder: "/volume1/Medien")
-        // One path per kind: a server rarely keeps films, series and music
-        // under one parent, and the single path above cannot say so.
-        remoteMoviesPathEntry = Self.entry(
-            placeholder: Text.s("leer = Zielpfad", "empty = target path"))
-        remoteSeriesPathEntry = Self.entry(
-            placeholder: Text.s("leer = Zielpfad", "empty = target path"))
-        remoteMusicPathEntry = Self.entry(
-            placeholder: Text.s("leer = Zielpfad", "empty = target path"))
-        remoteIdentityEntry = Self.entry(placeholder: Text.s("~/.ssh/id_ed25519 (leer = Standard)",
-                                       "~/.ssh/id_ed25519 (empty = default)"))
-        // Write-only, like the model server's key: never filled in from
-        // storage, so the password cannot end up in a screenshot.
-        remotePasswordEntry = Self.entry(placeholder: "")
-        gtk_entry_set_visibility(Gtk.entry(remotePasswordEntry), 0)
-        remoteTransportCombo = gtk_combo_box_text_new()!
-        for transport in RemoteTarget.Transport.allCases {
-            gtk_combo_box_text_append_text(Gtk.comboBoxText(remoteTransportCombo),
-                                           transport.label)
-        }
-        remoteAuthCombo = gtk_combo_box_text_new()!
-        for auth in RemoteTarget.Authentication.allCases {
-            gtk_combo_box_text_append_text(Gtk.comboBoxText(remoteAuthCombo), auth.label)
-        }
-        remoteTrustCheck = gtk_check_button_new_with_label(
-            Text.s("Dem Server beim ersten Mal vertrauen (geänderter Schlüssel bleibt abgelehnt)",
-                   "Trust this server the first time (a changed key is still refused)"))!
-        remoteRemoveLocalCheck = gtk_check_button_new_with_label(
-            Text.s("Lokale Datei nach erfolgreicher Übertragung löschen",
-                   "Delete the local file after a successful transfer"))!
-
-        let remote = Self.card(titled: Text.s("Server", "Server"))
-        Self.add(remoteEnabledCheck, to: remote)
-        Self.add(Self.row(Text.s("Adresse", "Address"), remoteHostEntry), to: remote)
-        Self.add(Self.row(Text.s("Port", "Port"), remotePortEntry), to: remote)
-        Self.add(Self.row(Text.s("Benutzer", "User"), remoteUserEntry), to: remote)
-        Self.add(Self.row(Text.s("Zielpfad", "Target path"), remoteBaseEntry), to: remote)
-        Self.add(Self.row(Text.s("Nur Filme", "Films only"), remoteMoviesPathEntry),
-                 to: remote)
-        Self.add(Self.row(Text.s("Nur Serien", "Series only"), remoteSeriesPathEntry),
-                 to: remote)
-        Self.add(Self.row(Text.s("Nur Musik", "Music only"), remoteMusicPathEntry),
-                 to: remote)
-        Self.add(Self.row(Text.s("Übertragung", "Transfer"), remoteTransportCombo), to: remote)
-        Self.add(Self.row(Text.s("Anmeldung", "Login"), remoteAuthCombo), to: remote)
-        Self.add(Self.row(Text.s("Schlüsseldatei", "Key file"), remoteIdentityEntry), to: remote)
-        Self.add(Self.row(Text.s("Passwort", "Password"), remotePasswordEntry), to: remote)
-        Self.add(remoteTrustCheck, to: remote)
-        Self.add(remoteRemoveLocalCheck, to: remote)
-
-        remoteProgress = gtk_progress_bar_new()!
-        Self.add(remoteProgress, to: remote)
-
-        let sendRow = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8)!
-        // Testing the server on its own, rather than only as part of
-        // "Alles prüfen": this is the one the user presses while they are
-        // still getting the address and the key right.
-        let testServerButton = gtk_button_new_with_label(Text.s("Server testen", "Test the server"))!
-        gtk_box_pack_start(Gtk.box(sendRow), testServerButton, 0, 0, 0)
-        sendButton = gtk_button_new_with_label(Text.s("Zum Server senden", "Send to the server"))!
-        cancelSendButton = gtk_button_new_with_label(Text.s("Stopp", "Stop"))!
-        gtk_box_pack_end(Gtk.box(sendRow), sendButton, 0, 0, 0)
-        gtk_box_pack_end(Gtk.box(sendRow), cancelSendButton, 0, 0, 0)
-        Self.add(sendRow, to: remote)
+        gtk_box_pack_start(Gtk.box(settingsPage), detectionExpander, 0, 0, 0)
 
         // MARK: Looking by itself
 
@@ -382,8 +480,6 @@ final class AppWindow {
         scheduleHoursEntry = Self.entry(placeholder: "6")
         scheduleRenameCheck = gtk_check_button_new_with_label(
             Text.s("Dabei auch umbenennen", "Rename what it finds"))!
-        scheduleSendCheck = gtk_check_button_new_with_label(
-            Text.s("Dabei auch zum Server senden", "Also send to the server"))!
         scheduleSummary = Self.label("", classes: "mf-dim")
         gtk_label_set_line_wrap(Gtk.label(scheduleSummary), 1)
 
@@ -393,19 +489,151 @@ final class AppWindow {
         Self.add(Self.row(Text.s("Uhrzeit", "Time"), scheduleTimeEntry), to: scheduleCard)
         Self.add(Self.row(Text.s("Abstand (h)", "Interval (h)"), scheduleHoursEntry), to: scheduleCard)
         Self.add(scheduleRenameCheck, to: scheduleCard)
-        Self.add(scheduleSendCheck, to: scheduleCard)
         Self.add(scheduleSummary, to: scheduleCard)
 
         let scheduleExpander = gtk_expander_new(Text.s("Zeitplan", "Schedule"))!
-        gtk_expander_set_expanded(Gtk.expander(scheduleExpander), expandSettings ? 1 : 0)
+        gtk_expander_set_expanded(Gtk.expander(scheduleExpander), 1)
         gtk_container_add(Gtk.container(scheduleExpander), scheduleCard)
-        gtk_box_pack_start(Gtk.box(page), scheduleExpander, 0, 0, 0)
+        gtk_box_pack_start(Gtk.box(settingsPage), scheduleExpander, 0, 0, 0)
 
-        let remoteExpander = gtk_expander_new(
-            Text.s("Server (rsync / SFTP)", "Server (rsync / SFTP)"))!
-        gtk_expander_set_expanded(Gtk.expander(remoteExpander), expandSettings ? 1 : 0)
-        gtk_container_add(Gtk.container(remoteExpander), remote)
-        gtk_box_pack_start(Gtk.box(page), remoteExpander, 0, 0, 0)
+        // MARK: Converting
+        //
+        // Collapsed, like the detection card: most people never convert
+        // anything, and an open card of eight encoder switches is the first
+        // thing they would see on opening the settings.
+        convertCodecCombo = gtk_combo_box_text_new()!
+        for codec in ConversionOptions.VideoCodec.allCases {
+            gtk_combo_box_text_append_text(Gtk.comboBoxText(convertCodecCombo),
+                                           codec.label)
+        }
+        convertQualityEntry = Self.entry(placeholder: "21")
+        convertPresetCombo = gtk_combo_box_text_new()!
+        for preset in ConversionOptions.Preset.allCases {
+            gtk_combo_box_text_append_text(Gtk.comboBoxText(convertPresetCombo),
+                                           preset.label)
+        }
+        convertHeightCombo = gtk_combo_box_text_new()!
+        for height in WebConversionSettings.offeredHeights {
+            gtk_combo_box_text_append_text(Gtk.comboBoxText(convertHeightCombo),
+                                           WebConversionSettings.heightLabel(height))
+        }
+        convertAudioCombo = gtk_combo_box_text_new()!
+        for mode in ConversionOptions.AudioMode.allCases {
+            gtk_combo_box_text_append_text(Gtk.comboBoxText(convertAudioCombo),
+                                           mode.label)
+        }
+        convertSubtitlesCheck = gtk_check_button_new_with_label(
+            Text.s("Untertitel nicht mitnehmen", "Leave the subtitles out"))!
+        ffmpegPathEntry = Self.entry(placeholder: "/usr/bin/ffmpeg")
+        convertEstimate = Self.label("", classes: "mf-dim")
+        gtk_label_set_line_wrap(Gtk.label(convertEstimate), 1)
+
+        let conversionCard = Self.card()
+        Self.add(Self.row(Text.s("Verfahren", "Codec"), convertCodecCombo),
+                 to: conversionCard)
+        Self.add(Self.row(Text.s("Qualität", "Quality"), convertQualityEntry),
+                 to: conversionCard)
+        Self.add(Self.row(Text.s("Tempo", "Speed"), convertPresetCombo),
+                 to: conversionCard)
+        Self.add(Self.row(Text.s("Auflösung", "Resolution"), convertHeightCombo),
+                 to: conversionCard)
+        Self.add(Self.row(Text.s("Ton", "Audio"), convertAudioCombo),
+                 to: conversionCard)
+        Self.add(convertSubtitlesCheck, to: conversionCard)
+        Self.add(Self.row(Text.s("FFmpeg", "FFmpeg"), ffmpegPathEntry),
+                 to: conversionCard)
+        Self.add(convertEstimate, to: conversionCard)
+        Self.add(Self.label(Text.s(
+                    "Die neue Datei wird neben die alte gelegt; die alte bleibt "
+                        + "liegen. Angefangen wird im Menü, unter Konvertieren.",
+                    "The new file is written beside the old one and the old one "
+                        + "stays. A run is started from the Convert panel in the "
+                        + "menu."), classes: "mf-dim"),
+                 to: conversionCard)
+
+        let conversionExpander = gtk_expander_new(
+            Text.s("Konvertieren", "Converting"))!
+        gtk_container_add(Gtk.container(conversionExpander), conversionCard)
+        gtk_box_pack_start(Gtk.box(settingsPage), conversionExpander, 0, 0, 0)
+
+        // MARK: The conversion panel
+        //
+        // Separate from the settings: the settings say what a conversion
+        // does, this says do it now, to these files. Putting the button in
+        // the settings would have made Apply and Konvertieren neighbours,
+        // and one of them starts hours of encoding.
+        let convertPage = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10)!
+        gtk_container_set_border_width(Gtk.container(convertPage), 12)
+
+        convertFindButton = gtk_button_new_with_label(
+            Text.s("Suchen", "Look for files"))!
+        convertRunButton = gtk_button_new_with_label(
+            Text.s("Konvertieren", "Convert"))!
+        Styling.style(convertRunButton, "suggested-action")
+        convertStopButton = gtk_button_new_with_label(Text.s("Stopp", "Stop"))!
+        convertCountLabel = Self.label("", classes: "mf-dim")
+        gtk_label_set_line_wrap(Gtk.label(convertCountLabel), 1)
+        convertListColumn = gtk_box_new(GTK_ORIENTATION_VERTICAL, 1)!
+        convertBar = gtk_progress_bar_new()!
+
+        let convertCard = Self.card()
+        let findRow = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8)!
+        gtk_box_pack_start(Gtk.box(findRow), convertFindButton, 0, 0, 0)
+        gtk_box_pack_start(Gtk.box(findRow), convertCountLabel, 1, 1, 0)
+        Self.add(findRow, to: convertCard)
+
+        let convertScroller = gtk_scrolled_window_new(nil, nil)!
+        gtk_scrolled_window_set_policy(Gtk.scrolledWindow(convertScroller),
+                                       GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC)
+        gtk_widget_set_size_request(convertScroller, -1, 220)
+        gtk_container_add(Gtk.container(convertScroller), convertListColumn)
+        Self.add(convertScroller, to: convertCard, expand: true)
+
+        Self.add(convertBar, to: convertCard)
+
+        let convertActions = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8)!
+        convertAllButton = gtk_button_new_with_label(Text.s("Alle", "All"))!
+        let convertNoneButton = gtk_button_new_with_label(Text.s("Keine", "None"))!
+        gtk_box_pack_start(Gtk.box(convertActions), convertAllButton, 0, 0, 0)
+        gtk_box_pack_start(Gtk.box(convertActions), convertNoneButton, 0, 0, 0)
+        // Right to left: convert, then stop — the same order as the main
+        // surface, where the one that does the work sits furthest right.
+        gtk_box_pack_end(Gtk.box(convertActions), convertRunButton, 0, 0, 0)
+        gtk_box_pack_end(Gtk.box(convertActions), convertStopButton, 0, 0, 0)
+        Self.add(convertActions, to: convertCard)
+
+        Self.add(Self.label(Text.s(
+                    "Die neue Datei wird neben die alte gelegt; die alte bleibt "
+                        + "liegen und wird nicht angefasst. Was dabei herauskommt, "
+                        + "steht in den Einstellungen unter Konvertieren.",
+                    "The new file is written beside the old one; the old one "
+                        + "stays and is not touched. What comes out is decided "
+                        + "in the settings, under Converting."),
+                            classes: "mf-dim"),
+                 to: convertCard)
+        gtk_box_pack_start(Gtk.box(convertPage), convertCard, 1, 1, 0)
+
+        // MARK: The media server
+
+        jellyfinURLEntry = Self.entry(placeholder: "http://192.168.1.2:8096")
+        let jellyfinCard = Self.card()
+        Self.add(Self.row(Text.s("Server", "Server"), jellyfinURLEntry), to: jellyfinCard)
+        let jellyfinRow = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8)!
+        let jellyfinTestButton = gtk_button_new_with_label(
+            Text.s("Verbindung testen", "Test the connection"))!
+        gtk_box_pack_end(Gtk.box(jellyfinRow), jellyfinTestButton, 0, 0, 0)
+        Self.add(jellyfinRow, to: jellyfinCard)
+        Self.add(Self.label(Text.s(
+                    "Nach dem Umbenennen wird dem Server gesagt, dass er neu "
+                        + "einlesen soll. Leer lassen, wenn keiner da ist.",
+                    "After renaming, the server is told to scan again. Leave it "
+                        + "empty if there is none."), classes: "mf-dim"),
+                 to: jellyfinCard)
+
+        let jellyfinExpander = gtk_expander_new(
+            Text.s("Medienserver", "Media server"))!
+        gtk_container_add(Gtk.container(jellyfinExpander), jellyfinCard)
+        gtk_box_pack_start(Gtk.box(settingsPage), jellyfinExpander, 0, 0, 0)
 
         // MARK: Proposals
 
@@ -436,17 +664,40 @@ final class AppWindow {
         undoButton = gtk_button_new_with_label(Text.s("Rückgängig", "Undo"))!
         applyButton = gtk_button_new_with_label(Text.s("Umbenennen", "Rename"))!
         Styling.style(applyButton, "suggested-action")
+        // Right to left: rename, then undo. Renaming is the usual one and
+        // sits furthest right.
         gtk_box_pack_end(Gtk.box(actions), applyButton, 0, 0, 0)
         gtk_box_pack_end(Gtk.box(actions), undoButton, 0, 0, 0)
         Self.add(actions, to: proposals)
 
         gtk_box_pack_start(Gtk.box(page), proposals, 1, 1, 0)
 
-        // Footer: what just happened on the left, which version said so on
-        // the right. The version is there so a bug report can name one.
+        // Footer, left to right: the traffic light, what just happened, and
+        // the version. The version is there so a bug report can name one.
+        //
+        // The traffic light is first because it is the standing answer -- "is
+        // everything plugged in" -- while the message beside it is whatever
+        // happened a moment ago. Both at a glance, neither needing a click.
         let footer = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12)!
+
+        // A button, not a label: the one line says how many lamps are amber,
+        // and the obvious next question is which. Flat, so the bar still
+        // reads as a bar.
+        let lampButton = gtk_button_new()!
+        gtk_button_set_relief(Gtk.button(lampButton), GTK_RELIEF_NONE)
+        gtk_widget_set_tooltip_text(
+            lampButton, Text.s("Status öffnen", "Open the status panel"))
+        let lampRow = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6)!
+        lampDot = Self.label("\u{25CF}", classes: "mf-lamp", "mf-skip")
+        lampText = Self.label("", classes: "mf-dim")
+        gtk_box_pack_start(Gtk.box(lampRow), lampDot, 0, 0, 0)
+        gtk_box_pack_start(Gtk.box(lampRow), lampText, 0, 0, 0)
+        gtk_container_add(Gtk.container(lampButton), lampRow)
+        gtk_box_pack_start(Gtk.box(footer), lampButton, 0, 0, 0)
+
         resultLabel = Self.label("", classes: "mf-dim")
         gtk_label_set_line_wrap(Gtk.label(resultLabel), 1)
+        gtk_label_set_xalign(Gtk.label(resultLabel), 0)
         gtk_box_pack_start(Gtk.box(footer), resultLabel, 1, 1, 0)
         let version = Self.label(MediafinVersion.display, classes: "mf-dim")
         gtk_label_set_xalign(Gtk.label(version), 1)
@@ -459,7 +710,21 @@ final class AppWindow {
         Styling.style(logSide, "mf-log")
         gtk_widget_set_size_request(logSide, 264, -1)
         let logTitle = Self.label(Text.s("VERLAUF", "HISTORY"), classes: "mf-card-title")
-        gtk_box_pack_start(Gtk.box(logSide), logTitle, 0, 0, 0)
+        // The title and the button on one line, so the button is clearly
+        // this column's and not the list's below it.
+        let logHeader = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8)!
+        gtk_box_pack_start(Gtk.box(logHeader), logTitle, 1, 1, 0)
+        // Flat, and at the quiet end of the column: it is not an action
+        // anybody came here for, and it throws away the undo history with
+        // the list. The dialog behind it says so.
+        clearHistoryButton = gtk_button_new_with_label(Text.s("Leeren", "Clear"))!
+        gtk_button_set_relief(Gtk.button(clearHistoryButton), GTK_RELIEF_NONE)
+        gtk_widget_set_tooltip_text(
+            clearHistoryButton,
+            Text.s("Verlauf und Rückgängig-Schritte löschen",
+                   "Delete the history and the undo steps"))
+        gtk_box_pack_end(Gtk.box(logHeader), clearHistoryButton, 0, 0, 0)
+        gtk_box_pack_start(Gtk.box(logSide), logHeader, 0, 0, 0)
         logCountLabel = Self.label("", classes: "mf-dim")
         gtk_box_pack_start(Gtk.box(logSide), logCountLabel, 0, 0, 0)
 
@@ -471,19 +736,70 @@ final class AppWindow {
         gtk_box_pack_start(Gtk.box(logSide), logScroller, 1, 1, 0)
         gtk_box_pack_start(Gtk.box(split), logSide, 0, 0, 0)
 
+        // MARK: The three windows behind the menu
+
+        // One Apply for the whole dialog, at the bottom where a dialog's
+        // buttons belong. It used to sit inside the Library card, which read
+        // as though it applied to that card and left the three sections below
+        // it looking like they saved themselves. They never did: Apply reads
+        // every field in the dialog, and always has.
+        savedLabel = Self.label("", classes: "mf-dim")
+        gtk_label_set_xalign(Gtk.label(savedLabel), 0)
+        let saveRow = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8)!
+        saveButton = gtk_button_new_with_label(Text.s("Übernehmen", "Apply"))!
+        Styling.style(saveButton, "suggested-action")
+        gtk_box_pack_start(Gtk.box(saveRow), savedLabel, 1, 1, 0)
+        gtk_box_pack_end(Gtk.box(saveRow), saveButton, 0, 0, 0)
+        gtk_container_set_border_width(Gtk.container(saveRow), 12)
+
+        settingsDialog = Self.panel(Text.s("Einstellungen", "Settings"),
+                                    holding: settingsPage, over: window,
+                                    footer: saveRow)
+        statusDialog = Self.panel(Text.s("Status", "Status"),
+                                  holding: statusPage, over: window)
+        fetchDialog = Self.panel(Text.s("Aus dem Netz laden", "Fetch from a link"),
+                                 holding: fetchPage, over: window)
+        convertDialog = Self.panel(Text.s("Konvertieren", "Converting"),
+                                   holding: convertPage, over: window)
+
+        // A menu in the header, which is where a GTK application keeps the
+        // things it is not doing right now -- the same place a Mac keeps
+        // them. The main surface is then the list and nothing else.
+        let menuButton = gtk_button_new_from_icon_name("open-menu-symbolic",
+                                                       GTK_ICON_SIZE_BUTTON)!
+        gtk_widget_set_tooltip_text(menuButton, Text.s("Menü", "Menu"))
+        gtk_header_bar_pack_start(Gtk.headerBar(header), menuButton)
+
         Gtk.onClick(saveButton, self) { $0.saveFolders() }
+        Gtk.onClick(menuButton, self) { $0.showMenu() }
+        Gtk.onClick(lampButton, self) { $0.open($0.statusDialog) }
         Gtk.onClick(scanButton, self) { $0.scan() }
+        Gtk.onClick(stopScanButton, self) { $0.stopScan() }
         Gtk.onClick(applyButton, self) { $0.applySelected() }
         Gtk.onClick(undoButton, self) { $0.undoLast() }
         Gtk.onClick(allButton, self) { $0.setAllChecked(true) }
         Gtk.onClick(noneButton, self) { $0.setAllChecked(false) }
         Gtk.onClick(testButton, self) { $0.testModelServer() }
-        Gtk.onClick(sendButton, self) { $0.sendSelected() }
-        Gtk.onClick(cancelSendButton, self) { $0.cancelSending() }
+        Gtk.onClick(jellyfinTestButton, self) { $0.testMediaServer() }
+        Gtk.onClick(convertFindButton, self) { $0.findConvertible() }
+        Gtk.onClick(convertRunButton, self) { $0.convertTickedFiles() }
+        Gtk.onClick(convertStopButton, self) { $0.stopConverting() }
+        Gtk.onClick(convertAllButton, self) { $0.setAllConvertChecked(true) }
+        Gtk.onClick(convertNoneButton, self) { $0.setAllConvertChecked(false) }
+        Gtk.onClick(clearHistoryButton, self) { $0.clearHistory() }
         Gtk.onClick(checkButton, self) { $0.checkEverything() }
-        Gtk.onClick(testServerButton, self) { $0.testServer() }
         Gtk.onClick(downloadButton, self) { $0.startDownload() }
         Gtk.onClick(cancelDownloadButton, self) { $0.cancelDownload() }
+
+        // On the whole window rather than on the list: a GtkBox has no window
+        // of its own, so a drop target on it is at the mercy of how GTK
+        // happens to route the event, while a toplevel certainly has one.
+        // Being able to let go anywhere is also the more forgiving target --
+        // and a text entry that wants the drop for itself still gets it,
+        // because GTK offers it to the innermost widget first. Dropping a
+        // folder on the import-folder field therefore fills the field in,
+        // which is what someone aiming there meant.
+        Gtk.onFilesDropped(window, self) { $0.addDropped($1) }
 
         // F11 toggles fullscreen and Escape leaves it — the two keys anyone
         // tries. Every other key is passed on untouched, so typing Escape in
@@ -578,12 +894,18 @@ final class AppWindow {
     /// fails silently for a path that no longer exists, so an unmounted drive
     /// would otherwise wipe the stored library path on the next save.
     func saveFolders() {
-        var settings = FolderSelection.applying(
+        let stored = FolderSelection.applying(
             source: Gtk.chosenFolder(sourceChooser),
             movies: Gtk.chosenFolder(moviesChooser),
             series: Gtk.chosenFolder(seriesChooser),
+            music: Gtk.chosenFolder(musicChooser),
             to: coordinator.settings
         )
+        // Built from the widgets, then merged against what the widgets were
+        // filled with: only the fields the user really changed are written.
+        // See SettingsMerge — and the comment on `loadedSettings`, which has
+        // described this since before it was true.
+        var settings = stored
 
         // Text boxes are taken at face value, unlike the folder choosers: an
         // empty box means the user emptied it, while an empty chooser may
@@ -606,39 +928,143 @@ final class AppWindow {
         if mode >= 0, mode < IdentificationMode.allCases.count {
             settings.identification = IdentificationMode.allCases[mode]
         }
-        // The music folder goes through the same folding as the others: a
-        // blank chooser means GTK could not show the path, not that the
-        // user cleared it.
-        let chosenMusic = Gtk.chosenFolder(musicChooser)
-        if !chosenMusic.isEmpty { settings.musicFolder = chosenMusic }
         let library = Int(gtk_combo_box_get_active(Gtk.comboBox(libraryModeCombo)))
         if library >= 0, library < LibraryMode.allCases.count {
             settings.libraryMode = LibraryMode.allCases[library]
         }
         settings.schedule = readScheduleFields(from: settings.schedule)
-        settings.remote = readRemoteFields(from: settings.remote)
-        coordinator.submit(.saveSettings(settings))
-        if languageChanged {
-            Gtk.setText(resultLabel, Text.s(
-                "Sprache gespeichert — das Fenster zeigt sie nach einem Neustart.",
-                "Language saved — the window shows it after a restart."))
-        }
+        settings.conversion = readConversionFields(from: settings.conversion)
+        settings.jellyfinBaseURL =
+            Gtk.text(of: jellyfinURLEntry).trimmingCharacters(in: .whitespacesAndNewlines)
+        settings = SettingsMerge.applying(typed: settings, loaded: loadedSettings,
+                                          to: stored)
 
+        // Read here, stored only once the settings write has landed.
+        //
+        // It used to be stored right here, above the refusal below, so that
+        // a typo in a quality field could not lose a key the user had just
+        // typed. But the key and the server address are two stores that are
+        // only ever paired at request time -- `localLLMProvider` builds the
+        // provider from `settings.localLLMBaseURL` and the stored secret --
+        // so a refused Apply left the NEW key paired with the OLD address.
+        // Someone moving to a different model server, who mistypes a
+        // quality value in the same press, then has "Verbindung testen"
+        // send their new credential as a Bearer token to the server they
+        // were leaving. Keeping the typed key in the field is the better
+        // answer to "do not lose it": it is still there, and the corrected
+        // press sends it.
+        //
         // Only when something was typed. An empty field means "leave the
         // stored key alone", not "delete it" — otherwise saving a folder
         // would wipe a credential the user never touched.
         let key = Gtk.text(of: llmKeyEntry)
-        if !key.isEmpty {
-            coordinator.submit(.setSecret(.localLLMAPIKey, key))
+
+        // Checked here, with the same call the engine uses, before anything
+        // below runs.
+        //
+        // `submit` is asynchronous and `save()` refuses the *whole* write
+        // when anything is wrong, so everything below this used to run for a
+        // save that never happened. Two separate faults came of that. The
+        // label said "Übernommen um HH:MM:SS" with a clock that moved on
+        // every press, while settings.json stayed byte-identical — the one
+        // sentence explaining why went to `lastResult`, which is drawn on
+        // the main window, behind this panel. And `loadedSettings` advanced
+        // to values that were never written: the merge writes back only
+        // fields whose widget differs from that baseline, so after a refused
+        // Apply the *other* edits in it compared equal and were silently
+        // dropped on the corrected retry. One mistyped quality value was
+        // enough to lose the codec change made in the same breath.
+        let problems = settings.normalised().problems()
+        guard problems.isEmpty else {
+            Gtk.setText(savedLabel,
+                        Text.s("Nicht übernommen: ", "Not applied: ")
+                            + problems.map(\.message).joined(separator: " "))
+            // A write from an earlier press may still be in flight. It must
+            // still move the merge baseline when it lands -- it really was
+            // stored -- but it must not put "Übernommen um HH:MM:SS" over
+            // the top of this refusal. The label belongs to the press the
+            // user just made.
+            if pendingSave != nil { pendingSave?.announce = false }
+            return
+        }
+
+        // Asked for, not done: the write happens on the engine's queue and
+        // can still be refused by it. `confirmPendingSave`, called from
+        // every refresh, is where the clock and the new merge baseline are
+        // decided -- from the engine's answer.
+        //
+        // Both used to be decided here, which meant "Übernommen um
+        // HH:MM:SS" for a write that failed afterwards, and a baseline
+        // moved to values that were never stored. The merge writes back
+        // only fields that differ from that baseline, so after such a
+        // failure every edit in the next press compared equal and was
+        // dropped: the user could not even correct it.
+        settingsSaveGenerationAtPress = coordinator.snapshot.settingsSave.generation
+        pendingSave = (typed: settings, key: key, announce: true)
+        coordinator.submit(.saveSettings(settings))
+        Gtk.setText(savedLabel, Text.s("Wird übernommen …", "Applying …"))
+        pendingLanguageChange = languageChanged
+        // So the answer is not held back for up to half a second when the
+        // queue is already empty.
+        refresh()
+    }
+
+    /// Whether the write still in flight also changes the language.
+    private var pendingLanguageChange = false
+
+    /// Reports what became of the settings write, once the engine has said.
+    ///
+    /// Called from `refresh`, so it runs on the same 500 ms tick everything
+    /// else does.
+    private func confirmPendingSave() {
+        guard let pending = pendingSave else { return }
+        let report = coordinator.snapshot.settingsSave
+        guard report.generation != settingsSaveGenerationAtPress else { return }
+        pendingSave = nil
+
+        guard !report.failed else {
+            // The engine's own sentence, in the panel the button is in.
+            // `lastResult` is drawn on the main window, behind this one.
+            if pending.announce {
+                Gtk.setText(savedLabel, Text.s("Nicht übernommen: ", "Not applied: ")
+                                + (coordinator.snapshot.lastResult ?? ""))
+            }
+            // And the baseline stays where it was, so the next press still
+            // sees the edits as changes and writes them.
+            return
+        }
+
+        // Only now, and from what was actually stored: a second Apply must
+        // not re-apply what this one wrote over somebody else's newer value.
+        loadedSettings = pending.typed
+
+        // And the key, which belongs with the address it was typed beside.
+        // The two live in different stores and are paired only when a
+        // request is made, so storing it for a write that was refused
+        // pointed the new credential at the old server.
+        if !pending.key.isEmpty {
+            coordinator.submit(.setSecret(.localLLMAPIKey, pending.key))
             Gtk.setText(of: llmKeyEntry, "")
         }
-        let serverPassword = Gtk.text(of: remotePasswordEntry)
-        if !serverPassword.isEmpty {
-            coordinator.submit(.setSecret(.remotePassword, serverPassword))
-            // Cleared from the widget at once: it is in the secret store now,
-            // and a password left in a field is a password on the screen.
-            Gtk.setText(of: remotePasswordEntry, "")
+
+        // With the time of day, and said next to the button that was
+        // pressed. "Gespeichert." appearing where "Gespeichert." already
+        // was is indistinguishable from nothing happening, which is what
+        // was reported: "no idea whether that saved or not". A clock that
+        // moves is the only version of this sentence that answers the
+        // question.
+        guard pending.announce else { return }
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm:ss"
+        Gtk.setText(savedLabel, Text.s(
+            "Übernommen um \(formatter.string(from: Date()))",
+            "Applied at \(formatter.string(from: Date()))"))
+        if pendingLanguageChange {
+            Gtk.setText(resultLabel, Text.s(
+                "Sprache gespeichert — das Fenster zeigt sie nach einem Neustart.",
+                "Language saved — the window shows it after a restart."))
         }
+        pendingLanguageChange = false
     }
 
     /// Reads the schedule fields.
@@ -650,7 +1076,6 @@ final class AppWindow {
         var schedule = current
         schedule.isEnabled = Gtk.isChecked(scheduleCheck)
         schedule.alsoRename = Gtk.isChecked(scheduleRenameCheck)
-        schedule.alsoSend = Gtk.isChecked(scheduleSendCheck)
 
         let typed = Gtk.text(of: scheduleTimeEntry).trimmingCharacters(in: .whitespaces)
         let parts = typed.split(separator: ":", maxSplits: 1)
@@ -670,71 +1095,25 @@ final class AppWindow {
         return schedule
     }
 
-    /// Reads the server fields, keeping anything the window cannot express.
+    /// Submits a command and shuts the gated buttons in the same press.
     ///
-    /// The port is the one field that can be typed wrong in a way worth
-    /// catching here: an empty or non-numeric box keeps the stored port
-    /// rather than quietly becoming 22, which would send the library to
-    /// whatever answers there.
-    private func readRemoteFields(from current: RemoteTarget) -> RemoteTarget {
-        let loaded = loadedSettings.remote
-        var target = current
-
-        // Each field is written back only when the widget differs from what
-        // was loaded into it — that is, only when the user changed it here.
-        // Anything they did not touch keeps whatever is in the settings now,
-        // which may have been changed from the web interface since.
-        func merge<T: Equatable>(_ widget: T, _ wasLoaded: T, into field: inout T) {
-            if widget != wasLoaded { field = widget }
-        }
-
-        merge(Gtk.isChecked(remoteEnabledCheck), loaded.isEnabled, into: &target.isEnabled)
-        merge(Gtk.isChecked(remoteRemoveLocalCheck), loaded.removeLocalAfterSend,
-              into: &target.removeLocalAfterSend)
-        merge(Gtk.isChecked(remoteTrustCheck), loaded.trustOnFirstUse,
-              into: &target.trustOnFirstUse)
-        merge(Gtk.text(of: remoteHostEntry).trimmingCharacters(in: .whitespaces),
-              loaded.host, into: &target.host)
-        merge(Gtk.text(of: remoteUserEntry).trimmingCharacters(in: .whitespaces),
-              loaded.user, into: &target.user)
-        merge(Gtk.text(of: remoteBaseEntry).trimmingCharacters(in: .whitespaces),
-              loaded.basePath, into: &target.basePath)
-        merge(Gtk.text(of: remoteMoviesPathEntry).trimmingCharacters(in: .whitespaces),
-              loaded.moviesPath, into: &target.moviesPath)
-        merge(Gtk.text(of: remoteSeriesPathEntry).trimmingCharacters(in: .whitespaces),
-              loaded.seriesPath, into: &target.seriesPath)
-        merge(Gtk.text(of: remoteMusicPathEntry).trimmingCharacters(in: .whitespaces),
-              loaded.musicPath, into: &target.musicPath)
-        merge(Gtk.text(of: remoteIdentityEntry).trimmingCharacters(in: .whitespaces),
-              loaded.identityFile, into: &target.identityFile)
-
-        if let port = Int(Gtk.text(of: remotePortEntry).trimmingCharacters(in: .whitespaces)),
-           (1...65535).contains(port) {
-            merge(port, loaded.port, into: &target.port)
-        }
-        let transport = Int(gtk_combo_box_get_active(Gtk.comboBox(remoteTransportCombo)))
-        if transport >= 0, transport < RemoteTarget.Transport.allCases.count {
-            merge(RemoteTarget.Transport.allCases[transport], loaded.transport,
-                  into: &target.transport)
-        }
-        let auth = Int(gtk_combo_box_get_active(Gtk.comboBox(remoteAuthCombo)))
-        if auth >= 0, auth < RemoteTarget.Authentication.allCases.count {
-            merge(RemoteTarget.Authentication.allCases[auth], loaded.authentication,
-                  into: &target.authentication)
-        }
-        return target
-    }
-
-    /// Saves first, for the same reason scanning does: sending to an address
-    /// that was typed but never saved would send to the old one.
-    func sendSelected() {
-        saveFolders()
-        let ticked = rowChecks.filter { Gtk.isChecked($0.check) }.map(\.id)
-        coordinator.submit(.transferFiles(accepting: Set(ticked)))
-    }
-
-    func cancelSending() {
-        coordinator.submit(.cancelTransfers)
+    /// `submit` publishes `queuedWork` before it returns, so `isWorking` is
+    /// true the moment this returns -- but nothing read it into the widgets
+    /// until the next tick of the 500 ms refresh timer, so every button the
+    /// gate in `refresh()` is meant to close stayed live for up to half a
+    /// second after the press that started the work.
+    ///
+    /// For Rückgängig that was not cosmetic, and it is the bug the gate was
+    /// added to fix: the second press of an ordinary double-click landed
+    /// inside that window, queued a second `.undoLastRename`, and reversed
+    /// the *next older* batch -- `finishUndo` had already dropped the
+    /// transaction the first press worked from. The gate could not see it
+    /// because nothing called `refresh()` between the press and the tick.
+    /// An insensitive GtkButton emits no "clicked" for a real press, so
+    /// closing it here closes it for good.
+    private func start(_ command: WebCommand) {
+        coordinator.submit(command)
+        refresh()
     }
 
     /// Saves first, so the file lands in the folder currently shown rather
@@ -743,7 +1122,7 @@ final class AppWindow {
         let url = Gtk.text(of: urlEntry).trimmingCharacters(in: .whitespacesAndNewlines)
         guard !url.isEmpty else { return }
         saveFolders()
-        coordinator.submit(.downloadURL(url))
+        start(.downloadURL(url))
         // Cleared on submission: the field is for the next one, and a link
         // left sitting there invites a second press that fetches it twice.
         Gtk.setText(of: urlEntry, "")
@@ -753,33 +1132,25 @@ final class AppWindow {
         coordinator.submit(.cancelDownload)
     }
 
-    /// Saves first, for the same reason the model-server test does: testing
-    /// the stored address while the user looks at a corrected one reports on
-    /// the wrong server.
-    func testServer() {
-        saveFolders()
-        coordinator.submit(.testRemoteConnection)
-    }
-
     /// Saves first, so the lamps report on what is in the fields rather than
     /// on what was in them last time the user pressed Übernehmen.
     func checkEverything() {
         saveFolders()
-        coordinator.submit(.checkEverything)
+        start(.checkEverything)
     }
 
     /// Saves first: testing an address the user typed but has not saved would
     /// report on the old one and look like the new one failed.
     func testModelServer() {
         saveFolders()
-        coordinator.submit(.testLocalLLMConnection)
+        start(.testLocalLLMConnection)
     }
 
     /// Saving first, so pressing "Durchsuchen" straight after picking a folder
     /// does what it looks like it does rather than scanning the previous one.
     func scan() {
         saveFolders()
-        coordinator.submit(.scanSourceFolder)
+        start(.scanSourceFolder)
     }
 
     /// Hands the engine the ids that are ticked, and nothing else.
@@ -789,16 +1160,549 @@ final class AppWindow {
     /// ticked, so nothing was renamed", and a second opinion in the window
     /// would be one more place for the two to disagree.
     func applySelected() {
-        let ticked = rowChecks.filter { Gtk.isChecked($0.check) }.map(\.id)
-        coordinator.submit(.applyProposedRenames(accepting: Set(ticked)))
+        // The engine's own `isAccepted`, not the drawn rows. Every tick box
+        // reports itself with `.setAccepted`, so the two agree — and reading
+        // the rows would mean that with the list capped at
+        // `visibleProposals`, pressing Umbenennen renamed only what happened
+        // to be on screen. `accepting: nil` means "whatever is accepted",
+        // and the executor acts on `isAccepted` alone.
+        start(.applyProposedRenames(accepting: nil))
+    }
+
+    /// Stops whatever is running. Goes straight to the engine without
+    /// saving first: the point of pressing this is that something is
+    /// already running, and saving would queue behind it.
+    ///
+    /// It used to send `.cancelScan` and nothing else, while the button it
+    /// sits behind is sensitive on `state.busy` -- which a conversion and a
+    /// download both set. So the one Stopp outside the menu lit up during a
+    /// 40-minute encode, and pressing it answered "Es wird gerade nicht
+    /// gesucht." while the bar advanced, because `cancelScan`'s own target
+    /// test deliberately covers only scans and renames. Newly reachable:
+    /// until the conversion feature had an entrance, nothing could put the
+    /// window into busy-but-not-scanning from a button.
+    ///
+    /// Dispatching here rather than widening `cancelScan` keeps each
+    /// cancel's own message right: each one knows what it can act on, and
+    /// sending all three would print two "nothing is running" lines over
+    /// the one that mattered.
+    func stopScan() {
+        let state = coordinator.snapshot
+        if state.converting {
+            coordinator.submit(.cancelConversions)
+        } else if state.downloading {
+            coordinator.submit(.cancelDownload)
+        } else {
+            coordinator.submit(.cancelScan)
+        }
     }
 
     func undoLast() {
-        coordinator.submit(.undoLastRename)
+        start(.undoLastRename)
+    }
+
+    // MARK: The menu and the windows behind it
+
+    /// A window for one group of settings, hidden rather than destroyed when
+    /// it is closed.
+    ///
+    /// Hidden, because destroying it would take the entries with it, and
+    /// every read and fill in this file points at those entries. A closed
+    /// panel that can be opened again with its text still in it is also what
+    /// a person expects.
+    /// - Parameter footer: a row pinned to the bottom edge, outside the
+    ///   scrolling area. The settings panel's Apply button lives there: it
+    ///   used to be packed at the end of the scrolling content, which was
+    ///   fine with four sections and stopped being fine at six — the button
+    ///   that saves everything sat just below the fold, and a settings
+    ///   dialogue whose Apply has to be scrolled to is one people believe
+    ///   has no Apply.
+    private static func panel(_ title: String,
+                              holding content: UnsafeMutablePointer<GtkWidget>,
+                              over parent: UnsafeMutablePointer<GtkWidget>,
+                              footer: UnsafeMutablePointer<GtkWidget>? = nil)
+        -> UnsafeMutablePointer<GtkWidget> {
+        let panel = gtk_window_new(GTK_WINDOW_TOPLEVEL)!
+        gtk_window_set_title(Gtk.window(panel), title)
+        gtk_window_set_transient_for(Gtk.window(panel), Gtk.window(parent))
+        // Not modal: someone adjusting the server address may well want to
+        // read the list behind it while they do.
+        gtk_window_set_modal(Gtk.window(panel), 0)
+        gtk_window_set_destroy_with_parent(Gtk.window(panel), 1)
+        gtk_window_set_default_size(Gtk.window(panel), 560, 620)
+        // The same reason the main column scrolls: a window cannot be made
+        // shorter than its content's minimum height, and four sections of
+        // settings are taller than a laptop screen.
+        let scroller = gtk_scrolled_window_new(nil, nil)!
+        gtk_scrolled_window_set_policy(Gtk.scrolledWindow(scroller),
+                                       GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC)
+        gtk_container_add(Gtk.container(scroller), content)
+        if let footer {
+            let shell = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0)!
+            gtk_box_pack_start(Gtk.box(shell), scroller, 1, 1, 0)
+            gtk_box_pack_start(Gtk.box(shell), footer, 0, 0, 0)
+            gtk_container_add(Gtk.container(panel), shell)
+        } else {
+            gtk_container_add(Gtk.container(panel), scroller)
+        }
+        // Closing hides it. Without this the window is destroyed and every
+        // widget this file holds a pointer to goes with it.
+        let onDelete: @convention(c) (UnsafeMutablePointer<GtkWidget>?,
+                                      UnsafeMutableRawPointer?,
+                                      UnsafeMutableRawPointer?) -> gboolean = { widget, _, _ in
+            guard let widget else { return 0 }
+            gtk_widget_hide(widget)
+            return 1   // handled: do not destroy
+        }
+        Gtk.connect(panel, "delete-event", unsafeBitCast(onDelete, to: GCallback.self))
+        return panel
+    }
+
+    /// Opens one of those windows, building it on screen the first time.
+    private func open(_ panel: UnsafeMutablePointer<GtkWidget>) {
+        gtk_widget_show_all(panel)
+        gtk_window_present(Gtk.window(panel))
+    }
+
+    /// The header menu.
+    ///
+    /// Built fresh each time rather than kept: it has four entries and no
+    /// state, and a menu assembled on demand cannot drift out of step with
+    /// what the window can actually do.
+    func showMenu() {
+        // Built once and kept.
+        //
+        // It used to be built on every press and never destroyed: in GTK3
+        // `gtk_menu_init` parents the menu to an internal GTK_WINDOW_POPUP
+        // that ref-sinks itself into GTK's toplevel list, so only
+        // `gtk_widget_destroy` would release it — and each of the four
+        // `Gtk.onActivate` calls retains an `Action` whose matching release
+        // is the GClosureNotify that widget destruction fires. So one menu
+        // toplevel and four Swift objects leaked per open. The items are
+        // the same four every time, so the fix is to stop rebuilding them.
+        //
+        // The version label is the one thing that could change, and it
+        // cannot: it is the binary's own version.
+        if menu == nil {
+            let built = gtk_menu_new()!
+            func entry(_ label: String, _ action: @escaping (AppWindow) -> Void) {
+                let item = gtk_menu_item_new_with_label(label)!
+                Gtk.onActivate(item, self, action)
+                gtk_menu_shell_append(Gtk.menuShell(built), item)
+            }
+            entry(Text.s("Einstellungen …", "Settings…")) { $0.open($0.settingsDialog) }
+            entry(Text.s("Status …", "Status…")) { $0.open($0.statusDialog) }
+            entry(Text.s("Aus dem Netz laden …", "Fetch from a link…")) {
+                $0.open($0.fetchDialog)
+            }
+            entry(Text.s("Konvertieren …", "Converting…")) {
+                $0.open($0.convertDialog)
+            }
+            gtk_menu_shell_append(Gtk.menuShell(built),
+                                  gtk_separator_menu_item_new())
+            entry(MediafinVersion.display) { _ in }
+            // Owned by the window, so it goes when the window does rather
+            // than outliving it in GTK's toplevel list.
+            gtk_menu_attach_to_widget(Gtk.menu(built), widget, nil)
+            menu = built
+        }
+        guard let menu else { return }
+        gtk_widget_show_all(menu)
+        gtk_menu_popup_at_pointer(Gtk.menu(menu), nil)
+    }
+
+    /// The menu, built on first use. See `showMenu`.
+    private var menu: UnsafeMutablePointer<GtkWidget>?
+
+    // MARK: Driven from outside, so CI can press a button
+
+    /// What the window is currently telling the user, read back from the
+    /// label itself.
+    ///
+    /// Read from the widget and not from the snapshot on purpose: the
+    /// complaint was "pressing Scan says nothing at all", and only the widget
+    /// can answer that. Asking the engine what it thinks it said would agree
+    /// with itself and prove nothing.
+    var statusText: String {
+        String(cString: gtk_label_get_text(Gtk.label(resultLabel)))
+    }
+
+    /// Where each row says its file is going, read off the labels.
+    var destinationTexts: [String] {
+        rowDestinations.map { String(cString: gtk_label_get_text(Gtk.label($0))) }
+    }
+
+    /// What the rows say about files that will be deleted, read back off
+    /// those labels. Empty when nothing is going to be deleted.
+    ///
+    /// Deleting is the one thing this program does that cannot be undone, so
+    /// what matters is not that the engine knows — it is that the row says
+    /// so before the button is pressed. That is a label, so it is read as a
+    /// label.
+    var deletionTexts: [String] {
+        rowDeletionNotes.map { String(cString: gtk_label_get_text(Gtk.label($0))) }
+    }
+
+    /// What the rows say about the `.nfo` files they are leaving alone.
+    /// Presses one row's tick box, as a click does.
+    ///
+    /// For the smoke modes: the assertion worth making about a tick is that
+    /// pressing the widget changes what the engine will rename, and that can
+    /// only be checked by going through the widget.
+    @discardableResult
+    func pressRowCheck(at index: Int) -> Bool {
+        guard rowChecks.indices.contains(index) else { return false }
+        let check = rowChecks[index].check
+        gtk_toggle_button_set_active(Gtk.toggleButton(check),
+                                     Gtk.isChecked(check) ? 0 : 1)
+        return true
+    }
+
+    /// How many rows are ticked, read off the boxes.
+    var tickedRowCount: Int {
+        rowChecks.filter { Gtk.isChecked($0.check) }.count
+    }
+
+    var keptNoteTexts: [String] {
+        rowKeptNotes.map { String(cString: gtk_label_get_text(Gtk.label($0))) }
+    }
+
+    /// What the settings panel says about the last time Apply was pressed,
+    /// read back off that label.
+    var appliedText: String {
+        String(cString: gtk_label_get_text(Gtk.label(savedLabel)))
+    }
+
+    /// Opens the settings panel, as the menu does.
+    func openSettings() { open(settingsDialog) }
+
+    /// Presses Apply in the settings panel.
+    func pressApply() { press(saveButton) }
+
+    /// The conversion settings as the *widgets* hold them, for the smoke
+    /// modes.
+    ///
+    /// Read off the widgets and not out of `coordinator.settings`, for the
+    /// same reason `statusText` is read off its label: the question is
+    /// whether the window shows the stored settings and hands them back
+    /// unchanged, and asking the engine what it stored would agree with
+    /// itself and prove nothing. This is how a card that is on screen but
+    /// wired to nothing is told from one that works.
+    ///
+    /// Deliberately *not* via `readConversionFields`, which is the saving
+    /// path and falls back to the stored value for a field left blank — the
+    /// right rule for Apply and a useless one for a probe. Built this way
+    /// the first time, it printed a correct-looking `quality=28` with the
+    /// line that fills that box deleted. An empty widget prints as empty
+    /// here, and an unselected list as `none`.
+    var conversionText: String {
+        func selection<T>(_ combo: UnsafeMutablePointer<GtkWidget>,
+                          _ cases: [T], _ name: (T) -> String) -> String {
+            let row = Int(gtk_combo_box_get_active(Gtk.comboBox(combo)))
+            guard cases.indices.contains(row) else { return "none" }
+            return name(cases[row])
+        }
+        let codec = selection(convertCodecCombo,
+                              ConversionOptions.VideoCodec.allCases) { $0.rawValue }
+        let preset = selection(convertPresetCombo,
+                               ConversionOptions.Preset.allCases) { $0.rawValue }
+        let audio = selection(convertAudioCombo,
+                              ConversionOptions.AudioMode.allCases) { $0.rawValue }
+        let height = selection(convertHeightCombo,
+                               WebConversionSettings.offeredHeights) {
+            $0.map(String.init) ?? "source"
+        }
+        return "codec=\(codec) quality=\(Gtk.text(of: convertQualityEntry)) "
+            + "preset=\(preset) height=\(height) "
+            + "audio=\(audio) "
+            + "subtitles=\(Gtk.isChecked(convertSubtitlesCheck)) "
+            + "ffmpeg=\(Gtk.text(of: ffmpegPathEntry))"
+    }
+
+    /// The media-server address as the widget reads it, for the smoke modes.
+    var mediaServerText: String {
+        Gtk.text(of: jellyfinURLEntry)
+    }
+
+    /// The estimate line under the conversion settings, read off the label.
+    var estimateText: String {
+        String(cString: gtk_label_get_text(Gtk.label(convertEstimate)))
+    }
+
+    // MARK: Driving the conversion panel from outside
+
+    /// Opens the conversion panel, as the menu does.
+    func openConverting() { open(convertDialog) }
+
+    /// Opens one of the panels by name and hands it back, so `--screenshot`
+    /// can render it.
+    ///
+    /// Most of this window's surface now lives behind the menu — settings,
+    /// status, fetching, converting — and the only picture anything ever
+    /// took was of the main window. A panel that came up blank, clipped or
+    /// half-built would have been invisible to every check in CI.
+    func panelNamed(_ name: String) -> UnsafeMutablePointer<GtkWidget>? {
+        let panel: UnsafeMutablePointer<GtkWidget>
+        switch name {
+        case "settings": panel = settingsDialog
+        case "status": panel = statusDialog
+        case "fetch": panel = fetchDialog
+        case "convert": panel = convertDialog
+        default: return nil
+        }
+        open(panel)
+        return panel
+    }
+
+    /// Presses "Leeren" in the history column.
+    ///
+    /// Blocks until the confirmation is answered, so a smoke mode has to
+    /// arrange the answer before calling this — see `Gtk.answerDialog`.
+    func pressClearHistory() { press(clearHistoryButton) }
+
+    /// Presses "Suchen".
+    func pressFindConvertible() { press(convertFindButton) }
+
+    /// Presses "Konvertieren".
+    func pressConvert() { press(convertRunButton) }
+
+    /// Presses "Alle".
+    func pressTickEverything() { press(convertAllButton) }
+
+    /// Presses "Stopp".
+    func pressStopConverting() { press(convertStopButton) }
+
+    /// How many rows the conversion list is drawing.
+    var convertRowCount: Int { convertRows.count }
+
+    /// The line beside Suchen, read off the label.
+    var convertCountText: String {
+        String(cString: gtk_label_get_text(Gtk.label(convertCountLabel)))
+    }
+
+    /// What the conversion list is showing, read off its own labels.
+    ///
+    /// Read as text and not as a row count because the fault worth catching
+    /// is the empty list saying nothing at all: the panel shipped with its
+    /// first refresh comparing an empty id list against an empty id list,
+    /// deciding nothing had changed, and never building the empty state. It
+    /// looked exactly like a working panel with no files in it, and the
+    /// byte size of a screenshot cannot tell one missing sentence from a
+    /// short one.
+    var convertListTexts: [String] {
+        convertNotes.map { String(cString: gtk_label_get_text(Gtk.label($0))) }
+    }
+
+    /// What the progress bar says, read off the bar.
+    var convertBarText: String {
+        guard let text = gtk_progress_bar_get_text(Gtk.progressBar(convertBar))
+        else { return "" }
+        return String(cString: text)
+    }
+
+    /// How many files pressing Konvertieren would hand to the engine.
+    ///
+    /// Worked out the same way the button does, not counted off the rows:
+    /// the list is capped and a file past the cap is still in the run.
+    var tickedConvertCount: Int { tickedConvertIDs.count }
+
+    /// Presses one conversion row's tick box, as a click does.
+    @discardableResult
+    func pressConvertRowCheck(at index: Int) -> Bool {
+        guard convertRows.indices.contains(index) else { return false }
+        let check = convertRows[index].check
+        gtk_toggle_button_set_active(Gtk.toggleButton(check),
+                                     Gtk.isChecked(check) ? 0 : 1)
+        return true
+    }
+
+    /// What the middle of the window says while the list is empty, read back
+    /// off that label. Empty when the list has rows.
+    ///
+    /// Checked separately from `statusText` because the complaint was not
+    /// that nothing was said -- something was -- but that it was said in a
+    /// small dim line at the bottom edge where nobody was looking.
+    var emptyListText: String {
+        guard let detail = emptyDetail else { return "" }
+        return String(cString: gtk_label_get_text(Gtk.label(detail)))
+    }
+
+    /// Whether the Scan button can be pressed at all. It used to be greyed
+    /// out whenever no import folder was set, which is how "the scan button
+    /// does not work" came about.
+    var scanButtonIsAvailable: Bool {
+        gtk_widget_get_sensitive(scanButton) != 0
+    }
+
+    /// Whether Undo can be pressed at all.
+    ///
+    /// Read as a sensitivity and not as a snapshot field, because the fault
+    /// was precisely that the engine knew it was working and the button did
+    /// not. Asking the engine would agree with itself and prove nothing.
+    var undoButtonIsPressable: Bool {
+        gtk_widget_get_sensitive(undoButton) != 0
+    }
+
+    /// Whether the settings panel's "Übernehmen" is actually on screen.
+    ///
+    /// Mapped, not merely built. Pressing it through `gtk_button_clicked`
+    /// proves the handler is wired but says nothing about whether the
+    /// button is anywhere a user could reach -- and this one was moved out
+    /// of the scroller into the panel footer in the same change that added
+    /// the checks, which is exactly when a control goes missing. The send
+    /// button once did, which is what `urgentButtonsAreOnTheMainSurface`
+    /// exists for.
+    var applyButtonIsOnScreen: Bool {
+        // Mapped AND outside the scroller, because mapped alone is not the
+        // question.
+        //
+        // A GtkScrolledWindow's viewport maps its whole child whatever the
+        // scroll offset, so a button six sections below the fold reads
+        // "mapped" -- and "just below the fold" is the exact regression
+        // this exists for: `panel`'s own footer parameter says a settings
+        // dialogue whose Apply has to be scrolled to is one people believe
+        // has no Apply. Mapped was the whole test, so the check was green
+        // for the fault it was written to catch.
+        //
+        // Being outside the scroller is the invariant the footer move
+        // established, and unlike a coordinate comparison it does not
+        // depend on the window's current size or scroll position. Mapped is
+        // kept as the other half: it answers "packed and shown at all".
+        gtk_widget_get_mapped(saveButton) != 0
+            && gtk_widget_get_ancestor(saveButton,
+                                       gtk_scrolled_window_get_type()) == nil
+    }
+
+    /// Types into the quality field, for the smoke modes.
+    ///
+    /// There is no other way in: the field is seeded from stored settings,
+    /// which are always a valid number, so the unreadable-value path can
+    /// only be reached by somebody typing. That path had two faults in it
+    /// and neither could be checked without this.
+    func typeQuality(_ text: String) {
+        Gtk.setText(of: convertQualityEntry, text)
+    }
+
+    /// For the smoke modes: a credential and the address it belongs beside.
+    ///
+    /// The two live in different stores and are paired only when a request
+    /// is made, so a refused Apply used to leave the new key with the old
+    /// address -- and "Verbindung testen" then sent the credential to the
+    /// server the user was leaving.
+    func typeModelServer(url: String, key: String) {
+        Gtk.setText(of: llmURLEntry, url)
+        Gtk.setText(of: llmKeyEntry, key)
+    }
+
+    /// Whether the key field still holds something. Never its contents: a
+    /// smoke mode prints what it reads, and CI logs are kept.
+    var apiKeyFieldIsFilled: Bool {
+        !Gtk.text(of: llmKeyEntry).isEmpty
+    }
+
+    /// Picks a codec row, for the smoke modes. True when the row exists.
+    func chooseCodecRow(_ index: Int) -> Bool {
+        guard index >= 0,
+              index < ConversionOptions.VideoCodec.allCases.count else {
+            return false
+        }
+        gtk_combo_box_set_active(Gtk.comboBox(convertCodecCombo), Int32(index))
+        return true
+    }
+
+    /// Whether the conversion panel's "Stopp" can be pressed at all.
+    ///
+    /// It replaces a printed constant. `--press-convert` pressed Stopp while
+    /// idle and then printed "pressed stop while idle: yes" unconditionally,
+    /// which CI grepped for -- an assertion that could only fail if the
+    /// process had already died. This is a value that can be either way.
+    var convertStopIsPressable: Bool {
+        gtk_widget_get_sensitive(convertStopButton) != 0
+    }
+
+    /// Whether "Leeren" can be pressed at all.
+    ///
+    /// It starts engine work and destroys the undo journal, and it was the
+    /// one work-starting button the gate left out.
+    var clearHistoryIsPressable: Bool {
+        gtk_widget_get_sensitive(clearHistoryButton) != 0
+    }
+
+    /// What the header says under the title, read back off the header bar.
+    var subtitleText: String {
+        guard let text = gtk_header_bar_get_subtitle(Gtk.headerBar(header))
+        else { return "" }
+        return String(cString: text)
+    }
+
+    /// Presses "Alles prüfen" in the status panel.
+    func pressCheckEverything() { press(checkButton) }
+
+    /// Whether the buttons that must be reachable without opening anything
+    /// really are on the main window.
+    ///
+    /// The send button was once built into a panel and became unreachable
+    /// when that panel moved behind the menu. This guards against repeating
+    /// that — and it had no reader at all until the conversion panel added
+    /// five more buttons inside a panel, which is exactly when a guard like
+    /// this stops being theoretical. It is printed by `--press-scan` and
+    /// asserted in CI.
+    ///
+    /// Stop, Rename and Undo, because those are the three that answer "make
+    /// it stop" and "put it back". `gtk_widget_get_toplevel` returns the
+    /// widget itself when it has no toplevel ancestor, so an orphan fails
+    /// here too.
+    var urgentButtonsAreOnTheMainSurface: Bool {
+        [stopScanButton, applyButton, undoButton].allSatisfy {
+            gtk_widget_get_toplevel($0) == widget
+        }
+    }
+
+    /// Presses Scan exactly as a click does -- through the signal, so the
+    /// real handler runs and nothing about this path is special.
+    func pressScan() {
+        press(scanButton)
+    }
+
+    /// Presses a button the way GTK would, for the smoke modes.
+    ///
+    /// Through the widget, never the handler. Calling the handler directly
+    /// tests the handler and nothing else: `--press-apply` ran a ~120-line
+    /// CI step over `saveFolders()` while `Übernehmen` itself could have
+    /// been unwired or packed into a container nobody shows, and every
+    /// assertion in that step would still have passed. The settings panel's
+    /// Apply had just been moved out of the scroller into the panel footer
+    /// in the same change, which is exactly when a button goes missing.
+    ///
+    /// What this does NOT test is sensitivity: `gtk_button_clicked` emits
+    /// "clicked" whether the button is grey or not. The gates are watched
+    /// separately, by `undoButtonIsPressable` and its neighbours.
+    private func press(_ button: UnsafeMutablePointer<GtkWidget>) {
+        gtk_button_clicked(Gtk.button(button))
+    }
+
+    /// Files let go of on the window.
+    ///
+    /// Handed straight to the engine with no filtering here: which of them
+    /// are media, which are folders to look inside, and which were already
+    /// listed is one set of rules, and it lives in one place. A window that
+    /// formed its own opinion would be a second place for the two to disagree.
+    func addDropped(_ urls: [URL]) {
+        FileHandle.standardError.write(Data(
+            "mediafin: drop: \(urls.count) handed to the engine\n".utf8))
+        start(.addFiles(urls))
+        FileHandle.standardError.write(Data("mediafin: drop: submitted\n".utf8))
     }
 
     func setAllChecked(_ on: Bool) {
+        // One command instead of N: the engine has a case for exactly this,
+        // and it also says something in the footer. The widgets are set here
+        // as well so the boxes change under the cursor rather than at the
+        // next refresh, with the per-row reporting suppressed while they do.
+        isSeedingRows = true
         for row in rowChecks { Gtk.setChecked(row.check, on) }
+        isSeedingRows = false
+        coordinator.submit(.setAllAccepted(on))
     }
 
     private func loadFolders() {
@@ -826,13 +1730,15 @@ final class AppWindow {
         let stored = coordinator.configuredSecrets.contains(.localLLMAPIKey)
         gtk_entry_set_placeholder_text(
             Gtk.entry(llmKeyEntry),
-            stored ? "gespeichert — zum Ersetzen neu eingeben" : "keiner hinterlegt"
+            stored
+                ? Text.s("gespeichert — zum Ersetzen neu eingeben",
+                         "stored — type a new one to replace it")
+                : Text.s("keiner hinterlegt", "none stored")
         )
 
         let schedule = settings.schedule
         Gtk.setChecked(scheduleCheck, schedule.isEnabled)
         Gtk.setChecked(scheduleRenameCheck, schedule.alsoRename)
-        Gtk.setChecked(scheduleSendCheck, schedule.alsoSend)
         Gtk.setText(of: scheduleTimeEntry,
                     String(format: "%02d:%02d", schedule.hour, schedule.minute))
         Gtk.setText(of: scheduleHoursEntry, String(schedule.everyHours))
@@ -841,31 +1747,480 @@ final class AppWindow {
         }
         Gtk.setText(scheduleSummary, ScheduleLine.describe(schedule, coordinator.snapshot))
 
-        let remote = settings.remote
-        Gtk.setChecked(remoteEnabledCheck, remote.isEnabled)
-        Gtk.setChecked(remoteRemoveLocalCheck, remote.removeLocalAfterSend)
-        Gtk.setChecked(remoteTrustCheck, remote.trustOnFirstUse)
-        Gtk.setText(of: remoteHostEntry, remote.host)
-        Gtk.setText(of: remoteUserEntry, remote.user)
-        Gtk.setText(of: remoteBaseEntry, remote.basePath)
-        Gtk.setText(of: remoteMoviesPathEntry, remote.moviesPath)
-        Gtk.setText(of: remoteSeriesPathEntry, remote.seriesPath)
-        Gtk.setText(of: remoteMusicPathEntry, remote.musicPath)
-        Gtk.setText(of: remoteIdentityEntry, remote.identityFile)
-        Gtk.setText(of: remotePortEntry, String(remote.port))
-        if let index = RemoteTarget.Transport.allCases.firstIndex(of: remote.transport) {
-            gtk_combo_box_set_active(Gtk.comboBox(remoteTransportCombo), Int32(index))
+        Gtk.setText(of: jellyfinURLEntry, settings.jellyfinBaseURL)
+
+        let conversion = settings.conversion
+        if let index = ConversionOptions.VideoCodec.allCases
+            .firstIndex(of: conversion.videoCodec) {
+            gtk_combo_box_set_active(Gtk.comboBox(convertCodecCombo), Int32(index))
         }
-        if let index = RemoteTarget.Authentication.allCases
-            .firstIndex(of: remote.authentication) {
-            gtk_combo_box_set_active(Gtk.comboBox(remoteAuthCombo), Int32(index))
+        Gtk.setText(of: convertQualityEntry, String(conversion.quality))
+        if let index = ConversionOptions.Preset.allCases
+            .firstIndex(of: conversion.preset) {
+            gtk_combo_box_set_active(Gtk.comboBox(convertPresetCombo), Int32(index))
         }
-        // As with the model key: whether one is stored, never the password.
-        let hasPassword = coordinator.configuredSecrets.contains(.remotePassword)
-        gtk_entry_set_placeholder_text(
-            Gtk.entry(remotePasswordEntry),
-            hasPassword ? "gespeichert — zum Ersetzen neu eingeben" : "keines hinterlegt"
-        )
+        // A stored height the list does not offer — hand-edited, or from a
+        // version that offered more — selects nothing rather than silently
+        // becoming one of the five. Saving then leaves it alone, because the
+        // merge only writes a field the widget actually changed.
+        if let index = WebConversionSettings.offeredHeights
+            .firstIndex(of: conversion.targetHeight) {
+            gtk_combo_box_set_active(Gtk.comboBox(convertHeightCombo), Int32(index))
+        }
+        if let index = ConversionOptions.AudioMode.allCases
+            .firstIndex(of: conversion.audioMode) {
+            gtk_combo_box_set_active(Gtk.comboBox(convertAudioCombo), Int32(index))
+        }
+        Gtk.setChecked(convertSubtitlesCheck, conversion.stripSubtitles)
+        Gtk.setText(of: ffmpegPathEntry, conversion.ffmpegPath)
+    }
+
+    /// Reads the conversion fields back out of the widgets.
+    ///
+    /// A quality that is not a number is kept as an impossible one rather
+    /// than quietly becoming the default, for the same reason the schedule
+    /// keeps an impossible hour: `problems()` then says so, and the user
+    /// learns why nothing was saved instead of finding a number they never
+    /// typed.
+    private func readConversionFields(from current: WebConversionSettings)
+        -> WebConversionSettings {
+        var conversion = current
+        conversion.stripSubtitles = Gtk.isChecked(convertSubtitlesCheck)
+        conversion.ffmpegPath =
+            Gtk.text(of: ffmpegPathEntry).trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let codec = Int(gtk_combo_box_get_active(Gtk.comboBox(convertCodecCombo)))
+        if codec >= 0, codec < ConversionOptions.VideoCodec.allCases.count {
+            conversion.videoCodec = ConversionOptions.VideoCodec.allCases[codec]
+        }
+        let preset = Int(gtk_combo_box_get_active(Gtk.comboBox(convertPresetCombo)))
+        if preset >= 0, preset < ConversionOptions.Preset.allCases.count {
+            conversion.preset = ConversionOptions.Preset.allCases[preset]
+        }
+        let audio = Int(gtk_combo_box_get_active(Gtk.comboBox(convertAudioCombo)))
+        if audio >= 0, audio < ConversionOptions.AudioMode.allCases.count {
+            conversion.audioMode = ConversionOptions.AudioMode.allCases[audio]
+        }
+        let height = Int(gtk_combo_box_get_active(Gtk.comboBox(convertHeightCombo)))
+        if height >= 0, height < WebConversionSettings.offeredHeights.count {
+            conversion.targetHeight = WebConversionSettings.offeredHeights[height]
+        }
+
+        let typed = Gtk.text(of: convertQualityEntry)
+            .trimmingCharacters(in: .whitespaces)
+        if !typed.isEmpty {
+            // Out of range on purpose when it is not a number: the engine
+            // clamps 0...51, so -1 arrives as 0 and is visibly wrong rather
+            // than invisibly plausible.
+            conversion.quality = Int(typed) ?? -1
+        }
+        return conversion
+    }
+
+    /// The estimate line under the conversion settings.
+    ///
+    /// Built from the widgets rather than from the saved settings, so it
+    /// answers "what will this do" before Apply is pressed. Recomputed on
+    /// the refresh timer, which is cheap enough: four reads and a format.
+    private func refreshConversionEstimate() {
+        let typed = readConversionFields(from: coordinator.settings.conversion)
+        // A quality field that is not a number gets the problem, not an
+        // estimate.
+        //
+        // `readConversionFields` deliberately yields -1 for an unreadable
+        // field so `problems()` can refuse the save. Feeding that through
+        // the initialiser below clamps it to 0 — a real, flattering value —
+        // so typing "24p" produced a confident "etwa 150 % der
+        // ursprünglichen Größe. Das Bild wird dabei: sieht aus wie das
+        // Original." about a setting the program was about to refuse, and
+        // nothing anywhere in the panel said the field was unreadable.
+        guard (0...51).contains(typed.quality) else {
+            Gtk.setText(convertEstimate, Text.s(
+                "Die Qualität muss eine Zahl zwischen 0 und 51 sein.",
+                "The quality must be a number between 0 and 51."))
+            return
+        }
+        // Through the initialiser, so the percentage is the one the engine
+        // would really use: it clamps the quality the same way. The guard
+        // above is what makes that true — the clamp only agrees with the
+        // engine for values the engine would accept.
+        let effective = WebConversionSettings(videoCodec: typed.videoCodec,
+                                              quality: typed.quality,
+                                              preset: typed.preset,
+                                              targetHeight: typed.targetHeight,
+                                              audioMode: typed.audioMode,
+                                              stripSubtitles: typed.stripSubtitles)
+        // Two numbers, not one, whenever the chosen resolution means
+        // different things for different sources — which is most of the
+        // time. A downscale saves the difference between the source and the
+        // target, so "1080p" saves nothing from a 1080p file and three
+        // quarters from a 4K one. The estimator silently assumed 1080 and
+        // the line therefore printed the same 62 % for "keep the source
+        // resolution", 2160p and 1080p alike: a setting that looked inert
+        // and, for the 4K libraries it exists for, was wrong by a factor of
+        // four. Naming the assumption is the only honest version of this
+        // sentence, because nothing can probe a source here — no file has
+        // been chosen yet.
+        let normal = effective.estimatedSizePercent(forSourceHeight: 1080)
+        let fourK = effective.estimatedSizePercent(forSourceHeight: 2160)
+        let size = normal == fourK
+            ? Text.s("Schätzung: etwa \(normal) % der ursprünglichen Größe.",
+                     "Estimate: about \(normal) % of the original size.")
+            : Text.s("Schätzung: etwa \(normal) % bei einer 1080p-Quelle, "
+                         + "etwa \(fourK) % bei einer 4K-Quelle.",
+                     "Estimate: about \(normal) % from a 1080p source, about "
+                         + "\(fourK) % from a 4K source.")
+        let usual = ConversionOptions.suggestedQuality(forHeight: effective.targetHeight)
+        Gtk.setText(convertEstimate, size
+            + Text.s(" Das Bild wird dabei: \(effective.qualityDescription). "
+                         + "Bei dieser Auflösung ist \(usual) der übliche "
+                         + "Qualitätswert; kleiner heißt besser und größer.",
+                     " The picture comes out: \(effective.qualityDescription). "
+                         + "At this resolution \(usual) is the usual quality "
+                         + "value; lower means better and bigger."))
+    }
+
+    // MARK: Converting
+
+    /// Looks for files that could be converted.
+    ///
+    /// Saves first, like `startDownload`: the search reads the library
+    /// folders out of the settings, and searching the folders shown in the
+    /// window beats searching the ones stored when it opened.
+    private func findConvertible() {
+        saveFolders()
+        convertListState = .searching
+        convertSearchGenerationAtPress = coordinator.snapshot.convertSearch.generation
+        // So the empty state is redrawn with the new sentence even when the
+        // list is empty both before and after: the guard in
+        // `refreshConvertList` compares ids, and [] equals [].
+        renderedConvertIDs = nil
+        start(.findConvertible)
+    }
+
+    /// Starts converting what is ticked.
+    private func convertTickedFiles() {
+        // Built from what the engine currently offers, so an exclusion left
+        // over from an earlier search cannot name a file that is no longer
+        // on the list, and a file that is on the list cannot be missed
+        // because no row was ever drawn for it.
+        //
+        // The engine says "nothing was ticked" for an empty set, which is
+        // the right message, so this is not guarded here.
+        let ticked = tickedConvertIDs
+        // Only when something really is going to be converted, so an empty
+        // list cannot end up claiming a run finished.
+        if !ticked.isEmpty { convertListState = .converted }
+        start(.convertFiles(accepting: ticked))
+    }
+
+    /// The ticked candidates, worked out from the engine's list and the
+    /// exclusions rather than from the rows: the list is capped at
+    /// `visibleProposals` rows, and a file past the cap is still in the run.
+    private var tickedConvertIDs: Set<UUID> {
+        Set(coordinator.convertible
+            .filter { !convertExcludedPaths.contains($0.source.path) }
+            .map(\.id))
+    }
+
+    private func stopConverting() {
+        coordinator.submit(.cancelConversions)
+    }
+
+    private func setAllConvertChecked(_ on: Bool) {
+        convertExcludedPaths = on
+            ? []
+            : Set(coordinator.convertible.map(\.source.path))
+        isSeedingRows = true
+        for row in convertRows { Gtk.setChecked(row.check, on) }
+        isSeedingRows = false
+        refreshConvertCounts()
+    }
+
+    /// Rebuilds the conversion list when the engine's candidates change.
+    ///
+    /// The same shape as `refreshList`, and for the same reason: GTK rows
+    /// are rebuilt only when the ids actually differ, or every refresh would
+    /// destroy the widget under the user's cursor twice a second.
+    private func refreshConvertList() {
+        // A search finishing is a change the id list cannot show, so the
+        // redraw has to be forced. Without this the panel would sit on
+        // "Wird gesucht …" for as long as it stayed open, because the ids
+        // are equal before and after a search of an empty library.
+        let search = coordinator.snapshot.convertSearch
+        if convertListState == .searching,
+           search.generation != convertSearchGenerationAtPress {
+            if search.refused {
+                convertListState = .refused
+            } else if search.stopped {
+                convertListState = .stopped
+            } else {
+                convertListState = .searched
+            }
+            renderedConvertIDs = nil
+        }
+        let candidates = coordinator.convertible
+        let ids = candidates.map(\.id)
+        guard ids != renderedConvertIDs else {
+            refreshConvertCounts()
+            return
+        }
+        renderedConvertIDs = ids
+        // Exclusions are kept only for files the engine is still offering.
+        //
+        // Without this the set only ever grows, and an exclusion for a file
+        // that has left the list is invisible: nothing on screen says it is
+        // there. Let that file come back — a re-download, a drive remounted,
+        // a library folder changed back — and it would be silently skipped
+        // by a decision the user made about a different sitting and cannot
+        // see. Pruning here is also what keeps "a second Suchen does not
+        // undo what you took out" true, because the fresh list is the set
+        // being pruned to.
+        let offered = Set(candidates.map(\.source.path))
+        convertExcludedPaths.formIntersection(offered)
+
+        isSeedingRows = true
+        defer { isSeedingRows = false }
+        for row in convertRowWidgets { gtk_widget_destroy(row) }
+        convertRowWidgets = []
+        convertNotes = []
+        convertRows = []
+        // Nil'd with the arrays, not after: the destroy loop above has just
+        // freed whatever it pointed at.
+        convertMoreNote = nil
+
+        if candidates.isEmpty {
+            // Which of the four empty states this is. They used to share
+            // one sentence, so "still searching", "found nothing" and
+            // "converted everything" all read as "you have not searched
+            // yet".
+            let sentence: String
+            switch convertListState {
+            case .searching:
+                sentence = Text.s("Wird gesucht …", "Looking for files…")
+            case .converted:
+                // From the engine's own counts, not from "the list went
+                // empty".
+                //
+                // The list emptied for a failed file as readily as for a
+                // converted one, so this sentence was printed after runs in
+                // which every single file had failed and nothing had been
+                // written -- with the only contradiction on the main
+                // window, behind this panel. A failed file now stays on the
+                // list, so an empty list really does mean everything
+                // converted; the counts are what this says it from, because
+                // inferring it from the list is the mistake itself.
+                let run = coordinator.snapshot.convertRun
+                if run.converted > 0, run.failed == 0 {
+                    sentence = Text.s(
+                        "Fertig. \(run.converted) neue Datei"
+                            + "\(run.converted == 1 ? "" : "en") "
+                            + "liegt neben den Originalen; zu konvertieren "
+                            + "ist nichts mehr da.",
+                        "Done. \(run.converted) new file"
+                            + "\(run.converted == 1 ? "" : "s") beside the "
+                            + "originals; there is nothing left to convert.")
+                } else if run.converted == 0 {
+                    sentence = Text.s(
+                        "Es wurde nichts konvertiert. Die Originale sind "
+                            + "unberührt — warum, steht in der Statuszeile "
+                            + "im Hauptfenster.",
+                        "Nothing was converted. The originals are untouched "
+                            + "— the status line on the main window says why.")
+                } else {
+                    sentence = Text.s(
+                        "\(run.converted) konvertiert, \(run.failed) "
+                            + "fehlgeschlagen. Die Originale sind alle noch da.",
+                        "\(run.converted) converted, \(run.failed) failed. "
+                            + "Every original is still there.")
+                }
+            case .stopped:
+                // "Nothing found" would be a claim about a library this
+                // walk never finished reading.
+                sentence = Text.s(
+                    "Suche gestoppt, bevor etwas gefunden wurde.",
+                    "The search was stopped before it found anything.")
+            case .refused:
+                // The engine's own reason, in the panel the user is looking
+                // at. It went to `lastResult` only, which is drawn on the
+                // main window BEHIND this panel, while the panel claimed
+                // the library held nothing to convert.
+                sentence = Text.s(
+                    "Es wurde nicht gesucht: erst die Bibliotheksordner in "
+                        + "den Einstellungen setzen.",
+                    "Nothing was searched: set your library folders in the "
+                        + "settings first.")
+            case .searched:
+                sentence = Text.s(
+                    "Keine Dateien zum Konvertieren gefunden.",
+                    "No files to convert were found.")
+            case .fresh:
+                sentence = Text.s(
+                    "Noch nichts gesucht — „Suchen“ drücken.",
+                    "Nothing looked for yet — press “Look for files”.")
+            }
+            let empty = Self.label(sentence, classes: "mf-dim")
+            gtk_label_set_line_wrap(Gtk.label(empty), 1)
+            gtk_label_set_xalign(Gtk.label(empty), 0.5)
+            gtk_box_pack_start(Gtk.box(convertListColumn), empty, 0, 0, 0)
+            convertRowWidgets = [empty]
+            convertNotes = [empty]
+        } else {
+            for (index, candidate) in candidates.prefix(Self.visibleProposals)
+                .enumerated() {
+                let row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10)!
+                Styling.style(row, "mf-row")
+                if index % 2 == 1 { Styling.style(row, "mf-row-alt") }
+
+                let check = gtk_check_button_new()!
+                let id = candidate.id
+                let path = candidate.source.path
+                Gtk.setChecked(check, !convertExcludedPaths.contains(path))
+                Gtk.onToggled(check, self) { window in
+                    guard !window.isSeedingRows else { return }
+                    if Gtk.isChecked(check) {
+                        window.convertExcludedPaths.remove(path)
+                    } else {
+                        window.convertExcludedPaths.insert(path)
+                    }
+                    window.refreshConvertCounts()
+                }
+                gtk_widget_set_valign(check, GTK_ALIGN_CENTER)
+                gtk_box_pack_start(Gtk.box(row), check, 0, 0, 0)
+
+                let name = Self.label(candidate.fileName, classes: "mf-from")
+                gtk_label_set_ellipsize(Gtk.label(name), PANGO_ELLIPSIZE_MIDDLE)
+                gtk_widget_set_tooltip_text(name, candidate.source.path)
+                gtk_box_pack_start(Gtk.box(row), name, 1, 1, 0)
+
+                // The size, because it is the one number that says how long
+                // this will take and whether there is room for the output.
+                let size = Self.label(candidate.readableSize, classes: "mf-dim")
+                gtk_box_pack_end(Gtk.box(row), size, 0, 0, 0)
+
+                gtk_box_pack_start(Gtk.box(convertListColumn), row, 0, 0, 0)
+                convertRowWidgets.append(row)
+                convertRows.append((id: id, check: check))
+            }
+            if candidates.count > Self.visibleProposals {
+                // Built empty and filled by `refreshConvertCounts`, which is
+                // the only place that knows what is ticked.
+                //
+                // The sentence used to be baked in here, inside the branch
+                // that only runs when the ids change -- so it kept
+                // asserting that the undrawn files were ticked long after
+                // "Keine" had cleared every one of them, while the counts
+                // line two lines above printed the truth. Two lines of the
+                // same panel said opposite things about what the blue
+                // button was about to spend hours doing.
+                let more = Self.label("", classes: "mf-dim")
+                gtk_label_set_line_wrap(Gtk.label(more), 1)
+                gtk_box_pack_start(Gtk.box(convertListColumn), more, 0, 0, 0)
+                convertRowWidgets.append(more)
+                convertNotes.append(more)
+                convertMoreNote = more
+            }
+        }
+        gtk_widget_show_all(convertListColumn)
+        refreshConvertCounts()
+    }
+
+    /// The line beside Suchen: how many were found, how many are ticked, and
+    /// how much that is. Spelled out, because the whole point of the panel
+    /// is to see what a run will chew through before starting it.
+    private func refreshConvertCounts() {
+        let candidates = coordinator.convertible
+        guard !candidates.isEmpty else {
+            Gtk.setText(convertCountLabel, "")
+            return
+        }
+        let ticked = candidates.filter {
+            !convertExcludedPaths.contains($0.source.path)
+        }
+        let bytes = ticked.reduce(Int64(0)) { $0 + $1.byteSize }
+        let size = ConversionCandidate.readableSize(ofBytes: bytes)
+        // What the last run did, when there was one and files are still
+        // listed.
+        //
+        // The empty-list sentence cannot carry this: a run that failed, or
+        // one that was stopped, leaves its files on the list, so the panel
+        // shows rows and would say nothing at all about what had just
+        // happened -- the counts and the reason were on the main window,
+        // behind this panel.
+        var ran = ""
+        if convertListState == .converted {
+            let run = coordinator.snapshot.convertRun
+            if run.failed > 0 || run.stopped {
+                ran = Text.s(
+                    " — letzter Lauf: \(run.converted) konvertiert"
+                        + (run.failed > 0 ? ", \(run.failed) fehlgeschlagen" : "")
+                        + (run.stopped ? ", vorzeitig gestoppt" : "")
+                        + ". Die Originale sind alle noch da.",
+                    " — last run: \(run.converted) converted"
+                        + (run.failed > 0 ? ", \(run.failed) failed" : "")
+                        + (run.stopped ? ", stopped early" : "")
+                        + ". Every original is still there.")
+            }
+        }
+        Gtk.setText(convertCountLabel, Text.s(
+            "\(candidates.count) gefunden · \(ticked.count) angehakt · \(size)",
+            "\(candidates.count) found · \(ticked.count) ticked · \(size)") + ran)
+
+        if let note = convertMoreNote {
+            let undrawn = candidates.dropFirst(Self.visibleProposals)
+            let tickedUndrawn = undrawn.filter {
+                !convertExcludedPaths.contains($0.source.path)
+            }.count
+            Gtk.setText(note, Text.s(
+                "… und \(undrawn.count) weitere, hier nicht gezeichnet; "
+                    + "\(tickedUndrawn) davon angehakt und mit dabei.",
+                "… and \(undrawn.count) more, not drawn here; "
+                    + "\(tickedUndrawn) of them ticked and coming along."))
+        }
+    }
+
+    /// Empties the history, after asking.
+    ///
+    /// It asks because this is not only the list on the right: the engine's
+    /// `clearHistory` empties the rename journal too, so the undo steps go
+    /// with it. A plain "Leeren" button beside a list of past renames does
+    /// not look like it takes Rückgängig away, and that is the one thing
+    /// standing between a wrong rename and a lost library.
+    private func clearHistory() {
+        // Named, not implied. "The undo steps go too" is easy to skim past;
+        // "3 Schritte, die danach weg sind" is a number the reader has to
+        // look at. With nothing to undo the sentence says so instead of
+        // threatening a loss that is not there.
+        let steps = coordinator.snapshot.undoableBatches
+        let cost = steps == 0
+            ? Text.s("Im Moment gibt es nichts rückgängig zu machen.",
+                     "There is nothing to undo at the moment.")
+            : Text.s("\(steps) Schritt\(steps == 1 ? "" : "e") lassen sich "
+                         + "danach nicht mehr zurücknehmen.",
+                     "\(steps) step\(steps == 1 ? "" : "s") could not be "
+                         + "taken back afterwards.")
+        guard Gtk.confirm(
+            over: widget,
+            heading: Text.s("Verlauf wirklich leeren?",
+                            "Clear the history?"),
+            body: Text.s("Damit gehen auch die Rückgängig-Schritte weg. ",
+                         "The undo steps go with it. ")
+                + cost
+                + Text.s(" Die Dateien selbst bleiben, wo sie sind.",
+                         " The files themselves stay where they are."),
+            confirm: Text.s("Leeren", "Clear"),
+            cancel: Text.s("Abbrechen", "Cancel")
+        ) else { return }
+        coordinator.submit(.clearHistory)
+    }
+
+    /// Asks the media server whether it is there.
+    private func testMediaServer() {
+        // Saved first, so the test uses the address in the field rather than
+        // whatever was stored when the window opened. The same reason
+        // `startDownload` saves first.
+        saveFolders()
+        start(.testJellyfinConnection)
     }
 
     // MARK: Reading the engine back
@@ -876,15 +2231,26 @@ final class AppWindow {
     func refresh() {
         let state = coordinator.snapshot
 
-        let subtitle: String
-        if state.hasError {
-            subtitle = Text.s("Mit Fehlern beendet", "Finished with errors")
-        } else if state.busy {
-            subtitle = (state.convertStatus ?? Text.s("Arbeitet", "Working"))
-                + " · \(state.activePercent) %"
-        } else {
-            subtitle = Text.s("Bereit", "Ready")
-        }
+        // Before anything is drawn: a settings write that has landed decides
+        // what the Apply label says and where the merge baseline sits, and
+        // both used to be guessed at press time.
+        confirmPendingSave()
+
+        // What it is doing now outranks how the last thing ended.
+        //
+        // `hasError` used to be tested first, and it is sticky: nothing
+        // clears it on entry, only the end of the next run recomputes it. So
+        // a scan started after a partly failed rename showed "Mit Fehlern
+        // beendet" for its whole duration instead of progress — and the
+        // likeliest route to the Undo button is "some files failed, so I
+        // will undo", which is exactly the case where the user most needs
+        // to see that something is happening.
+        // The rule itself is in Core (`HeaderSubtitle`), for the same
+        // reason `SettingsMerge` and `FolderSelection` are: it is a rule
+        // about which numbers may be shown, and the only check on it ran in
+        // a state where the fault it names could not happen. As a pure
+        // function of the snapshot it has tests that fail.
+        let subtitle = HeaderSubtitle.text(for: state)
         gtk_header_bar_set_subtitle(Gtk.headerBar(header), subtitle)
 
         Gtk.setText(countsLabel, Text.s(
@@ -893,24 +2259,62 @@ final class AppWindow {
             "\(state.totalItems) proposals · \(state.ready) ticked · "
                 + "\(state.done) renamed"))
         Gtk.setText(resultLabel, state.lastResult ?? "")
+        refreshLampBar()
 
-        // Nothing to scan without a source folder, and a button that does
-        // nothing is worse than one that is visibly unavailable.
+        // While the list is empty, the last thing that happened goes in the
+        // middle too. Not instead of the footer -- the footer is the running
+        // commentary -- but because an empty list is exactly the moment the
+        // user is looking at the middle and asking "well, what happened?".
+        if let detail = emptyDetail, let said = state.lastResult, !said.isEmpty {
+            Gtk.setText(detail, said)
+            // Remove then add, rather than Styling.style, which only ever
+            // adds: this runs twice a second, so a state that flips would
+            // otherwise end up carrying both classes at once and let CSS
+            // precedence decide which colour the user gets.
+            let context = gtk_widget_get_style_context(detail)
+            gtk_style_context_remove_class(context, state.hasError ? "mf-dim" : "mf-fail")
+            gtk_style_context_add_class(context, state.hasError ? "mf-fail" : "mf-dim")
+        }
+
+        // Available whenever nothing is running, even with no import folder
+        // set. It used to be greyed out without one -- and the engine has the
+        // right sentence for that case ("set the import folder first"), which
+        // a disabled button is precisely the way to never see. "The scan
+        // button does not work" is what that looks like from the outside.
         let hasSource = !coordinator.settings.sourceFolder.isEmpty
-        gtk_widget_set_sensitive(scanButton, (hasSource && !state.busy) ? 1 : 0)
-        gtk_widget_set_sensitive(applyButton, (!rowChecks.isEmpty && !state.busy) ? 1 : 0)
-        gtk_widget_set_sensitive(undoButton, state.busy ? 0 : 1)
-
-        // Sending needs somewhere to send to and something to send; stopping
-        // needs something to stop. A button that would answer "nothing is
-        // configured" is better off visibly unavailable.
-        gtk_widget_set_sensitive(
-            sendButton,
-            (state.remoteConfigured && !rowChecks.isEmpty && !state.busy) ? 1 : 0)
-        gtk_widget_set_sensitive(cancelSendButton, state.transferring ? 1 : 0)
-
-        gtk_widget_set_sensitive(downloadButton, (!hasSource || state.busy) ? 0 : 1)
+        // The buttons that START work are gated on `isWorking`, not on
+        // `busy`. They were already gated — this only extends the gate to
+        // the four commands that hold the queue without setting `busy`.
+        //
+        // Undo is the one that matters, and it is not cosmetic. `undoLast`
+        // never sets `busy`, so the button stayed live for the whole
+        // duration of an undo. The queue is serial, so a second press waited
+        // and then ran — but by then `finishUndo` had removed the
+        // transaction the first press worked from, so `journal.last` was the
+        // next older one. The second press therefore did not harmlessly
+        // repeat: it reversed a batch the user never asked to reverse. On a
+        // slow cross-volume move the window invited that press twice a
+        // second while the header said "Bereit".
+        //
+        // The stop buttons are deliberately NOT gated: a button whose whole
+        // job is to interrupt the work must be pressable while the work is
+        // running.
+        gtk_widget_set_sensitive(scanButton, state.isWorking ? 0 : 1)
+        gtk_widget_set_sensitive(stopScanButton, state.busy ? 1 : 0)
+        gtk_widget_set_sensitive(applyButton,
+                                 (!rowChecks.isEmpty && !state.isWorking) ? 1 : 0)
+        gtk_widget_set_sensitive(undoButton, state.isWorking ? 0 : 1)
+        gtk_widget_set_sensitive(downloadButton,
+                                 (!hasSource || state.isWorking) ? 0 : 1)
         gtk_widget_set_sensitive(cancelDownloadButton, state.downloading ? 1 : 0)
+        // Leeren starts engine work too, and it was the one that got left
+        // out. Ungated it stayed live through a rename, and the number its
+        // question names is read at press time while the command runs after
+        // the rename on the serial queue — so with an empty journal the
+        // dialog said "Im Moment gibt es nichts rückgängig zu machen",
+        // the rename then recorded its transaction, and the queued clear
+        // destroyed it. The dialog promised there was nothing to lose.
+        gtk_widget_set_sensitive(clearHistoryButton, state.isWorking ? 0 : 1)
         if state.downloading {
             // No fraction means no size was reported — a stream with no
             // Content-Length. Pulsing says "working" without claiming a
@@ -929,18 +2333,38 @@ final class AppWindow {
             Gtk.setProgress(downloadProgress, fraction: 0,
                             text: Text.s("Kein Download", "No download"))
         }
-        // Emptied when nothing is running: the bar used to stay visually
-        // full after a run while the words beside it said "Keine
-        // Übertragung", which reads as a transfer stuck at 100 %.
-        Gtk.setProgress(remoteProgress,
-                        fraction: state.transferring ? state.transferProgress : 0,
-                        text: state.transferSummary)
-
         // The schedule line too, so "Nächster Lauf" stays true while the
         // window is open rather than being whatever it was when the settings
         // were last loaded.
         Gtk.setText(scheduleSummary,
                     ScheduleLine.describe(coordinator.settings.schedule, state))
+        refreshConversionEstimate()
+
+        // The conversion panel. Driven from the same timer as everything
+        // else, so it is live whether or not it happens to be open.
+        gtk_widget_set_sensitive(convertFindButton, state.isWorking ? 0 : 1)
+        gtk_widget_set_sensitive(convertRunButton,
+                                 (!convertRows.isEmpty && !state.isWorking) ? 1 : 0)
+        gtk_widget_set_sensitive(convertStopButton, state.converting ? 1 : 0)
+        if state.converting {
+            let detail = [state.currentFile, state.convertDetail]
+                .compactMap { $0 }.joined(separator: " · ")
+            Gtk.setProgress(convertBar, fraction: state.convertProgress,
+                            text: state.pendingConversions > 0
+                                ? detail + Text.s(" · noch \(state.pendingConversions)",
+                                                  " · \(state.pendingConversions) to go")
+                                : detail)
+        } else if let status = state.convertStatus {
+            // The engine is doing something it has no percentage for.
+            gtk_progress_bar_pulse(Gtk.progressBar(convertBar))
+            gtk_progress_bar_set_show_text(Gtk.progressBar(convertBar), 1)
+            gtk_progress_bar_set_text(Gtk.progressBar(convertBar), status)
+        } else {
+            Gtk.setProgress(convertBar, fraction: 0,
+                            text: Text.s("Keine Konvertierung",
+                                         "Nothing converting"))
+        }
+        refreshConvertList()
 
         refreshList()
         refreshLog()
@@ -1007,6 +2431,43 @@ final class AppWindow {
         }
     }
 
+    /// The traffic light in the bar at the bottom.
+    ///
+    /// Rewritten only when it changed. This runs twice a second, and setting a
+    /// label to the text it already has makes GTK re-measure the row for
+    /// nothing.
+    private func refreshLampBar() {
+        let checks = coordinator.systemChecks
+        let worst = SystemChecks.worst(checks)
+        // The summary carries the counts; the word carries the verdict. One
+        // without the other reads either as "7 of something" or as a mood.
+        // The lamp's own word, with a capital so it opens the line: "bereit"
+        // and "prüfen" are lower case in the lamp rows, where they sit after
+        // a name.
+        let word = worst.word
+        let verdict = word.isEmpty ? word : word.prefix(1).uppercased() + word.dropFirst()
+        let text = checks.isEmpty
+            ? Text.s("Noch nicht geprüft", "Not checked yet")
+            : verdict + " · " + SystemChecks.summary(checks)
+        guard lampShown?.state != worst || lampShown?.text != text else { return }
+        lampShown = (worst, text)
+
+        Gtk.setText(lampText, text)
+        // Remove every other class before adding this one. Styling.style only
+        // ever adds, and a dot that has been green and is now red would
+        // otherwise carry both and let CSS precedence pick.
+        let context = gtk_widget_get_style_context(lampDot)
+        for state in [SystemCheck.State.ok, .warning, .failed, .off] {
+            gtk_style_context_remove_class(context, Self.lampClass(state))
+        }
+        gtk_style_context_add_class(context, Self.lampClass(worst))
+    }
+
+    /// What the bar says about the worst lamp, read back off the label.
+    var lampBarText: String {
+        String(cString: gtk_label_get_text(Gtk.label(lampText)))
+    }
+
     private static func lampClass(_ state: SystemCheck.State) -> String {
         switch state {
         case .ok: return "mf-ok"
@@ -1022,8 +2483,14 @@ final class AppWindow {
     /// just happened", and a column that grows downwards would put that
     /// answer off the bottom of the screen after a long run.
     private func refreshLog() {
-        // Reversed once here rather than everywhere below.
-        let entries = Array(coordinator.logEntries.reversed().prefix(Self.visibleLogEntries))
+        // One read, three answers. It used to ask three times, and each ask
+        // is a `queue.sync` onto the log's own queue — so the drawing thread
+        // waited on that queue three times every 500 ms, and could wait on
+        // a file write going on there. The three snapshots could also
+        // disagree with each other: "42 entries · 43 with an error" was
+        // expressible.
+        let all = coordinator.logEntries
+        let entries = Array(all.reversed().prefix(Self.visibleLogEntries))
         let ids = entries.map(\.id)
         guard ids != renderedLogIDs else { return }
         renderedLogIDs = ids
@@ -1031,8 +2498,8 @@ final class AppWindow {
         for row in logWidgets { gtk_widget_destroy(row) }
         logWidgets = []
 
-        let total = coordinator.logEntries.count
-        let failures = coordinator.logEntries.filter { $0.status == .failure }.count
+        let total = all.count
+        let failures = all.reduce(into: 0) { $0 += $1.status == .failure ? 1 : 0 }
         Gtk.setText(logCountLabel, failures > 0
             ? Text.s("\(total) Einträge · \(failures) mit Fehler",
                      "\(total) entries · \(failures) with an error")
@@ -1059,6 +2526,25 @@ final class AppWindow {
     /// cost more to rebuild than it is worth looking at. The full record
     /// stays on disk and in the web interface's history page.
     static let visibleLogEntries = 200
+
+    /// How many proposal rows are drawn.
+    ///
+    /// The log beside this was capped at 200 for the reason above, and the
+    /// proposal list — three to four times the widgets per row, and up to
+    /// the engine's own 5,000-file ceiling — had no cap at all. Each row is
+    /// a box, a check button, an inner box, two or three ellipsized labels
+    /// with their own Pango layouts, sometimes a deletion note and a sample
+    /// note, and an icon button that is itself a button plus an image plus
+    /// an icon-theme lookup. The comment at the list's own construction
+    /// names the threshold — "it will have to become a TreeView if these
+    /// lists reach the thousands" — and nothing enforced it.
+    ///
+    /// 500 rather than 200: this list is the thing the user is here to
+    /// read, and scrolling through 500 is a reasonable amount of reading.
+    /// The rest are in the plan and are renamed with them; the engine owns
+    /// the tick state, so a row that is not drawn is not a row that is not
+    /// renamed.
+    static let visibleProposals = 500
 
     private static func logRow(_ entry: RenameLogEntry)
         -> UnsafeMutablePointer<GtkWidget> {
@@ -1098,6 +2584,8 @@ final class AppWindow {
         case .converted: return Text.s("konvertiert", "converted")
         case .sent: return Text.s("gesendet", "sent")
         case .downloaded: return Text.s("geladen", "fetched")
+        case .deleted: return Text.s("gelöscht", "deleted")
+        case .undone: return Text.s("rückgängig", "undone")
         }
     }
 
@@ -1105,7 +2593,9 @@ final class AppWindow {
         switch status {
         case .success, .converted, .sent, .downloaded: return "mf-ok"
         case .failure: return "mf-fail"
-        case .skipped: return "mf-skip"
+        // Dim rather than green: it happened as planned, but "done" is the
+        // wrong colour for a file that is gone.
+        case .skipped, .deleted, .undone: return "mf-skip"
         }
     }
 
@@ -1118,22 +2608,66 @@ final class AppWindow {
         guard ids != renderedItemIDs else { return }
         renderedItemIDs = ids
 
+        // Nothing built in here is a press by the user.
+        isSeedingRows = true
+        defer { isSeedingRows = false }
         for row in rowWidgets { gtk_widget_destroy(row) }
         rowWidgets = []
+        rowDestinations = []
+        rowDeletionNotes = []
+        rowKeptNotes = []
+        emptyDetail = nil
         rowChecks = []
 
         if items.isEmpty {
-            let empty = Self.label(Text.s("Noch nichts durchsucht.", "Nothing scanned yet."),
-                                       classes: "mf-empty")
+            // Two sentences, because there are two ways in and the second one
+            // is invisible until somebody says so. An empty list that only
+            // said "nothing scanned yet" left dragging a file onto the window
+            // as something you had to guess at.
+            let empty = Self.label(
+                Text.s("Dateien oder Ordner hierher ziehen,",
+                       "Drag files or folders here,"),
+                classes: "mf-empty")
             gtk_label_set_xalign(Gtk.label(empty), 0.5)
             gtk_box_pack_start(Gtk.box(listColumn), empty, 0, 0, 0)
-            rowWidgets = [empty]
+            let second = Self.label(
+                coordinator.settings.sourceFolder.isEmpty
+                    ? Text.s("oder einen Importordner in den Einstellungen setzen "
+                                 + "und „Durchsuchen“ drücken.",
+                             "or set an import folder in the settings and press "
+                                 + "“Scan”.")
+                    : Text.s("oder „Durchsuchen“ drücken.", "or press “Scan”."),
+                classes: "mf-dim")
+            gtk_label_set_xalign(Gtk.label(second), 0.5)
+            gtk_label_set_line_wrap(Gtk.label(second), 1)
+            gtk_box_pack_start(Gtk.box(listColumn), second, 0, 0, 0)
+            rowWidgets = [empty, second]
+            emptyDetail = second
         } else {
-            for (index, item) in items.enumerated() {
-                let built = Self.proposalRow(item, banded: index % 2 == 1)
+            for (index, item) in items.prefix(Self.visibleProposals).enumerated() {
+                let built = proposalRow(item, banded: index % 2 == 1)
                 gtk_box_pack_start(Gtk.box(listColumn), built.row, 0, 0, 0)
                 rowWidgets.append(built.row)
                 rowChecks.append((id: item.id, check: built.check))
+                rowDestinations.append(built.destination)
+                if let note = built.deletionNote { rowDeletionNotes.append(note) }
+                if let note = built.keptNote { rowKeptNotes.append(note) }
+            }
+            if items.count > Self.visibleProposals {
+                // Said, because a list that stops at 500 with nothing to
+                // explain it looks like 500 files were found. These are in
+                // the plan and will be renamed: the engine owns the ticks
+                // now, so Umbenennen does not depend on a row existing.
+                let rest = items.count - Self.visibleProposals
+                let more = Self.label(
+                    Text.s("… und \(rest) weitere, hier nicht gezeichnet. Sie sind "
+                               + "im Plan und werden mit umbenannt.",
+                           "… and \(rest) more, not drawn here. They are in the "
+                               + "plan and will be renamed with the rest."),
+                    classes: "mf-dim")
+                gtk_label_set_line_wrap(Gtk.label(more), 1)
+                gtk_box_pack_start(Gtk.box(listColumn), more, 0, 0, 0)
+                rowWidgets.append(more)
             }
         }
         // New widgets start hidden; the window was already shown.
@@ -1144,43 +2678,191 @@ final class AppWindow {
     ///
     /// Nothing here says the rename has happened — the list is a preview, and
     /// the wording has to keep saying so until a button is pressed.
-    private static func proposalRow(_ item: RenameItem, banded: Bool)
-        -> (row: UnsafeMutablePointer<GtkWidget>, check: UnsafeMutablePointer<GtkWidget>) {
+    /// An instance method, not a static one: the folder button has to carry
+    /// this row's path into its handler, and the handler needs the window to
+    /// put a failure somewhere the user will see it.
+    private func proposalRow(_ item: RenameItem, banded: Bool)
+        -> (row: UnsafeMutablePointer<GtkWidget>,
+            destination: UnsafeMutablePointer<GtkWidget>,
+            check: UnsafeMutablePointer<GtkWidget>,
+            deletionNote: UnsafeMutablePointer<GtkWidget>?,
+            keptNote: UnsafeMutablePointer<GtkWidget>?) {
+        var deletionNote: UnsafeMutablePointer<GtkWidget>?
+        var keptNote: UnsafeMutablePointer<GtkWidget>?
         let row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10)!
         Styling.style(row, "mf-row")
         if banded { Styling.style(row, "mf-row-alt") }
 
-        // Whatever the engine says about this item. As things stand the
-        // planner never declines one — it flags a problem with `conflict`
-        // rather than by setting isAccepted to false — so in practice this
-        // is always ticked. Reading the field anyway keeps the window from
-        // disagreeing with the engine if that ever changes. (An earlier
-        // comment here claimed the planner leaves uncertain files unticked.
-        // It does not; nothing in Core ever assigns isAccepted = false.)
+        // Seeded from the engine, and reported back to it.
+        //
+        // The tick used to live nowhere but this widget. `refreshList`
+        // destroys every row whenever the id list changes — a drop, a watch
+        // poll, a scheduled scan — and re-seeded each box from `isAccepted`,
+        // which nothing could ever set to false because the two commands for
+        // it had no sender since the web front end was removed. So an
+        // exclusion was silently discarded and the next press of Umbenennen
+        // moved the files the user had taken out, while the counts row went
+        // on printing "20 proposals · 20 ticked" with three boxes clear.
         let check = gtk_check_button_new()!
+        let id = item.id
         Gtk.setChecked(check, item.isAccepted)
+        Gtk.onToggled(check, self) { window in
+            // Not while the list is being rebuilt: set_active emits
+            // "toggled" too, so seeding the boxes would report every row
+            // back to the engine as if it had just been pressed.
+            guard !window.isSeedingRows else { return }
+            window.coordinator.submit(.setAccepted(id, Gtk.isChecked(check)))
+        }
         gtk_widget_set_valign(check, GTK_ALIGN_CENTER)
         gtk_box_pack_start(Gtk.box(row), check, 0, 0, 0)
 
         let text = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2)!
-        let from = label(item.originalFileName, classes: "mf-from")
+        let from = Self.label(item.originalFileName, classes: "mf-from")
         gtk_label_set_ellipsize(Gtk.label(from), PANGO_ELLIPSIZE_MIDDLE)
         gtk_box_pack_start(Gtk.box(text), from, 0, 0, 0)
 
-        // The whole relative path, not just the new name. The folder is the
-        // half of the proposal that can be wrong in a way worth catching:
-        // "Dark - S01E01.mkv" looks right whether it is about to go into
-        // Dark/Staffel 01 or into the wrong series entirely.
-        let to = label("→ " + item.proposedRelativePath, classes: "mf-to")
+        // The whole destination, absolutely, and not just the relative path.
+        //
+        // The row used to read "→ Fargo/Season 05/Fargo - S05E10.mkv" and say
+        // nothing about where that is. Asked "where is this being moved to",
+        // the window had no answer: an episode goes under the series folder
+        // when one is set, and into the folder the file is already in when one
+        // is not — the same name, two completely different places, and the one
+        // you cannot see is the one that buries the file a level deeper where
+        // it stands.
+        //
+        // Ellipsised in the middle so a long path keeps both ends, and the
+        // whole thing is on the tooltip.
+        let destination = item.primaryDestination.path
+        let to = Self.label("→ " + destination, classes: "mf-to")
         gtk_label_set_ellipsize(Gtk.label(to), PANGO_ELLIPSIZE_MIDDLE)
+        gtk_widget_set_tooltip_text(to, destination)
         gtk_box_pack_start(Gtk.box(text), to, 0, 0, 0)
 
+        // Said out loud when the destination is the folder the file is in
+        // already. That is what happens with no library folder set, and it is
+        // not obviously wrong from the path alone — it reads like a tidy
+        // subfolder until you notice it is under Downloads.
+        if item.outputRoot.standardizedFileURL.path
+            == item.mediaFile.url.deletingLastPathComponent()
+                .standardizedFileURL.path {
+            let here = Self.label(
+                Text.s("Bleibt neben der Datei — kein Bibliotheksordner gesetzt",
+                       "Stays next to the file — no library folder is set"),
+                classes: "mf-warn")
+            gtk_label_set_ellipsize(Gtk.label(here), PANGO_ELLIPSIZE_END)
+            gtk_box_pack_start(Gtk.box(text), here, 0, 0, 0)
+        }
+
+        // Said in the row, not only in the history afterwards. This is the
+        // one thing the program destroys, so it is named before the button
+        // that does it is pressed.
+        if !item.companionDeletions.isEmpty {
+            let names = item.companionDeletions.map(\.lastPathComponent)
+                .joined(separator: ", ")
+            let note = Self.label(
+                Text.s("Wird gelöscht: \(names) — Infodatei der Release-Gruppe, "
+                           + "die Jellyfin für eigene Metadaten halten würde",
+                       "Will be deleted: \(names) — the release group's note, "
+                           + "which Jellyfin would mistake for its own metadata"),
+                classes: "mf-warn")
+            gtk_label_set_ellipsize(Gtk.label(note), PANGO_ELLIPSIZE_END)
+            gtk_widget_set_tooltip_text(note, names)
+            gtk_box_pack_start(Gtk.box(text), note, 0, 0, 0)
+            deletionNote = note
+        }
+
+        // The other half of the same sentence. Somebody who has just read
+        // that .nfo files get deleted is entitled to see, in the same row,
+        // that their own metadata is not one of them.
+        if !item.companionKeptNotes.isEmpty {
+            let names = item.companionKeptNotes.map(\.lastPathComponent)
+                .joined(separator: ", ")
+            let kept = Self.label(
+                Text.s("Bleibt liegen: \(names) — Jellyfins eigene Metadaten",
+                       "Stays where it is: \(names) — Jellyfin's own metadata"),
+                classes: "mf-dim")
+            gtk_label_set_ellipsize(Gtk.label(kept), PANGO_ELLIPSIZE_END)
+            gtk_widget_set_tooltip_text(kept, names)
+            gtk_box_pack_start(Gtk.box(text), kept, 0, 0, 0)
+            keptNote = kept
+        }
+
+        // The sample is not deleted and not moved, so the row says where it
+        // stays. Computed from the companions rather than carried on the
+        // item: the engine needs nothing for a file it does not touch.
+        let samples = item.mediaFile.companions
+            .filter { $0.role == .sample }
+            .map(\.url.lastPathComponent)
+        if !samples.isEmpty {
+            let kept = Self.label(
+                Text.s("Bleibt liegen: \(samples.joined(separator: ", ")) "
+                           + "— Ausschnitt, nicht der Film",
+                       "Left where it is: \(samples.joined(separator: ", ")) "
+                           + "— an excerpt, not the film"),
+                classes: "mf-dim")
+            gtk_label_set_ellipsize(Gtk.label(kept), PANGO_ELLIPSIZE_END)
+            gtk_box_pack_start(Gtk.box(text), kept, 0, 0, 0)
+        }
+
         if let conflict = item.conflict {
-            let warning = label(conflictText(conflict), classes: "mf-warn")
+            let warning = Self.label(Self.conflictText(conflict), classes: "mf-warn")
             gtk_box_pack_start(Gtk.box(text), warning, 0, 0, 0)
         }
         gtk_box_pack_start(Gtk.box(row), text, 1, 1, 0)
-        return (row, check)
+
+        // Opens the destination in whatever file manager the desktop uses.
+        // Before the rename that folder does not exist yet, so what opens is
+        // the deepest folder on the way that does — which is where the file
+        // is now, and a true answer rather than a button that does nothing.
+        let revealButton = gtk_button_new_from_icon_name("folder-open-symbolic",
+                                                         GTK_ICON_SIZE_BUTTON)!
+        gtk_button_set_relief(Gtk.button(revealButton), GTK_RELIEF_NONE)
+        gtk_widget_set_valign(revealButton, GTK_ALIGN_CENTER)
+        gtk_widget_set_tooltip_text(revealButton,
+                                    Text.s("Ordner öffnen", "Open the folder"))
+        let folder = item.primaryDestination.deletingLastPathComponent()
+        Gtk.onClick(revealButton, self) { $0.reveal(folder) }
+        gtk_box_pack_end(Gtk.box(row), revealButton, 0, 0, 0)
+
+        return (row, destination: to, check, deletionNote: deletionNote,
+                keptNote: keptNote)
+    }
+
+    /// Hands a folder to the desktop's file manager.
+    ///
+    /// `g_filename_to_uri` rather than "file://" + path: a path with a space
+    /// or an umlaut in it — which a film called "Der Name der Rose" certainly
+    /// has — is not a URI until it is escaped, and getting that wrong opens
+    /// nothing with no explanation.
+    func reveal(_ folder: URL) {
+        guard let existing = FolderReveal.nearestExistingDirectory(for: folder) else {
+            Gtk.setText(resultLabel, Text.s(
+                "Dieser Ordner lässt sich nicht öffnen: \(folder.path)",
+                "That folder cannot be opened: \(folder.path)"))
+            return
+        }
+        var error: UnsafeMutablePointer<GError>?
+        guard let uri = g_filename_to_uri(existing.path, nil, &error) else {
+            if let error { g_error_free(error) }
+            Gtk.setText(resultLabel, Text.s(
+                "Dieser Ordner lässt sich nicht öffnen: \(existing.path)",
+                "That folder cannot be opened: \(existing.path)"))
+            return
+        }
+        defer { g_free(uri) }
+        // Timestamp 0 is "now". Passing a real event time would be better
+        // form, but a button handler has none to hand and every desktop
+        // accepts 0.
+        if gtk_show_uri_on_window(Gtk.window(widget), uri, 0, &error) == 0 {
+            let detail = error.flatMap { String(cString: $0.pointee.message) } ?? ""
+            if let error { g_error_free(error) }
+            // In the footer rather than swallowed: a file manager that is not
+            // installed, or a sandbox that forbids this, is worth saying.
+            Gtk.setText(resultLabel, Text.s(
+                "Der Ordner ließ sich nicht öffnen: \(detail)",
+                "The folder could not be opened: \(detail)"))
+        }
     }
 
     private static func conflictText(_ kind: ConflictKind) -> String {

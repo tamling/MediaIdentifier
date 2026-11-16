@@ -2,9 +2,8 @@ import Foundation
 
 /// Builds the command line that fetches one video.
 ///
-/// Pure, like `RemoteCommand`: it produces an executable path and an argument
-/// array and runs nothing, so every decision below can be tested without a
-/// network. The decisions are where the damage would be.
+/// Pure: it produces an executable path and an argument array and runs
+/// nothing, so every decision below can be tested without a network. The decisions are where the damage would be.
 ///
 /// Every flag here was checked against a real yt-dlp (2026.10.26) serving a
 /// real file over HTTP, not taken from its documentation. Four things that

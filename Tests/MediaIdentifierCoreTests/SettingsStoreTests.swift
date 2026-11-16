@@ -172,6 +172,66 @@ final class SettingsStoreTests: XCTestCase {
         XCTAssertEqual(store.value(for: .localLLMAPIKey), "recovered")
     }
 
+    // MARK: Credentials for features that are gone
+
+    /// The server-sending feature was removed; the password people had typed
+    /// into it stayed in `secrets.json` in clear text, unreachable but
+    /// readable. A credential nothing can use is pure liability.
+    func testACredentialForARemovedFeatureIsDeletedOnTheNextStart() throws {
+        let store = SecretStore(directory: directory)
+        try store.set("still-needed", for: .jellyfinToken)
+        // Written the way the old version wrote it: straight into the file
+        // under its own raw key, which no `SecretKey` names any more.
+        var raw = try JSONDecoder().decode(
+            [String: String].self,
+            from: try XCTUnwrap(FileManager.default.contents(atPath: store.fileURL.path)))
+        raw["remote-password"] = "hunter2"
+        try JSONEncoder().encode(raw).write(to: store.fileURL)
+
+        XCTAssertEqual(store.forgetUnknownKeys(), ["remote-password"])
+
+        let left = try JSONDecoder().decode(
+            [String: String].self,
+            from: try XCTUnwrap(FileManager.default.contents(atPath: store.fileURL.path)))
+        XCTAssertNil(left["remote-password"], "the removed feature's password is still there")
+        XCTAssertEqual(left["jellyfin-token"], "still-needed",
+                       "a key still in use was taken with it")
+    }
+
+    /// It must not rewrite the file, or report anything, when there is
+    /// nothing to forget: a line in the history every single start is how a
+    /// history stops being read.
+    func testNothingIsReportedWhenThereIsNothingToForget() throws {
+        let store = SecretStore(directory: directory)
+        try store.set("key", for: .localLLMAPIKey)
+        XCTAssertEqual(store.forgetUnknownKeys(), [])
+        XCTAssertEqual(store.forgetUnknownKeys(), [])
+        XCTAssertEqual(store.value(for: .localLLMAPIKey), "key")
+    }
+
+    func testForgettingDoesNotLoosenThePermissions() throws {
+        let store = SecretStore(directory: directory)
+        try store.set("key", for: .localLLMAPIKey)
+        var raw = try JSONDecoder().decode(
+            [String: String].self,
+            from: try XCTUnwrap(FileManager.default.contents(atPath: store.fileURL.path)))
+        raw["remote-password"] = "hunter2"
+        try JSONEncoder().encode(raw).write(to: store.fileURL)
+        // Deliberately loosened first, so the assertion below is about the
+        // prune writing the file back tightly rather than about the
+        // permissions that happened to be there already.
+        try FileManager.default.setAttributes([.posixPermissions: 0o644],
+                                              ofItemAtPath: store.fileURL.path)
+        _ = store.forgetUnknownKeys()
+        XCTAssertEqual(try permissions(of: store.fileURL) & 0o077, 0)
+    }
+
+    func testAnAbsentFileIsNotCreatedJustToPruneIt() {
+        let store = SecretStore(directory: directory)
+        XCTAssertEqual(store.forgetUnknownKeys(), [])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: store.fileURL.path))
+    }
+
     // MARK: Directory handling
 
     func testTheDirectoryIsCreatedIfMissing() throws {

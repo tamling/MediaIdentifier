@@ -38,22 +38,19 @@ public struct Schedule: Codable, Sendable, Equatable {
     /// while nobody is watching is a different proposition and should be
     /// asked for on purpose.
     public var alsoRename: Bool
-    public var alsoSend: Bool
 
     public init(isEnabled: Bool = false,
                 cadence: Cadence = .daily,
                 hour: Int = 3,
                 minute: Int = 0,
                 everyHours: Int = 6,
-                alsoRename: Bool = false,
-                alsoSend: Bool = false) {
+                alsoRename: Bool = false) {
         self.isEnabled = isEnabled
         self.cadence = cadence
         self.hour = hour
         self.minute = minute
         self.everyHours = everyHours
         self.alsoRename = alsoRename
-        self.alsoSend = alsoSend
     }
 
     /// Every field optional on the way in, so a settings file written
@@ -70,8 +67,7 @@ public struct Schedule: Codable, Sendable, Equatable {
             hour: value(.hour, defaults.hour),
             minute: value(.minute, defaults.minute),
             everyHours: value(.everyHours, defaults.everyHours),
-            alsoRename: value(.alsoRename, defaults.alsoRename),
-            alsoSend: value(.alsoSend, defaults.alsoSend)
+            alsoRename: value(.alsoRename, defaults.alsoRename)
         )
     }
 
@@ -84,7 +80,6 @@ public struct Schedule: Codable, Sendable, Equatable {
         if fields["schedulePresent"] != nil {
             schedule.isEnabled = fields["scheduleEnabled"] != nil
             schedule.alsoRename = fields["scheduleRename"] != nil
-            schedule.alsoSend = fields["scheduleSend"] != nil
         }
         if let value = fields["scheduleCadence"], let cadence = Cadence(rawValue: value) {
             schedule.cadence = cadence
@@ -145,7 +140,6 @@ public struct Schedule: Codable, Sendable, Equatable {
         }
         var what = Text.s("durchsuchen", "look through")
         if alsoRename { what += Text.s(", umbenennen", ", rename") }
-        if alsoSend { what += Text.s(", zum Server senden", ", send to the server") }
         return "\(when.prefix(1).uppercased())\(when.dropFirst()): \(what)."
     }
 

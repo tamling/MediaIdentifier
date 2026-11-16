@@ -106,18 +106,34 @@ final class AppCoordinatorTests: XCTestCase {
         XCTAssertTrue(paths.contains { $0.contains("S01E03") }, "\(paths)")
     }
 
+    /// Named by file, not derived from the item.
+    ///
+    /// This used to compute its expectation inside the loop, from the item
+    /// under test: `item.mediaFile.parsed.kind == .episode ? series : movies`
+    /// — and the planner picks outputRoot from that same `parsed.kind`, so
+    /// the assertion checked self-consistency ("whatever kind you decided,
+    /// you routed to the matching folder") and not the claim in its name.
+    /// A misrouted episode could only fail it by also being misclassified.
+    /// There was no count assertion either, so an empty `items` made the
+    /// loop body unreachable and the test green.
     func testEpisodesAndMoviesGetTheirOwnLibraryRoot() throws {
         _ = try makeFile("The.Matrix.1999.mkv")
         _ = try makeFile("the.last.of.us.s01e03.mkv")
         run(.saveSettings(configuredSettings()))
         run(.scanSourceFolder)
 
-        for item in coordinator.items {
-            let expected = item.mediaFile.parsed.kind == .episode ? series! : movies!
-            XCTAssertEqual(item.outputRoot.standardizedFileURL.path,
-                           expected.standardizedFileURL.path,
-                           item.originalFileName)
-        }
+        XCTAssertEqual(coordinator.items.count, 2,
+                       "nothing was scanned, so the assertions below say nothing")
+        let roots = Dictionary(
+            uniqueKeysWithValues: coordinator.items.map {
+                ($0.originalFileName, $0.outputRoot.standardizedFileURL.path)
+            })
+        XCTAssertEqual(roots["The.Matrix.1999.mkv"],
+                       movies.standardizedFileURL.path,
+                       "the film did not go to the films folder")
+        XCTAssertEqual(roots["the.last.of.us.s01e03.mkv"],
+                       series.standardizedFileURL.path,
+                       "the episode did not go to the series folder")
     }
 
     func testScanInSubfoldersAndIgnoresNonVideo() throws {
@@ -303,6 +319,250 @@ final class AppCoordinatorTests: XCTestCase {
         let found = AppCoordinator.FolderScan.videoFiles(under: source)
         XCTAssertEqual(found.map(\.lastPathComponent), ["a.mkv", "b.mkv"])
     }
+
+    // MARK: Files handed over one at a time (drag and drop)
+
+    /// Sorting is pure, so these need no disk at all — which is the point of
+    /// having split it out: the rules are where the mistakes are.
+    func testHandedOverFilesAreSortedByWhatTheyAre() {
+        let handed = [URL(fileURLWithPath: "/x/Dark.S01E01.mkv"),
+                      URL(fileURLWithPath: "/x/01 - Song.flac"),
+                      URL(fileURLWithPath: "/x/notes.pdf")]
+        let sorted = AppCoordinator.sorting(handed, isDirectory: { _ in false },
+                                            videosIn: { _ in [] }, audioIn: { _ in [] })
+        XCTAssertEqual(sorted.videos.map(\.lastPathComponent), ["Dark.S01E01.mkv"])
+        XCTAssertEqual(sorted.audio.map(\.lastPathComponent), ["01 - Song.flac"])
+        XCTAssertEqual(sorted.ignored.map(\.lastPathComponent), ["notes.pdf"])
+    }
+
+    /// A folder is what people drop when they mean "this whole series".
+    func testAFolderIsExpanded() {
+        let folder = URL(fileURLWithPath: "/x/Dark")
+        let sorted = AppCoordinator.sorting(
+            [folder],
+            isDirectory: { $0 == folder },
+            videosIn: { _ in [URL(fileURLWithPath: "/x/Dark/e1.mkv"),
+                              URL(fileURLWithPath: "/x/Dark/e2.mkv")] },
+            audioIn: { _ in [URL(fileURLWithPath: "/x/Dark/theme.flac")] })
+        XCTAssertEqual(sorted.videos.count, 2)
+        XCTAssertEqual(sorted.audio.count, 1)
+        XCTAssertTrue(sorted.ignored.isEmpty)
+    }
+
+    /// Dropping a file and the folder it is in, together, is one file. Two
+    /// proposals for it would both be ticked and race each other into the
+    /// same destination.
+    func testTheSameFileHandedOverTwiceIsTakenOnce() {
+        let folder = URL(fileURLWithPath: "/x/Dark")
+        let file = URL(fileURLWithPath: "/x/Dark/e1.mkv")
+        let sorted = AppCoordinator.sorting(
+            [file, folder, file],
+            isDirectory: { $0 == folder },
+            videosIn: { _ in [file] }, audioIn: { _ in [] })
+        XCTAssertEqual(sorted.videos, [file])
+    }
+
+    /// Adding keeps what is already listed. A drop that cleared the list
+    /// would lose the twenty proposals being worked through.
+    func testAddingFilesKeepsWhatIsAlreadyListed() throws {
+        run(.saveSettings(configuredSettings()))
+        _ = try makeFile("Dark.S01E01.1080p.mkv")
+        run(.scanSourceFolder)
+        XCTAssertEqual(coordinator.items.count, 1)
+
+        // From somewhere the import folder knows nothing about.
+        let elsewhere = root.appendingPathComponent("elsewhere")
+        let dropped = try makeFile("Tenet.2020.1080p.mkv", in: elsewhere)
+        run(.addFiles([dropped]))
+
+        XCTAssertEqual(coordinator.items.count, 2, coordinator.snapshot.lastResult ?? "")
+        XCTAssertTrue(coordinator.items.contains { $0.mediaFile.url == dropped })
+    }
+
+    /// And it does not need the import folder at all: the file somebody
+    /// pointed at is the file they mean.
+    func testAddingFilesWorksWithNoImportFolderSet() throws {
+        var settings = configuredSettings()
+        settings.sourceFolder = ""
+        run(.saveSettings(settings))
+
+        let elsewhere = root.appendingPathComponent("elsewhere")
+        let dropped = try makeFile("Tenet.2020.1080p.mkv", in: elsewhere)
+        run(.addFiles([dropped]))
+        XCTAssertEqual(coordinator.items.count, 1, coordinator.snapshot.lastResult ?? "")
+        XCTAssertFalse(coordinator.snapshot.hasError)
+    }
+
+    func testDroppingTheSameFileTwiceDoesNotListItTwice() throws {
+        run(.saveSettings(configuredSettings()))
+        let dropped = try makeFile("Tenet.2020.1080p.mkv")
+        run(.addFiles([dropped]))
+        run(.addFiles([dropped]))
+        XCTAssertEqual(coordinator.items.count, 1)
+        XCTAssertTrue(
+            (coordinator.snapshot.lastResult ?? "").contains("already listed"),
+            coordinator.snapshot.lastResult ?? "")
+    }
+
+    /// Dropping something that is not media says so rather than appearing to
+    /// have worked.
+    func testDroppingSomethingThatIsNotMediaSaysSo() throws {
+        run(.saveSettings(configuredSettings()))
+        let text = try makeFile("notes.pdf")
+        run(.addFiles([text]))
+        XCTAssertTrue(coordinator.items.isEmpty)
+        XCTAssertTrue(coordinator.snapshot.hasError)
+        XCTAssertTrue((coordinator.snapshot.lastResult ?? "").contains("no video"),
+                      coordinator.snapshot.lastResult ?? "")
+    }
+
+    /// A dropped file that would land on a proposal already listed is the
+    /// collision worth warning about, so conflicts are recomputed across the
+    /// whole list rather than only within what just arrived.
+    func testADroppedFileCollidingWithAListedProposalIsFlagged() throws {
+        run(.saveSettings(configuredSettings()))
+        _ = try makeFile("Tenet.2020.1080p.mkv")
+        run(.scanSourceFolder)
+
+        // The same film by another release name: the planner resolves both to
+        // one destination.
+        let other = root.appendingPathComponent("elsewhere")
+        let dropped = try makeFile("Tenet.2020.720p.mkv", in: other)
+        run(.addFiles([dropped]))
+
+        XCTAssertEqual(coordinator.items.count, 2)
+        XCTAssertTrue(coordinator.items.allSatisfy { $0.conflict == .duplicateInBatch },
+                      coordinator.items.map {
+                          "\($0.primaryDestination.lastPathComponent) "
+                              + "\(String(describing: $0.conflict))"
+                      }
+                        .joined(separator: ", "))
+    }
+
+
+    // MARK: Files that are already filed
+
+    /// The bug this prevents made a folder look like it had emptied itself.
+    ///
+    /// With no series folder set, a file is renamed beside itself: the root is
+    /// the folder it is in. Point that at a library that is ALREADY sorted and
+    /// every run digs a level deeper, because the proposal's own folders are
+    /// appended to the folders the file is already in:
+    ///
+    ///     <Series>/Show/Season 03/Show - S03E01.mkv
+    ///  →  <Series>/Show/Season 03/Show/Season 03/Show - S03E01.mkv
+    ///
+    /// Nothing is lost and nothing says where it went, which is exactly what
+    /// "the files vanished out of the folder" looks like from the outside.
+    func testAFileAlreadyFiledIsNotProposedAgain() throws {
+        var settings = configuredSettings()
+        // The trap: no series folder, and the source folder IS the library.
+        settings.seriesFolder = ""
+        run(.saveSettings(settings))
+
+        _ = try makeFile("The Show/Season 03/The Show - S03E01.mkv")
+        run(.scanSourceFolder)
+
+        XCTAssertTrue(coordinator.items.isEmpty,
+                      "it proposed moving a file that is already in place: "
+                          + coordinator.items.map(\.primaryDestination.path)
+                            .joined(separator: ", "))
+        XCTAssertTrue(
+            (coordinator.snapshot.lastResult ?? "").contains("already filed"),
+            coordinator.snapshot.lastResult ?? "")
+        XCTAssertFalse(coordinator.snapshot.hasError)
+    }
+
+    /// Scanning the same tidy library twice must stay a no-op. The old
+    /// behaviour dug one level per run, so the second run is where it showed.
+    func testScanningATidyLibraryTwiceChangesNothing() throws {
+        var settings = configuredSettings()
+        settings.seriesFolder = ""
+        run(.saveSettings(settings))
+        let file = try makeFile("The Show/Season 03/The Show - S03E01.mkv")
+
+        for round in 1...2 {
+            run(.scanSourceFolder)
+            run(.applyProposedRenames(accepting: nil))
+            XCTAssertTrue(FileManager.default.fileExists(atPath: file.path),
+                          "the file left its place on round \(round)")
+        }
+        let buried = source.appendingPathComponent(
+            "The Show/Season 03/The Show/Season 03/The Show - S03E01.mkv")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: buried.path),
+                       "the file was buried a level deeper")
+    }
+
+    /// And the case that must keep working: a file in the import folder with
+    /// a library folder set really does move into the library, even though
+    /// its own name matches its proposal.
+    func testAFileStillMovesIntoTheLibraryWhenOneIsSet() throws {
+        run(.saveSettings(configuredSettings()))
+        _ = try makeFile("The Show/Season 03/The Show - S03E01.mkv")
+        run(.scanSourceFolder)
+
+        XCTAssertEqual(coordinator.items.count, 1,
+                       coordinator.snapshot.lastResult ?? "")
+        XCTAssertEqual(
+            coordinator.items.first?.primaryDestination.standardizedFileURL.path,
+            series.appendingPathComponent("The Show/Season 03/The Show - S03E01.mkv")
+                .standardizedFileURL.path)
+    }
+
+    /// The rule is "already at the end of its own path", not "name matches".
+    /// A file in the right folders but under a release name still moves.
+    func testAFileInTheRightFoldersWithTheWrongNameStillMoves() throws {
+        var settings = configuredSettings()
+        settings.seriesFolder = ""
+        run(.saveSettings(settings))
+        _ = try makeFile("The Show/Season 03/The.Show.S03E01.GERMAN.1080p.mkv")
+        run(.scanSourceFolder)
+        XCTAssertEqual(coordinator.items.count, 1,
+                       coordinator.snapshot.lastResult ?? "")
+    }
+
+
+    // MARK: Leaving
+
+    /// `mediafin --once` finishes a scheduled rename and exits; closing the
+    /// window drops out of gtk_main and falls off the end of main. The
+    /// history coalesces its writes over a quarter of a second with a
+    /// trailing write, and a trailing write needs the process to still be
+    /// there — so the record of an unattended run was the one most likely to
+    /// be missing its tail.
+    func testTheHistoryIsOnDiskAfterAFlush() throws {
+        // Several files, not one: the first append is written out at once,
+        // and it is the ones after it that are coalesced into the trailing
+        // write a departing process never waits for. With a single file this
+        // test passed with the flush commented out.
+        for name in ["Tenet.2020.1080p.BluRay.x264-GROUP.mkv",
+                     "Arrival.2016.1080p.BluRay.x264-GROUP.mkv",
+                     "Dune.2021.1080p.BluRay.x264-GROUP.mkv",
+                     "Heat.1995.1080p.BluRay.x264-GROUP.mkv",
+                     "Alien.1979.1080p.BluRay.x264-GROUP.mkv"] {
+            _ = try makeFile(name)
+        }
+        run(.saveSettings(configuredSettings()))
+        run(.scanSourceFolder)
+        run(.applyProposedRenames(accepting: nil))
+        XCTAssertEqual(coordinator.logEntries.count, 5, "not everything was renamed")
+
+        let file = config.appendingPathComponent("rename-log.json")
+        // Read straight after the rename, inside the coalescing window:
+        // the state a process about to exit is in.
+        let beforeFlush = (try? Data(contentsOf: file))?.count ?? 0
+
+        coordinator.flushToDisk()
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let decoded = try decoder.decode([RenameLogEntry].self,
+                                         from: try Data(contentsOf: file))
+        XCTAssertEqual(decoded.count, coordinator.logEntries.count,
+                       "the file on disk has \(decoded.count) of the "
+                           + "\(coordinator.logEntries.count) entries in memory "
+                           + "(it held \(beforeFlush) bytes before the flush)")
+    }
 }
 
 /// Tests the watch folder: that it starts and stops with the setting, that it
@@ -353,14 +613,14 @@ final class WatchFolderTests: XCTestCase {
     }
 
     func testWatchingFollowsTheSetting() {
-        XCTAssertFalse(coordinator.isWatching, "off by default")
+        XCTAssertFalse(coordinator.isWatchingForTesting, "off by default")
 
         coordinator.executeForTesting(.saveSettings(settings(watching: true)))
-        XCTAssertTrue(coordinator.isWatching)
+        XCTAssertTrue(coordinator.isWatchingForTesting)
         XCTAssertTrue(coordinator.snapshot.watchActive)
 
         coordinator.executeForTesting(.saveSettings(settings(watching: false)))
-        XCTAssertFalse(coordinator.isWatching)
+        XCTAssertFalse(coordinator.isWatchingForTesting)
         XCTAssertFalse(coordinator.snapshot.watchActive)
     }
 
@@ -368,7 +628,12 @@ final class WatchFolderTests: XCTestCase {
         var incomplete = settings(watching: true)
         incomplete.sourceFolder = ""
         coordinator.executeForTesting(.saveSettings(incomplete))
-        XCTAssertFalse(coordinator.isWatching, "there is nothing to watch")
+        XCTAssertFalse(coordinator.isWatchingForTesting, "there is nothing to watch")
+        // And the published flag, which is what the interface shows. This
+        // test used to read the timer alone, which is how "nothing is
+        // polled while every lamp says active" went unnoticed.
+        XCTAssertFalse(coordinator.snapshot.watchActive,
+                       "the interface would claim it was watching")
     }
 
     func testANewFileIsProposedButNotRenamed() throws {
@@ -444,17 +709,19 @@ final class WatchFolderTests: XCTestCase {
     /// and `refreshSnapshotCounts` ran after it and wrote the raw setting
     /// back — so with watching on and no import folder, nothing was polled
     /// while the status row and every lamp said "active". The sibling test
-    /// asserts `isWatching` only, so it passed throughout.
+    /// asserts the timer only, so it passed throughout.
     func testTheWatchLampSaysWhatIsActuallyBeingWatched() {
         var incomplete = settings(watching: true)
         incomplete.sourceFolder = ""
         coordinator.executeForTesting(.saveSettings(incomplete))
-        XCTAssertFalse(coordinator.isWatching)
+        XCTAssertFalse(coordinator.isWatchingForTesting)
         XCTAssertFalse(coordinator.snapshot.watchActive,
                        "the interface claimed the import folder was being watched")
 
         coordinator.executeForTesting(.saveSettings(settings(watching: true)))
-        XCTAssertTrue(coordinator.isWatching)
+        XCTAssertTrue(coordinator.isWatchingForTesting)
         XCTAssertTrue(coordinator.snapshot.watchActive)
     }
+
+
 }

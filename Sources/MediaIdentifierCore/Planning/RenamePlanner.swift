@@ -18,18 +18,21 @@ public struct RenamePlanner {
     ///   - mediaFiles: parsed media files to rename.
     ///   - outputRoot: destination root. When `nil`, each file is renamed in
     ///     place relative to its own parent directory (FR18, fully local).
-    ///   - libraryRoot: when set, finished media is moved here as the final
-    ///     step — movies always, but episodes only when their season is
-    ///     complete (partial seasons stay at `outputRoot`/in place).
+    ///
+    /// There was a `libraryRoot` here as well, with a rule: movies always
+    /// moved, but episodes only once their season was contiguous from
+    /// episode 1 with at least two present, and a partial season was renamed
+    /// where it lay. It was documented, had its own analyser and ten green
+    /// tests, and never ran — the one production call passed `libraryRoot:
+    /// nil` and the coordinator chose the roots itself afterwards. Asked
+    /// about it, the answer was that the rule should go rather than be
+    /// switched on: for a series that arrives weekly it would hold every
+    /// episode in the import folder until the season ended.
     public func makePlan(
         for mediaFiles: [MediaFile],
-        outputRoot: URL? = nil,
-        libraryRoot: URL? = nil
+        outputRoot: URL? = nil
     ) -> [RenameItem] {
-        let completeSeasons = libraryRoot == nil ? [] : SeasonAnalyzer.completeSeasons(in: mediaFiles)
-        var items = mediaFiles.map {
-            makeItem(for: $0, outputRoot: outputRoot, libraryRoot: libraryRoot, completeSeasons: completeSeasons)
-        }
+        var items = mediaFiles.map { makeItem(for: $0, outputRoot: outputRoot) }
         detectConflicts(in: &items)
         return items
     }
@@ -42,6 +45,9 @@ public struct RenamePlanner {
             for: item.mediaFile,
             primaryDestination: item.primaryDestination
         )
+        let notes = Self.companionNotes(for: item.mediaFile)
+        updated.companionDeletions = notes.delete
+        updated.companionKeptNotes = notes.keep
         // Refresh the on-disk conflict state for the edited destination. Batch
         // duplicate detection is left to `makePlan`.
         let primaryPath = updated.primaryDestination.standardizedFileURL.path
@@ -58,34 +64,39 @@ public struct RenamePlanner {
 
     private func makeItem(
         for mediaFile: MediaFile,
-        outputRoot: URL?,
-        libraryRoot: URL?,
-        completeSeasons: Set<SeasonAnalyzer.SeasonKey>
+        outputRoot: URL?
     ) -> RenameItem {
-        let inPlace = outputRoot ?? mediaFile.url.deletingLastPathComponent()
-        let root: URL
-        if let libraryRoot {
-            switch mediaFile.parsed.kind {
-            case .movie, .unknown:
-                root = libraryRoot
-            case .episode:
-                root = SeasonAnalyzer.isComplete(mediaFile.parsed, within: completeSeasons)
-                    ? libraryRoot : inPlace
-            }
-        } else {
-            root = inPlace
-        }
+        let root = outputRoot ?? mediaFile.url.deletingLastPathComponent()
         let ext = mediaFile.url.pathExtension
         let relativePath = namer.relativePath(for: mediaFile.parsed, fileExtension: ext)
-        let primaryDestination = root.appendingPathComponent(relativePath)
-        let companions = companionMoves(for: mediaFile, primaryDestination: primaryDestination)
+        let notes = Self.companionNotes(for: mediaFile)
 
-        return RenameItem(
+        // The item first, because its init is what sanitises the path, and
+        // then the companions from the item's own destination.
+        //
+        // They used to be built from the namer's RAW output while the
+        // primary kept the sanitised one, so whenever the two differed the
+        // film and its subtitle were planned into two different folders. A
+        // title of "?" sanitises to nothing, so the raw path was
+        // " (2019)/ (2019).mkv" and the stored one "(2019)/(2019).mkv":
+        // after pressing Umbenennen there were two sibling folders that look
+        // identical in a file manager, the film in one and its subtitle in
+        // the other. A local model answering `{"title": ":"}` does the same
+        // to an ordinary film, and the preview shows only the primary's
+        // path, so nothing on screen said so.
+        //
+        // `reconcile` repaired it, but only on the branch where a library
+        // folder is configured — and no library folder is the default.
+        var item = RenameItem(
             mediaFile: mediaFile,
             outputRoot: root,
             proposedRelativePath: relativePath,
-            companionMoves: companions
+            companionDeletions: notes.delete,
+            companionKeptNotes: notes.keep
         )
+        item.companionMoves = companionMoves(for: mediaFile,
+                                            primaryDestination: item.primaryDestination)
+        return item
     }
 
     /// Computes companion destinations next to the renamed primary, preserving
@@ -96,8 +107,15 @@ public struct RenamePlanner {
         let oldStem = mediaFile.url.deletingPathExtension().lastPathComponent
 
         return mediaFile.companions.compactMap { companion -> PlannedMove? in
-            // Samples are kept but not renamed onto the media name to avoid
-            // Jellyfin treating them as the real episode/movie.
+            // The release .nfo is not moved anywhere: see companionDeletions.
+            guard companion.role != .nfo else { return nil }
+            // Nor is the sample. It stays where it is rather than being
+            // deleted — it is a video file, and leaving it is enough to keep
+            // it out of the library. A comment here has claimed since the
+            // beginning that samples "are kept but not renamed onto the
+            // media name"; nothing implemented it, and the file went into
+            // the library as "Fargo - S05E10.-sample.mkv".
+            guard companion.role != .sample else { return nil }
             let ext = companion.url.pathExtension
             let companionStem = companion.url.deletingPathExtension().lastPathComponent
 
@@ -116,6 +134,31 @@ public struct RenamePlanner {
             let destination = destinationDir.appendingPathComponent(newName)
             return PlannedMove(source: companion.url, destination: destination, companionRole: companion.role)
         }
+    }
+
+    /// Splits the `.nfo` companions into the ones that are deleted instead
+    /// of moved, and the ones that are deliberately left where they are.
+    ///
+    /// The extension is tested here rather than the scanner's role, so a
+    /// mistake in the role table cannot reach `removeItem` with a video in
+    /// it; and then the *content* decides, because the extension alone
+    /// cannot tell a group's ASCII art from Jellyfin's own metadata. The
+    /// executor asks again at the point of deletion — this answer is what
+    /// the preview promises, and a promise is not a permission.
+    static func companionNotes(for mediaFile: MediaFile)
+        -> (delete: [URL], keep: [URL]) {
+        var delete: [URL] = []
+        var keep: [URL] = []
+        for companion in mediaFile.companions
+        where companion.url.pathExtension.lowercased() == "nfo" {
+            switch NfoContent.kind(of: companion.url) {
+            case .releaseNote:
+                delete.append(companion.url)
+            case .metadataSidecar, .undecidable:
+                keep.append(companion.url)
+            }
+        }
+        return (delete, keep)
     }
 
     // MARK: Conflict detection (FR11)

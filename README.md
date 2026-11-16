@@ -1,384 +1,267 @@
-<p align="center"><img src="docs/logo.png" width="128" alt="MediaIdentifier"></p>
+<p align="center"><img src="docs/logo.png" width="128" alt="Mediafin"></p>
 
-# MediaIdentifier
+# Mediafin
 
-Analyses downloaded media files and renames them into a **Jellyfin-compatible**
-layout, with a preview before anything touches the disk.
+Renames downloaded media into a **Jellyfin-compatible** layout, with a preview
+before anything touches the disk. One window, one engine, Linux.
 
-It runs two ways on top of one shared, fully unit-tested domain core:
-
-- **Linux** (and macOS): the `mediafin` binary serves a local web interface
-  over **HTTPS** — see [Running on Linux](#running-on-linux).
-- **macOS**: a native SwiftUI app with drag-and-drop, shipped as a universal
-  binary (Apple Silicon and Intel).
+<p align="center"><img src="gtk-window.png" width="720" alt="The Mediafin window"></p>
 
 ---
 
 ## What it does
 
-- **Drag in** files or whole folders (MKV, AVI, MP4, MOV, M4V, …).
+- **Drag in** files or whole folders (MKV, AVI, MP4, MOV, M4V, …) from the file
+  manager, or point it at an import folder and press **Durchsuchen**.
 - It **parses the release name** — title, year, season/episode, resolution,
   release group.
-- It **proposes Jellyfin-conformant names** and shows a **preview**:
-  - Movies → `Interstellar (2014)/Interstellar (2014).mkv`
+- It **proposes Jellyfin-conformant names** and shows them as a **preview**:
+  - Films → `Interstellar (2014)/Interstellar (2014).mkv`
   - Series → `The Last of Us/Season 01/The Last of Us - S01E01.mkv`
-- You **accept, reject, or hand-edit** each row, then press **Start**.
-- Subtitles and extras (`.srt`, `.ass`, `.sub`, `.nfo`, posters, samples) are
+  - Music → `Artist/Album (1998)/01 - Title.flac`, from the file's own tags
+- You **tick, untick or hand-edit** each row, then press **Umbenennen**.
+- Subtitles and extras (`.srt`, `.ass`, `.sub`, posters, samples) are
   **renamed alongside** the video.
+- The release **`.nfo` is deleted**, not carried along. Jellyfin reads `*.nfo`
+  beside a film as its own metadata sidecar, in its own XML; a group's ASCII
+  art there does not merely clutter the library, it can leave the item with
+  no metadata at all. The row says which file will go before you press
+  **Umbenennen**, and only files whose rename actually succeeded lose theirs.
+- Optionally **re-encodes** to save space — menu, **Konvertieren …**. The new
+  file is written *beside* the old one and the old one is never touched: a
+  re-encode is lossy and slow, so a bad result has to be undoable by deleting
+  the new file.
 - Every change is **logged** and can be **undone**.
-- Everything runs **100% locally** — no media is ever uploaded.
+- Everything runs **locally**. Only a title and a year are ever sent anywhere,
+  and only if you switch online identification on.
 
-## Running on Linux
-
-On Debian or Ubuntu, install the package from the
-[latest release](../../releases/tag/latest):
+## Installing
 
 ```bash
+wget https://github.com/tamling/MediaIdentifier/releases/download/latest/mediafin-linux-x86_64.deb
 sudo apt install ./mediafin-linux-x86_64.deb
-mediafin
+mediafin-gtk
 ```
 
-It declares its dependencies, so apt pulls what is needed. The Swift runtime
-is linked statically — no Swift installation required — but Foundation still
-uses a few system libraries, and `openssl` is needed to create the first
-self-signed certificate; both come in as dependencies. `ffmpeg` is a
-*recommendation*, needed only for re-encoding. The package also installs
-`man mediafin` and a systemd unit, which it deliberately does **not** enable:
-starting a server that exposes your library should be your decision. See the
-comments at the top of `/usr/lib/systemd/system/mediafin.service` before
-`systemctl enable --now mediafin`.
+The package carries its own Swift runtime, so nothing else has to be installed
+for the window to start. `ffmpeg` is needed for converting and for reading
+music tags, `yt-dlp` to fetch from a link. Each says which program it wants
+when that program is missing, rather than failing obscurely.
 
-If you would rather not wait for a release, build the package yourself from
-the published tarball — this needs `dpkg-dev` but no Swift:
+## The window
 
-```bash
-tar -xzf mediafin-linux-x86_64.tar.gz
-./tools/build-deb.sh --binary ./mediafin
-sudo apt install ./mediafin_*.deb
-```
+Everything that is not the list lives behind the **menu button** in the header:
 
-Elsewhere, take the tarball — same binary, no package management:
+| Menu entry | |
+|---|---|
+| **Einstellungen …** | Library folders, identification, schedule, conversion and the media server — all in one window, with one **Übernehmen** button pinned to the bottom edge. It says `Wird übernommen …` while the write is on its way and `Übernommen um 14:52:31` once it is on disk; the time is there so a second press is visibly a second press. If the write is refused or fails, it says so and why, right there, and your edits stay in the fields so the correction is one press. |
+| **Status …** | The traffic light: one lamp per thing that can be wrong, each carrying the sentence that says what to do about it. |
+| **Aus dem Netz laden …** | Fetch a video from a link with `yt-dlp`. |
+| **Konvertieren …** | Find files worth re-encoding, tick the ones you want, watch it run, stop it. |
 
-```bash
-tar -xzf mediafin-linux-x86_64.tar.gz
-./mediafin
-```
+The main surface is the list, its buttons, and a footer with the last thing
+that happened and the version. While the list is empty, that same sentence is
+repeated in the middle of the window, because the middle is where you are
+looking when you are wondering what happened.
 
-Or build it yourself:
+**Umbenennen**, **Rückgängig** and **Stopp** stay on that surface and are never
+behind the menu: they are what you reach for when something is going wrong.
+Umbenennen and Rückgängig go grey while the engine is working, so a second
+press cannot land on the wrong thing — in particular a second Rückgängig
+cannot reverse the batch before the one you asked about. Stopp is the
+opposite: it is live only while there is something to stop, and it stops
+whatever that is — a search, a rename, a conversion or a download. The
+history on the right has a **Leeren** that asks first and says how many undo
+steps go with it; it is greyed while the engine works, because the answer to
+that question would be out of date by the time the clearing ran.
 
-```bash
-swift build -c release --product mediafin
-.build/release/mediafin
-```
+### Converting
 
-On the first start it creates an access token and a self-signed certificate,
-prints the token once, and tells you the URL:
+The settings say what a conversion produces — codec, quality, speed,
+resolution, audio, subtitles, where FFmpeg is — and a line under them says
+roughly what that does to the file size. It names the source it assumes:
+"etwa 27 % bei einer 1080p-Quelle, etwa 7 % bei einer 4K-Quelle", because the
+saving from a downscale is the *difference* between source and target, and
+nothing can look at your files while a settings window is open.
 
-```
-Mediafin is serving its interface on https://localhost:8720
-```
+The **Konvertieren** panel is where a run is started. **Suchen** lists what
+could be converted, with each file's size and the total of what is ticked; the
+originals stay where they are. Suchen can be stopped like anything else, and a
+stopped search says it was stopped rather than reporting on a library it never
+finished reading.
 
-Open that in a browser and sign in with the printed token. The token is kept
-in the configuration directory (`$XDG_CONFIG_HOME/mediafin`, by default
-`~/.config/mediafin`) with mode `0600`, so it survives a restart; print it
-again with `mediafin --print-token`, or issue a new one — signing every browser
-out — with `mediafin --rotate-token`.
+When the list comes back empty the panel says which kind of empty it is:
+nothing searched for yet, still searching, searched and found nothing, not
+searched at all because no library folder is set — and, after a run,
+what the run actually did. Those counts come from the engine, not from the
+list having gone empty: a file the program failed to convert stays on the
+list, because nothing was done to it and the original is untouched.
 
-**The browser will warn once about the certificate.** That is inherent to
-self-signing, not a fault. Compare the SHA-256 fingerprint printed at startup
-with the one the browser shows, then accept it; or supply a real certificate:
-
-```bash
-mediafin --cert /etc/ssl/mediafin.pem --key /etc/ssl/mediafin.key
-```
-
-Useful options (`mediafin --help` lists them all):
-
-| Option | Meaning |
-| --- | --- |
-| `--port <n>` | Port to listen on (default 8720). |
-| `--bind local\|all` | Reachable from this machine only (default), or from the network. |
-| `--no-tls` | Serve plain HTTP. Refused for a network bind. |
-| `--cert` / `--key` | Use your own PEM certificate and key. |
-| `--config-dir <dir>` | Where to keep the token, certificate and settings. |
-
-The defaults are the careful ones: **loopback only, TLS on, access token
-required**. Binding to the network without TLS is refused outright rather than
-quietly sending your token in clear text — if something in front of Mediafin
-already terminates TLS, say so explicitly with
-`--i-accept-plain-http-on-the-network`.
-
-`openssl` is needed only for generating that first self-signed certificate.
-TLS itself does not need it: NIOSSL brings its own BoringSSL.
-
-### What the interface can do
-
-Sign in → **Settings** (import folder, library folders, how titles are
-identified, your own model server, Jellyfin) → **Overview** (look for new
-files, review each proposed name, tick the ones you want, rename, undo).
-
-`/healthz` answers without a token for uptime monitors — `200` idle, `503`
-while running, `500` after a run with failures — and reveals nothing but that.
-
-### Running by itself
+## Running by itself
 
 The schedule in the settings runs either daily at a fixed time or every few
-hours, and may scan, rename and send — each asked for separately, all three
-off by default. A run that only scans leaves a list for you to look at,
-which is what most people mean by "check overnight".
+hours, and may scan and rename — each asked for separately, both off by
+default. A run that only scans leaves a list for you to look at, which is what
+most people mean by "check overnight".
 
-Two things it deliberately does and does not do:
+The timer lives in the engine, so it fires while the window is open. For runs
+with no window, the package installs a service:
 
-- **It survives a restart.** The last run is recorded in
-  `schedule-state.json` beside the settings, so a machine that was off at
-  03:00 does the missed run when it comes back rather than skipping the
-  night — or, worse, running the moment it boots every time.
+```bash
+sudo systemctl enable --now mediafin      # runs mediafin --watch
+```
+
+It is deliberately **not** enabled on install: letting a service move your
+media unattended is your decision, not the package's. Read the unit first — it
+runs as its own `mediafin` user, which by default can reach none of your files.
+`mediafin --once` does whatever is due and exits, for a cron line of your own.
+
+Two things the schedule deliberately does and does not do:
+
+- **It survives a restart.** The last run is recorded in `schedule-state.json`
+  beside the settings, so a machine that was off at 03:00 does the missed run
+  when it comes back rather than skipping the night — or, worse, running the
+  moment it boots, every time.
 - **It does not catch up.** Three days asleep produces one run, not three.
-- **It refuses to rename without a library folder.** Without one the
-  proposal is a folder beside the file itself, so each run would bury it a
-  level deeper. Looking at the proposal would show you that; nobody is
-  looking at this one.
+- **It refuses to rename without a library folder.** Without one the proposal
+  is a folder beside the file itself, so each run would bury it a level deeper.
+  Looking at the proposal would show you that; nobody is looking at this one.
 
-The traffic light carries a lamp for it, and the settings page says when the
-next run is due — a schedule that is switched on but not running says so
-there, in red.
-
-Two Mediafins sharing a configuration directory — the window and `mediafin`
-in a terminal — will not both do the same run; the second one waits for the
-next.
-
-## Building
-
-The repository is a Swift Package plus an XcodeGen spec.
-
-### Option A — build a `.app` (works with any Xcode)
-
-```bash
-./build_app.sh
-```
-
-Produces `build/Mediafin.app`. It builds via Xcode (xcodegen + xcodebuild)
-when available and falls back to a SwiftPM build with a hand-assembled bundle, so
-it does not depend on the Xcode project format / version. On failure it prints
-the error and keeps a log at `build/build.log`.
-
-### Option B — Xcode project (requires Xcode 16+)
-
-```bash
-brew install xcodegen      # one-time
-xcodegen generate          # creates Mediafin.xcodeproj (project format 77)
-open Mediafin.xcodeproj
-# Select the "Mediafin" scheme and Run (⌘R)
-```
-
-> Older Xcode (≤ 15.x) cannot open the generated project ("future Xcode project
-> file format (77)"). Use Option A (it falls back to SwiftPM) or update Xcode.
-
-A ready-built, ad-hoc-signed `.app` is also published on the
-[Releases page](https://github.com/tamling/MediaIdentifier/releases/tag/latest).
-
-### Option C — open the package directly
-
-Open `Package.swift` in Xcode and run the `MediaIdentifierApp` scheme, or
-`swift run MediaIdentifierApp`.
-
-### Run the tests
-
-```bash
-swift test
-```
-
-The test suite covers the parser, the Jellyfin namer, the planner/executor
-(including companions, conflicts and undo) and the FFmpeg argument builder.
+Two Mediafins sharing a configuration directory will not both do the same run;
+the second waits for the next.
 
 ## Architecture
 
 ```
 Sources/
-  MediaIdentifierCore/        Pure Foundation — no UI, fully testable
+  MediaIdentifierCore/        Pure Foundation — no interface imports, fully testable
     Models/                   ParsedRelease, MediaFile, CompanionFile
     Parsing/                  ReleaseNameParser, token vocabulary, regex helpers
-    Naming/                   JellyfinNamer (FR7 naming rules)
+    Naming/                   JellyfinNamer (naming rules)
+    Music/                    MusicNamer, tag reading, cover extraction
     Planning/                 RenamePlanner, RenameItem, conflict detection
     FileOps/                  MediaScanner, RenameExecutor, file-type registry
-    Logging/                  RenameLog (FR12)
-    Undo/                     RenameJournal (FR13)
-    Metadata/                 MetadataProvider (+ offline & TMDb implementations)
-    Conversion/               FFmpeg argument builder + converter (FR16/FR17)
-    Web/                      HTTP message layer, router, access control,
-                              settings & secret stores (portable)
-  MediaIdentifierWeb/         HTTPS server (SwiftNIO + NIOSSL), certificate
-                              handling, command coordinator
-  mediafin/                   The Linux binary: serves the web interface
-  MediaIdentifierApp/         SwiftUI macOS front-end (dark "Mediafin" design)
-    AppState.swift            View model wiring Core to the UI
-    Theme.swift               Colour palette + reusable chips/controls
-    ContentView.swift         Title bar + sidebar + main area
-    Views/                    SidebarView, QueueView, FileRowView, EmptyDropView,
-                              ConvertView, LogView, ConflictResolutionView,
-                              MetadataSettingsView
+    Logging/                  RenameLog
+    Undo/                     RenameJournal
+    Metadata/                 MetadataProvider (+ offline, TMDb, local LLM)
+    Conversion/               FFmpeg argument builder + converter
+    Web/                      Settings, commands, status snapshot, stores.
+                              The `Web` prefix is left over from a web
+                              interface that no longer exists; this is the
+                              engine's own vocabulary.
+    App/                      AppCoordinator — the engine every front-end drove
+  MediaIdentifierGtk/         The window (GTK3)
+  CMediafinGtk/               Accepting dropped files, in C
+  mediafin/                   Headless runner: holds the engine so the
+                              schedule fires with no window open. Draws nothing.
 Tests/
-  MediaIdentifierCoreTests/   XCTest suite for the Core
-  MediaIdentifierWebTests/    End-to-end tests over real sockets, incl. TLS
+  MediaIdentifierCoreTests/   XCTest suite for the engine
 ```
 
-The **Core** library has no SwiftUI/AppKit imports, so the logic is portable and
-testable in isolation; the **App** target is a thin SwiftUI layer over it.
+There were once four front-ends over this engine: this window, a terminal
+interface, a local web interface and a SwiftUI app for macOS. Keeping them in
+step was most of the work and none of the value — every setting had to be built
+three times, and a release could be green while the one front-end anybody ran
+was broken. The three nobody ran are gone, along with SwiftNIO, which only the
+web server needed. The engine has no dependencies at all.
 
-## Metadata sources (FR3)
+## How it is tested
 
-By default the app uses `OfflineMetadataProvider`, which trusts the parsed
-title/year and makes **no network calls** — keeping it consistent with the
-local-only guarantee (FR18). A `TMDbMetadataProvider` is included to look up
-official titles; it only ever sends the parsed *title and year text* (never any
-media file) and requires a free TMDb API key. Additional providers (TVDb, IMDb)
-can be added by conforming to the `MetadataProvider` protocol (FR20).
+There is no Swift toolchain on the machine this is developed from, so CI is the
+only compiler and the only test runner. That has shaped what the tests are.
 
-**On-device Apple Intelligence (local):** when running on macOS 26+ with Apple
-Silicon and Apple Intelligence enabled, `AppleIntelligenceProvider` can identify
-titles using the built-in Foundation Models language model — fully on-device, so
-it stays consistent with FR18. It takes priority over TMDb and falls back to the
-heuristic parser when unavailable. Enable it under Settings → Identification.
-(Requires the Foundation Models framework; guarded behind
-`#if canImport(FoundationModels)` so older SDKs still build.)
+The engine's logic is tested directly, and the window is **driven** rather than
+photographed. `mediafin-gtk` has modes that CI uses:
 
-**Embedded container tags (local):** `EmbeddedMetadataProvider` reads title/year
-tags stored inside MP4/MOV/M4V files via AVFoundation. For MKV (which
-AVFoundation cannot read) `FFprobeMetadataProvider` reads the container tags via
-`ffprobe`.
+| | |
+|---|---|
+| `--screenshot FILE` | render the window, or one panel with `--panel`, to a PNG and report what was in it |
+| `--press-scan` | press **Durchsuchen** through the signal and print what the window then says, in the footer *and* in the middle |
+| `--press-apply` | press **Übernehmen** repeatedly: twice to show the clock moves, once with a typo to show the whole write is refused and the other edit survives the retry, and once onto a settings file that cannot be written |
+| `--press-convert` | look for convertible files, untick one, convert the rest, then tick everything and convert the remainder — printing the panel's sentence at each step |
+| `--press-clear-history` | press **Leeren**, cancel the question, press again and confirm, printing the history and the undo steps each time |
+| `--press-check` | press **Alles prüfen** and report, *while it still runs*, what the header says and which buttons are grey |
+| `--drop FILE…` | hand files over exactly as a drop does, skipping GTK's drag plumbing, which cannot be faked from a script |
 
-**Local title database (local after one download):** `LocalTitleDatabase` +
-`LocalTitleDatabaseLoader` build an offline index from a downloaded TMDb data
-export (`files.tmdb.org/p/exports/`, the `movie_ids` / `tv_series_ids` NDJSON
-files, plain or `.gz`) — or any JSON array of `{title, year, kind}`. Parsed
-titles are matched offline (exact + fuzzy/Levenshtein, ranked by kind, year and
-popularity). Pick the file under Settings → Identification.
+The three that move or re-encode real files — `--press-convert`,
+`--press-clear-history` and `--press-apply` — refuse to run unless
+`MEDIAFIN_CONFIG_DIR` points at a directory that is demonstrably not the one
+the program would have used anyway, or `--demo` is given. The variable being
+*set* is not enough: it is the documented way to relocate a real
+configuration, so for a while the supported way to point these at a real
+library was the very thing that satisfied the guard against it.
 
-The active identification chain is **embedded tags → local DB → Apple
-Intelligence → TMDb**; each step falls through to the next when it has no
-confident match (`CompositeMetadataProvider`). Everything except TMDb is fully
-local (FR18).
+This exists because a picture of a window proves only that it draws. Two
+releases went out green while the scan button said nothing a person could see
+and dropping a file took the window down — CI had never pressed anything. The
+status text is read back off the labels rather than from the engine's own
+snapshot: asking the engine what it thinks it said would agree with itself and
+prove nothing.
 
-**Enabling TMDb in the app:** open **Settings → Identification**, toggle "Look up
-official titles online" and paste a TMDb API key (v3 key or v4 token). The key is
-stored in the Keychain. When enabled, imports are enriched automatically, and
-"Look up now" re-runs the lookup on demand.
+`tools/check-workflows.py` refuses a workflow file that GitHub Actions would
+refuse, for the same reason: `yaml.safe_load` accepts a mapping with the same
+key twice and keeps the last, Actions rejects it outright, and a check that
+cannot see the fault in front of it is worse than no check because it is
+believed.
 
-**Library connector & monitoring (FR20):** a `JellyfinConnector` asks a local
-Jellyfin server to rescan its library after a successful rename/move (only a scan
-command is sent, no media). A read-only status web page (`/`, `/api/status`,
-`/healthz`) lets external monitors such as Uptime Kuma watch progress and be
-notified when a run finishes.
+And `tools/replay-ci-step.py` runs those steps here rather than reading them.
+A step whose shell parses can still be wrong — a stray `\"` at the end of an
+`echo` turned the next line into part of the string, an assignment never
+happened, and `set -u` killed the step on a push after every local check had
+passed. The step's own output was correct; only the harness around it was
+broken. `bash -n` cannot see that, so the replayer runs each `run:` block
+with the flags Actions uses, against a release build in this working copy.
 
-### Conflict handling (FR11)
+```bash
+swift test                            # the engine
+swift build --product mediafin-gtk
+python3 tools/replay-ci-step.py gtk   # the window's CI steps, here
+```
 
-The conflict policy is chosen in the toolbar: **Ask · Skip · Rename · Replace**.
-With **Ask**, pressing Start opens a resolution sheet listing every collision so
-you can decide per file (or apply one choice to all) before anything is moved.
+## Conflict handling
 
-## Feature coverage (FR1–FR20)
+When a proposed name is already taken, the setting decides: **skip**, **rename**
+(` (1)`, ` (2)`, …), **replace**, or **ask**.
 
-| FR | Topic | Status | Implementation |
-|----|-------|--------|----------------|
-| FR1 | Import via drag-and-drop (files/folders) | ✅ | `ContentView` drop + `MediaScanner` |
-| FR2 | Release-name analysis | ✅ | `ReleaseNameParser` |
-| FR3 | Identification via metadata sources | ✅ | `MetadataProvider`, embedded/ffprobe/local DB/Apple Intelligence/TMDb |
-| FR4 | Official title resolution | ✅ | `MetadataEnricher` (provenance shown in the row) |
-| FR5 | Release year | ✅ | `ReleaseNameParser` (multi-year heuristic) |
-| FR6 | Season/episode (S01E01, 1x05, Episode 07, multi-episode) | ✅ | `ReleaseNameParser` |
-| FR7 | Jellyfin-conformant renaming | ✅ | `JellyfinNamer` |
-| FR8 | Preview of changes | ✅ | `QueueView` / `FileRowView` |
-| FR9 | Accept / reject / hand-edit (inline) | ✅ | `FileRowView`, `AppState` |
-| FR10 | Multiple files at once | ✅ | `MediaScanner`, `RenamePlanner` |
-| FR11 | Conflict detection (Skip/Rename/Replace/Ask) | ✅ | `RenamePlanner`, `RenameExecutor` |
-| FR12 | Logging (exportable) | ✅ | `RenameLog` |
-| FR13 | Undo | ✅ | `RenameJournal`, `RenameExecutor.undoLast` |
-| FR14 | Subtitles (SRT/ASS/SUB) renamed alongside | ✅ | `MediaScanner`, `RenamePlanner` |
-| FR15 | Extra files (NFO/cover/sample) | ✅ | `VideoFileTypes`, `RenamePlanner` |
-| FR16 | Conversion via FFmpeg | ✅ | `FFmpegConverter` + Convert view (queue, RF, progress, history) |
-| FR17 | Hardware acceleration (VideoToolbox) | ✅ | `ConversionOptions.useHardwareAcceleration` |
-| FR18 | Local processing (no cloud uploads) | ✅ | Offline default, no media uploads |
-| FR19 | Graphical interface (drop, preview, progress, start, log) | ✅ | SwiftUI views |
-| FR20 | Extensibility (Jellyfin connector, watch folder, status web page) | ✅ | `LibraryConnector`/`JellyfinConnector`, `WatchFolderScanner`, `StatusWebServer` |
-
-**Legend:** ✅ implemented.
-
-## Roadmap / future work
-
-Further FR20 connectors (Emby, Sonarr/Radarr) build naturally on the
-`LibraryConnector` protocol. Optional Developer ID signing + notarisation is
-wired into the release workflow (see `docs/SIGNING.md`); without secrets the
-release ships an ad-hoc-signed universal `.app`.
+**Replace** moves the file it displaces aside rather than deleting it — on Linux
+into a hidden `.mediafin-trash` folder beside the library, journalled so undo
+can put it back. And it does it in an order that cannot leave a gap: the
+incoming file is brought into the destination's own directory under a hidden
+name first, and only once it is there is the old one moved aside and the new one
+renamed into place. Those last two are renames within one directory on one
+filesystem. If one fails anyway, both are undone and the library keeps its own
+copy.
 
 ## Security
 
-A static review informed these hardening measures:
+No media ever leaves the machine. Online identification sends a title and a
+year, nothing else, and only when switched on. There is no server to talk to
+and no port to listen on: the program is a window and a scheduler.
 
-- **No silent data loss:** the "Replace" conflict policy moves the existing file
-  to the Trash (not a hard delete) and records it in the undo journal, so it can
-  be restored (`RenameExecutor.trashExisting`).
-- **Secrets in the Keychain:** the TMDb API key is stored in the Keychain, not
-  UserDefaults (`KeychainStore`); a legacy plaintext value is migrated on launch.
-- **No path traversal:** manually edited destination paths are sanitised so they
-  cannot escape the output root (`JellyfinNamer.sanitizeRelativePath`).
-- **No shell injection:** external tools (FFmpeg, gunzip) are invoked with fixed
-  executables and argument arrays — never a shell string.
-- **Bounded input / no key caching:** the local-database loader caps decoded
-  size; TMDb requests use an ephemeral URL session so the key is not cached.
-
-The web interface is treated as a privileged surface — it can see the whole
-library — so it is hardened separately:
-
-- **Encrypted by default, and refuses not to be:** TLS 1.2 is the floor, and
-  binding to anything but loopback without TLS is refused rather than quietly
-  sending the access token in clear text.
-- **Authenticated by default:** a 256-bit token, compared in
-  length-independent time; an unconfigured token matches nothing instead of
-  letting everyone in. Failed logins are rate-limited, and while blocked even
-  the correct token is refused so the limit cannot be probed around.
-- **Token never in a URL:** it is accepted from a header or the session
-  cookie only, because URLs end up in logs, history and referrers. The cookie
-  is `HttpOnly`, `SameSite=Strict` and — over TLS — `Secure`.
-- **Three layers against cross-site requests:** that cookie policy, a
-  `form-action 'self'` CSP, and a per-process CSRF token in every form. A
-  cross-site request is refused *before* the credentials are checked, so it
-  cannot spend login attempts and lock the real user out.
-- **No scripting at all:** the pages use no JavaScript, so their own
-  Content-Security-Policy can forbid it outright (`default-src 'none'`).
-- **Writes only where intended:** an explicit list of paths accepts a POST;
-  everything else answers 405. Redirect targets are never taken from the
-  request. An unauthenticated client gets 401 even for unknown paths, so it
-  cannot map what exists.
-- **Credentials apart from configuration:** `settings.json` has no field for a
-  key at all — keys live in `secrets.json`, mode `0600`, written through a
-  temporary file created with its permissions already applied so a secret is
-  never briefly world-readable. The interface is only ever told *whether* a
-  key is stored, never its value.
-- **Bounded requests:** anything over 64 KiB stops being buffered and gets a
-  413. `/healthz` may answer anonymously for uptime monitors and reveals only
-  idle/busy/error — never a file name.
-
-## Note on this environment
-
-This project was authored in a Linux container without an Xcode/Swift
-toolchain, so it has not been compiled here. The code targets Swift 5.9 /
-macOS 13+ and the Core logic is covered by the included XCTest suite — run
-`swift test` on macOS to verify.
+- **Secrets are not in the settings file.** API keys live in `secrets.json`,
+  mode 0600; `settings.json` can be pasted into a bug report. A key for a
+  feature that has been removed is deleted from that file on the next start,
+  rather than sitting in clear text for a feature nothing can use.
+- **A key in the clear is a lamp.** Both services take a credential, and
+  over `http://` it goes on the wire readable. `http://192.168.3.116:1234`
+  for LM Studio on the same desk is the normal case and is accepted quietly;
+  `http://` to a *public* host turns the **Verschlüsselung** lamp amber and
+  names which service, because that request succeeds either way and there is
+  no other way to see it.
+- **A credential and the address it belongs to travel together.** The API
+  key lives in one store and the server address in another, and they are
+  paired only when a request is made. The key used to be written before the
+  settings were validated, so a refused Apply left the *new* key with the
+  *old* address — and anyone moving to a different model server who
+  mistyped something else in the same press would have sent their new
+  credential, as a Bearer token, to the server they were leaving. Both land
+  together now, or neither does, and a refused Apply leaves the typed key in
+  the field rather than swallowing it.
+- **Nothing is deleted to make room.** A rename under the "replace" policy
+  stages the incoming file under a temporary name first and only then moves
+  the old one aside, so a failure half way through leaves both files where
+  they were rather than neither.
 
 ## License
 
-Mediafin is free software, licensed under the **GNU General Public License,
-version 3 or (at your option) any later version (GPL-3.0-or-later)**. See the
-full text in [`LICENSE`](LICENSE).
-
-    Copyright (C) 2026 Mediafin contributors
-
-    This program is free software: you can redistribute it and/or modify it
-    under the terms of the GNU General Public License as published by the Free
-    Software Foundation, either version 3 of the License, or (at your option)
-    any later version.
-
-    This program is distributed in the hope that it will be useful, but
-    WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
-    or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for
-    more details.
+See [LICENSE](LICENSE).

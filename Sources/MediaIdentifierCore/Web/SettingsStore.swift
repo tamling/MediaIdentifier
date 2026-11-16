@@ -79,8 +79,30 @@ public struct SecretStore: Sendable {
     }
 
     /// Stores `value`, or removes the secret when it is empty.
-    public func set(_ value: String, for key: SecretKey) throws {
+    ///
+    /// A file that exists and does not decode is kept, not overwritten.
+    /// `load()` swallows every failure and returns an empty dictionary, and
+    /// this function used to start from that and then replace the whole
+    /// file — so one edited value in secrets.json (`"tmdb-api-key": 12345`)
+    /// made all three placeholders read "keiner hinterlegt", and the user
+    /// retyping one key destroyed the other two. Nothing said so, and the
+    /// Jellyfin refresh then stopped working with a lamp saying the address
+    /// was set but no key was stored.
+    /// - Returns: where the previous file was kept, when it existed and
+    ///   could not be read. A struct, so this is a return value rather than
+    ///   a property: nothing here holds state between calls.
+    @discardableResult
+    public func set(_ value: String, for key: SecretKey) throws -> String? {
         var secrets = load()
+        var keptAside: String?
+        if secrets.isEmpty, FileManager.default.fileExists(atPath: fileURL.path) {
+            let aside = fileURL.deletingLastPathComponent()
+                .appendingPathComponent(fileURL.lastPathComponent + ".unreadable")
+            try? FileManager.default.removeItem(at: aside)
+            if (try? FileManager.default.moveItem(at: fileURL, to: aside)) != nil {
+                keptAside = aside.path
+            }
+        }
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty {
             secrets.removeValue(forKey: key.rawValue)
@@ -89,6 +111,7 @@ public struct SecretStore: Sendable {
         }
         let data = try JSONEncoder().encode(secrets)
         try AtomicFile.write(data, to: fileURL, permissions: 0o600)
+        return keptAside
     }
 
     /// Which secrets are set. This is all the interface is ever told, so a
@@ -117,6 +140,34 @@ public struct SecretStore: Sendable {
         try? FileManager.default.setAttributes([.posixPermissions: 0o600],
                                                ofItemAtPath: fileURL.path)
         return true
+    }
+
+    /// Deletes stored secrets that nothing can read any more.
+    ///
+    /// A removed feature leaves its password behind: the file is a plain
+    /// dictionary, so a key no longer in `SecretKey` is simply never looked
+    /// up again — and sits there in clear text for ever. Credentials for a
+    /// feature that no longer exists are pure liability, so they go.
+    ///
+    /// - Returns: the raw names that were removed, for the log.
+    @discardableResult
+    public func forgetUnknownKeys() -> [String] {
+        let secrets = load()
+        guard !secrets.isEmpty else { return [] }
+        let known = Set(SecretKey.allCases.map(\.rawValue))
+        let unknown = secrets.keys.filter { !known.contains($0) }.sorted()
+        guard !unknown.isEmpty else { return [] }
+        var kept = secrets
+        for key in unknown { kept.removeValue(forKey: key) }
+        guard let data = try? JSONEncoder().encode(kept) else { return [] }
+        // Only report what really went: a write that fails must not make the
+        // caller tell the user a password is gone when it is still there.
+        do {
+            try AtomicFile.write(data, to: fileURL, permissions: 0o600)
+        } catch {
+            return []
+        }
+        return unknown
     }
 
     /// Errors are swallowed deliberately: a damaged secrets file must not stop

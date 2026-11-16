@@ -1,5 +1,78 @@
 import Foundation
 
+/// What the last finished search for convertible files did.
+///
+/// The conversion panel used to work this out for itself, from "the engine
+/// has gone quiet". That cannot tell a search that found nothing from a
+/// search the engine refused to run (no library folder configured, where it
+/// returns at its first guard without ever setting `busy`), nor from a
+/// search still waiting behind some unrelated job -- and it answered all
+/// three with "Keine Dateien zum Konvertieren gefunden." The generation is
+/// what makes a new answer distinguishable from the one already on screen;
+/// it moves for a refusal too, because a refusal is also an answer.
+public struct ConvertSearchReport: Codable, Sendable, Equatable {
+    public var generation: Int
+    /// The engine never looked: no library folder is configured.
+    public var refused: Bool
+    /// The user stopped the walk, so `found` is however far it got.
+    public var stopped: Bool
+    public var found: Int
+
+    public init(generation: Int = 0, refused: Bool = false,
+                stopped: Bool = false, found: Int = 0) {
+        self.generation = generation
+        self.refused = refused
+        self.stopped = stopped
+        self.found = found
+    }
+}
+
+/// What the last finished conversion run did.
+///
+/// For the same reason: the panel inferred "your files were converted" from
+/// "the candidate list went empty", and announced "Fertig. Die neuen Dateien
+/// liegen neben den Originalen" after runs in which every single file had
+/// failed and nothing had been written. The engine knows the counts; this is
+/// how it says so.
+public struct ConvertRunReport: Codable, Sendable, Equatable {
+    public var generation: Int
+    public var converted: Int
+    public var failed: Int
+    public var stopped: Bool
+
+    public init(generation: Int = 0, converted: Int = 0, failed: Int = 0,
+                stopped: Bool = false) {
+        self.generation = generation
+        self.converted = converted
+        self.failed = failed
+        self.stopped = stopped
+    }
+}
+
+/// What became of the last settings write.
+///
+/// The settings window printed "Übernommen um HH:MM:SS" the moment it had
+/// QUEUED the write, because `submit` is asynchronous and there was nothing
+/// to wait for. A write that then failed -- a read-only configuration
+/// directory, a full disk, settings.json replaced by a directory -- left the
+/// clock saying it had been applied, with the engine's own "Einstellungen
+/// nicht gespeichert" on the main window behind the panel. Worse, the window
+/// advanced its merge baseline to values that were never written, and the
+/// merge only writes back fields that differ from that baseline: every edit
+/// in the next press compared equal and was dropped, so the correction could
+/// not be made either.
+public struct SettingsSaveReport: Codable, Sendable, Equatable {
+    /// Bumped by every finished attempt, failures included.
+    public var generation: Int
+    /// Nothing was written. `lastResult` says why.
+    public var failed: Bool
+
+    public init(generation: Int = 0, failed: Bool = false) {
+        self.generation = generation
+        self.failed = failed
+    }
+}
+
 /// A read-only snapshot of what the app is currently doing, served over a small
 /// local HTTP endpoint so external monitors (e.g. Uptime Kuma) can poll it and
 /// notify when a run finishes (FR20). Contains no secrets — only progress and
@@ -26,14 +99,6 @@ public struct StatusSnapshot: Codable, Sendable, Equatable {
     /// True when the most recent run finished with one or more failures, so the
     /// health endpoint can report an error via its HTTP status code.
     public var hasError: Bool
-    /// A transfer to the remote library is running.
-    public var transferring: Bool
-    public var transferProgress: Double
-    /// "45 % · 12.3MB/s" as the tool reported it.
-    public var transferDetail: String?
-    public var pendingTransfers: Int
-    /// The remote library is switched on and complete enough to use.
-    public var remoteConfigured: Bool
     /// Commands accepted but not finished, including ones still queued.
     ///
     /// `busy` is only set once a job is running, and every button press
@@ -56,6 +121,23 @@ public struct StatusSnapshot: Codable, Sendable, Equatable {
     public var nextScheduledRun: Date?
     /// When the last unattended run happened, or nil if none has.
     public var lastScheduledRun: Date?
+    /// How many renames could still be taken back.
+    ///
+    /// `RenameJournal.canUndo` existed from the start and nothing read it:
+    /// the Rückgängig button was sensitive whether or not there was anything
+    /// to undo, and pressing it on an empty journal said so only afterwards.
+    /// It is a count rather than a flag because the one place it really
+    /// matters is the question before clearing the history, which takes the
+    /// journal with it — and "3 Schritte gehen weg" is a different sentence
+    /// from "nothing goes away".
+    public var undoableBatches: Int = 0
+    /// See `ConvertSearchReport`. Defaulted rather than in the initialiser so
+    /// an older stored snapshot still decodes.
+    public var convertSearch = ConvertSearchReport()
+    /// See `ConvertRunReport`.
+    public var convertRun = ConvertRunReport()
+    /// See `SettingsSaveReport`.
+    public var settingsSave = SettingsSaveReport()
 
     public init(
         updated: Date = Date(),
@@ -75,11 +157,6 @@ public struct StatusSnapshot: Codable, Sendable, Equatable {
         watchActive: Bool = false,
         jellyfinConfigured: Bool = false,
         hasError: Bool = false,
-        transferring: Bool = false,
-        transferProgress: Double = 0,
-        transferDetail: String? = nil,
-        pendingTransfers: Int = 0,
-        remoteConfigured: Bool = false,
         queuedWork: Int = 0,
         downloading: Bool = false,
         downloadProgress: Double? = nil,
@@ -104,11 +181,6 @@ public struct StatusSnapshot: Codable, Sendable, Equatable {
         self.watchActive = watchActive
         self.jellyfinConfigured = jellyfinConfigured
         self.hasError = hasError
-        self.transferring = transferring
-        self.transferProgress = transferProgress
-        self.transferDetail = transferDetail
-        self.pendingTransfers = pendingTransfers
-        self.remoteConfigured = remoteConfigured
         self.queuedWork = queuedWork
         self.downloading = downloading
         self.downloadProgress = downloadProgress
@@ -124,9 +196,7 @@ public struct StatusSnapshot: Codable, Sendable, Equatable {
     /// Percent (0–100) of whichever job is currently active.
     public var activePercent: Int {
         let fraction: Double
-        if transferring {
-            fraction = transferProgress
-        } else if converting {
+        if converting {
             fraction = convertProgress
         } else {
             fraction = renameProgress
@@ -134,174 +204,5 @@ public struct StatusSnapshot: Codable, Sendable, Equatable {
         return max(0, min(100, Int((fraction * 100).rounded())))
     }
 
-    /// One line for the transfer progress bar.
-    ///
-    /// A bar with no words on it only says "something is happening". This
-    /// says which file, how far, and how fast — and when nothing is being
-    /// sent it says that instead of showing a stale last percentage.
-    public var transferSummary: String {
-        guard transferring else {
-            return pendingTransfers > 0 ? "Wartet …" : "Keine Übertragung"
-        }
-        var parts: [String] = []
-        if let file = currentFile { parts.append(file) }
-        parts.append(transferDetail ?? "\(Int((transferProgress * 100).rounded())) %")
-        if pendingTransfers > 0 { parts.append("noch \(pendingTransfers)") }
-        return parts.joined(separator: " · ")
-    }
-
     public static let empty = StatusSnapshot()
-}
-
-/// Pure HTTP-formatting helpers for the status server. Kept free of any
-/// networking so they can be unit-tested.
-public enum StatusHTTP {
-    /// Extracts the request path from a raw HTTP request (first line, e.g.
-    /// `GET /api/status HTTP/1.1`). Falls back to "/".
-    public static func path(from request: String) -> String {
-        guard let firstLine = request.split(whereSeparator: \.isNewline).first
-        else { return "/" }
-        let parts = firstLine.split(separator: " ")
-        guard parts.count >= 2 else { return "/" }
-        // Drop any query string for routing.
-        return parts[1].split(separator: "?").first.map(String.init) ?? "/"
-    }
-
-    /// Extracts the HTTP method (e.g. "GET"). Falls back to "GET".
-    public static func method(from request: String) -> String {
-        guard let firstLine = request.split(whereSeparator: \.isNewline).first,
-              let verb = firstLine.split(separator: " ").first else { return "GET" }
-        return verb.uppercased()
-    }
-
-    /// Top-level handler for a raw request: enforces read-only methods, then
-    /// routes by path. Anything other than GET/HEAD is rejected (405) since the
-    /// server only ever serves status and never mutates state.
-    public static func respond(toRawRequest request: String, snapshot: StatusSnapshot) -> Data {
-        let verb = method(from: request)
-        guard verb == "GET" || verb == "HEAD" else {
-            return response(status: "405 Method Not Allowed",
-                            contentType: "text/plain; charset=utf-8",
-                            body: Data("method not allowed".utf8))
-        }
-        return route(path(from: request), snapshot: snapshot)
-    }
-
-    /// JSON body for `/api/status`. Optional fields are omitted when nil.
-    public static func json(_ snapshot: StatusSnapshot) -> Data {
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
-        return (try? encoder.encode(snapshot)) ?? Data("{}".utf8)
-    }
-
-    /// Builds a complete HTTP/1.1 response (headers + body).
-    public static func response(status: String = "200 OK", contentType: String, body: Data) -> Data {
-        // No CORS header: monitors like Uptime Kuma fetch server-side, and the
-        // dashboard is same-origin. Omitting it prevents arbitrary websites from
-        // reading the status via a visitor's browser.
-        var header = "HTTP/1.1 \(status)\r\n"
-        header += "Content-Type: \(contentType)\r\n"
-        header += "Content-Length: \(body.count)\r\n"
-        header += "X-Content-Type-Options: nosniff\r\n"
-        header += "Cache-Control: no-store\r\n"
-        header += "Connection: close\r\n\r\n"
-        return Data(header.utf8) + body
-    }
-
-    /// Routes a path to a full HTTP response.
-    public static func route(_ path: String, snapshot: StatusSnapshot) -> Data {
-        switch path {
-        case "/api/status", "/api/status/":
-            return response(contentType: "application/json", body: json(snapshot))
-        case "/healthz":
-            let health = self.health(snapshot)
-            return response(status: health.status, contentType: "text/plain; charset=utf-8",
-                            body: Data(health.body.utf8))
-        case "/", "/index.html":
-            return response(contentType: "text/html; charset=utf-8", body: Data(html(snapshot).utf8))
-        default:
-            return response(status: "404 Not Found", contentType: "text/plain; charset=utf-8",
-                            body: Data("not found".utf8))
-        }
-    }
-
-    /// Maps the snapshot to an HTTP status for a plain reachability monitor:
-    /// - 200 OK    → idle and successful (a run finished at 100 %, or nothing to do)
-    /// - 503       → a job is still running (not yet 100 %)
-    /// - 500       → the last run finished with errors
-    /// So in Uptime Kuma a basic HTTP monitor accepting only 200 goes "down"
-    /// while running or on error and recovers ("up") when a run completes cleanly.
-    public static func health(_ s: StatusSnapshot) -> (status: String, body: String) {
-        if s.hasError {
-            return ("500 Internal Server Error", "error: \(s.lastResult ?? "last run failed")")
-        }
-        if s.busy {
-            return ("503 Service Unavailable", "busy \(s.activePercent)%")
-        }
-        return ("200 OK", "ok")
-    }
-
-    /// Minimal read-only dashboard with a 2s auto-refresh.
-    public static func html(_ s: StatusSnapshot) -> String {
-        let stateLabel = s.hasError ? "Error" : (s.busy ? "Busy (\(s.activePercent) %)" : "Ready")
-        let stateColor = s.hasError ? Palette.error : (s.busy ? Palette.busy : Palette.ok)
-        // The shared escaper, not a local one. This page renders filenames and
-        // interpolates into attribute context elsewhere in the same template,
-        // so it needs quotes escaped too — which the local version it used to
-        // carry did not do.
-        let esc = HTML.escape
-        var rows = ""
-        func row(_ label: String, _ value: String) {
-            rows += "<tr><td class='k'>\(esc(label))</td><td class='v'>\(esc(value))</td></tr>"
-        }
-        if s.renaming {
-            row("Rename", "\(Int(s.renameProgress * 100)) %")
-        }
-        if s.converting {
-            row("Convert", s.convertDetail ?? "\(Int(s.convertProgress * 100)) %")
-            if let file = s.currentFile { row("Current file", file) }
-            row("Queue", "\(s.pendingConversions) waiting")
-        }
-        if let status = s.convertStatus { row("Status", status) }
-        if let last = s.lastResult { row("Last result", last) }
-        row("Files", "\(s.totalItems) total · \(s.ready) ready · \(s.done) done")
-        row("Watch folder", s.watchActive ? "active" : "off")
-        row("Jellyfin", s.jellyfinConfigured ? "connected" : "not configured")
-        let formatter = DateFormatter()
-        formatter.dateStyle = .medium; formatter.timeStyle = .medium
-        let updated = formatter.string(from: s.updated)
-
-        return """
-        <!DOCTYPE html>
-        <html lang="en"><head>
-        <meta charset="utf-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1">
-        <meta http-equiv="refresh" content="2">
-        <title>Mediafin – Status</title>
-        <style>
-          :root { color-scheme: dark; }
-          body { font-family: -apple-system, system-ui, sans-serif; background:\(Palette.background); color:\(Palette.text);
-                 margin:0; padding:32px; }
-          .card { max-width:640px; margin:0 auto; background:\(Palette.surface); border:1px solid \(Palette.border);
-                  border-radius:16px; padding:24px 28px; }
-          h1 { font-size:18px; margin:0 0 4px; }
-          .sub { color:\(Palette.textMuted); font-size:13px; margin-bottom:20px; }
-          .badge { display:inline-block; padding:6px 14px; border-radius:999px; font-weight:700;
-                   background:\(stateColor)22; color:\(stateColor); border:1px solid \(stateColor)55; }
-          table { width:100%; border-collapse:collapse; margin-top:18px; }
-          td { padding:9px 4px; border-bottom:1px solid \(Palette.surfaceRaised); font-size:14px; vertical-align:top; }
-          td.k { color:\(Palette.textMuted); width:40%; }
-          td.v { color:\(Palette.text); font-variant-numeric:tabular-nums; }
-          .foot { color:\(Palette.textMuted); font-size:12px; margin-top:18px; }
-        </style></head>
-        <body><div class="card">
-          <h1>Mediafin</h1>
-          <div class="sub">Status overview (view only)</div>
-          <span class="badge">\(stateLabel)</span>
-          <table>\(rows)</table>
-          <div class="foot">Updated: \(esc(updated)) · JSON: <code>/api/status</code></div>
-        </div></body></html>
-        """
-    }
 }

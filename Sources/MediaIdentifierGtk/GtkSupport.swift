@@ -1,5 +1,7 @@
 import CGtk3
+import CMediafinGtk
 import Foundation
+import MediaIdentifierCore
 
 /// The small amount of glue that direct C interop needs.
 ///
@@ -39,6 +41,22 @@ enum Gtk {
 
     static func entry(_ widget: UnsafeMutablePointer<GtkWidget>) -> UnsafeMutablePointer<GtkEntry> {
         UnsafeMutableRawPointer(widget).assumingMemoryBound(to: GtkEntry.self)
+    }
+
+    static func button(
+        _ widget: UnsafeMutablePointer<GtkWidget>
+    ) -> UnsafeMutablePointer<GtkButton> {
+        UnsafeMutableRawPointer(widget).assumingMemoryBound(to: GtkButton.self)
+    }
+
+    static func menu(_ widget: UnsafeMutablePointer<GtkWidget>) -> UnsafeMutablePointer<GtkMenu> {
+        UnsafeMutableRawPointer(widget).assumingMemoryBound(to: GtkMenu.self)
+    }
+
+    static func menuShell(
+        _ widget: UnsafeMutablePointer<GtkWidget>
+    ) -> UnsafeMutablePointer<GtkMenuShell> {
+        UnsafeMutableRawPointer(widget).assumingMemoryBound(to: GtkMenuShell.self)
     }
 
     static func comboBox(
@@ -129,9 +147,12 @@ enum Gtk {
         gtk_label_set_text(label(widget), text)
     }
 
-    static func setMarkup(_ widget: UnsafeMutablePointer<GtkWidget>, _ markup: String) {
-        gtk_label_set_markup(label(widget), markup)
-    }
+    // Deliberately no markup here at all. Labels are styled with CSS
+    // classes through Styling.style, which takes no text and so cannot be
+    // malformed; tools/check-markup.sh fails the build if anything in
+    // Sources starts producing Pango markup again. Twice now this file has
+    // held a markup sink with no callers — one unescaped, then one escaped —
+    // while the tests and a green CI line covered a path nothing reached.
 
     /// The folder a chooser is showing, or "" when none is set.
     ///
@@ -199,6 +220,108 @@ enum Gtk {
         g_signal_connect_data(object(widget), "clicked",
                               unsafeBitCast(handler, to: GCallback.self),
                               payload, release, GConnectFlags(rawValue: 0))
+    }
+
+    /// A tick box toggled. The same ownership dance as `onClick`; a
+    /// GtkCheckButton emits "toggled", and it emits it for a programmatic
+    /// `gtk_toggle_button_set_active` as well, which is why the caller needs
+    /// a way to tell its own seeding apart from a press.
+    static func onToggled<Owner: AnyObject>(
+        _ widget: UnsafeMutablePointer<GtkWidget>,
+        _ owner: Owner,
+        _ action: @escaping (Owner) -> Void
+    ) {
+        let payload = Unmanaged.passRetained(Action(owner: owner, action: action)).toOpaque()
+        let handler: @convention(c) (UnsafeMutablePointer<GtkWidget>?,
+                                     UnsafeMutableRawPointer?) -> Void = { _, data in
+            guard let data else { return }
+            Unmanaged<Action>.fromOpaque(data).takeUnretainedValue().run()
+        }
+        let release: @convention(c) (UnsafeMutableRawPointer?, UnsafeMutablePointer<GClosure>?)
+            -> Void = { data, _ in
+                guard let data else { return }
+                Unmanaged<Action>.fromOpaque(data).release()
+            }
+        g_signal_connect_data(object(widget), "toggled",
+                              unsafeBitCast(handler, to: GCallback.self),
+                              payload, release, GConnectFlags(rawValue: 0))
+    }
+
+    /// A menu item chosen. The same ownership dance as `onClick`; menu items
+    /// emit "activate" rather than "clicked".
+    static func onActivate<Owner: AnyObject>(
+        _ widget: UnsafeMutablePointer<GtkWidget>,
+        _ owner: Owner,
+        _ action: @escaping (Owner) -> Void
+    ) {
+        let payload = Unmanaged.passRetained(Action(owner: owner, action: action)).toOpaque()
+        let handler: @convention(c) (UnsafeMutablePointer<GtkWidget>?,
+                                     UnsafeMutableRawPointer?) -> Void = { _, data in
+            guard let data else { return }
+            Unmanaged<Action>.fromOpaque(data).takeUnretainedValue().run()
+        }
+        let release: @convention(c) (UnsafeMutableRawPointer?, UnsafeMutablePointer<GClosure>?)
+            -> Void = { data, _ in
+                guard let data else { return }
+                Unmanaged<Action>.fromOpaque(data).release()
+            }
+        g_signal_connect_data(object(widget), "activate",
+                              unsafeBitCast(handler, to: GCallback.self),
+                              payload, release, GConnectFlags(rawValue: 0))
+    }
+
+    /// Asks the user to confirm something, modally, and returns their answer.
+    ///
+    /// Through the C shim, because `gtk_message_dialog_new` is a C variadic
+    /// and Swift cannot call one. The shim defaults to "no" for every way of
+    /// not answering — Cancel, Escape, closing the window — so a mistyped
+    /// key cannot confirm a deletion.
+    ///
+    /// Blocking, which is what a confirmation has to be: the caller is a
+    /// button handler that must not act until the answer is in. GTK keeps
+    /// its own loop running inside `gtk_dialog_run`, so the window behind
+    /// still repaints.
+    static func confirm(over parent: UnsafeMutablePointer<GtkWidget>,
+                        heading: String, body: String,
+                        confirm: String, cancel: String) -> Bool {
+        mediafin_confirm(parent, heading, body, confirm, cancel) != 0
+    }
+
+    /// Answers a confirmation dialog that is already on screen, for the
+    /// smoke modes. True when one was found.
+    static func answerDialog(accept: Bool) -> Bool {
+        mediafin_answer_dialog(accept ? 1 : 0) != 0
+    }
+
+    /// Makes a widget accept files dragged from a file manager.
+    ///
+    /// The C side does the GTK half; this only turns the paths it reports into
+    /// URLs. Same ownership dance as `onClick`: the owner is captured in an
+    /// ordinary Swift closure and only the non-generic `Drop` crosses into C,
+    /// because a @convention(c) function has nowhere to put type metadata.
+    static func onFilesDropped<Owner: AnyObject>(
+        _ widget: UnsafeMutablePointer<GtkWidget>,
+        _ owner: Owner,
+        _ action: @escaping (Owner, [URL]) -> Void
+    ) {
+        let payload = Unmanaged.passRetained(Drop(owner: owner, action: action)).toOpaque()
+        let received: @convention(c) (UnsafePointer<UnsafePointer<CChar>?>?,
+                                      UnsafeMutableRawPointer?) -> Void = { paths, data in
+            guard let paths, let data else { return }
+            var urls: [URL] = []
+            var index = 0
+            while let path = paths[index] {
+                urls.append(URL(fileURLWithPath: String(cString: path)))
+                index += 1
+            }
+            guard !urls.isEmpty else { return }
+            Unmanaged<Drop>.fromOpaque(data).takeUnretainedValue().run(urls)
+        }
+        let release: @convention(c) (UnsafeMutableRawPointer?) -> Void = { data in
+            guard let data else { return }
+            Unmanaged<Drop>.fromOpaque(data).release()
+        }
+        mediafin_accept_file_drops(widget, received, payload, release)
     }
 
     /// Runs `action` on `owner` every `milliseconds` for as long as the main
@@ -281,6 +404,24 @@ enum Gtk {
     /// generic type — `Unmanaged<Box<Owner>>` inside the callback is rejected
     /// even though nothing of `Owner` is used at runtime. The generic part
     /// stays outside, in the ordinary Swift closure that captures the owner.
+    /// Carries dropped files back into Swift, as `Action` does for a click.
+    /// Separate because a drop hands something over and a click does not.
+    final class Drop {
+        private let body: ([URL]) -> Void
+
+        /// Weakly, for the same reason as `Action`: a drop can still arrive
+        /// while the window is being torn down.
+        init<Owner: AnyObject>(owner: Owner,
+                               action: @escaping (Owner, [URL]) -> Void) {
+            body = { [weak owner] urls in
+                guard let owner else { return }
+                action(owner, urls)
+            }
+        }
+
+        func run(_ urls: [URL]) { body(urls) }
+    }
+
     final class Action {
         private let body: () -> Void
 

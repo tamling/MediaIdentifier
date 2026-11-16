@@ -32,6 +32,7 @@ enum Styling {
         @define-color mf_ok \(Palette.ok);
         @define-color mf_busy \(Palette.busy);
         @define-color mf_error \(Palette.error);
+        @define-color mf_accent \(Palette.accent);
 
         window, dialog, popover, menu {
           background-color: @mf_bg;
@@ -65,15 +66,18 @@ enum Styling {
         button:active { background-color: shade(@mf_raised, 0.85); }
         button:disabled { color: @mf_muted; background-color: @mf_surface; }
 
-        /* The primary action carries the palette's accent, and dark text on
-           top of it because the accent is bright. */
+        /* The primary action carries the accent, with white on top of it.
+           The accent is deliberately NOT one of the three status colours:
+           a button that means "this is the one you want" and a lamp that
+           means "nothing is wrong" cannot be the same colour without one
+           of them losing its meaning. */
         button.suggested-action {
-          background-color: @mf_ok;
+          background-color: @mf_accent;
           color: \(Palette.onAccent);
-          border-color: @mf_ok;
+          border-color: @mf_accent;
           font-weight: 700;
         }
-        button.suggested-action:hover { background-color: shade(@mf_ok, 1.12); }
+        button.suggested-action:hover { background-color: shade(@mf_accent, 1.12); }
         button.suggested-action:disabled {
           background-color: @mf_surface;
           color: @mf_muted;

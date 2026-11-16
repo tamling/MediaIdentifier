@@ -30,7 +30,7 @@ public struct JellyfinConnector: LibraryConnector {
         }
         self.baseURL = url
         self.apiKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        self.session = session ?? URLSession(configuration: .ephemeral)
+        self.session = session ?? SharedHTTPSession.ephemeral
     }
 
     public func refresh() async throws {

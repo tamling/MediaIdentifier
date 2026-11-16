@@ -65,7 +65,6 @@ public struct ProbeResult: Equatable, Sendable {
 public enum ProbeSubject: String, Sendable, Equatable, CaseIterable {
     case localLLM
     case jellyfin
-    case remote
 }
 
 /// Works out the lamps.
@@ -76,17 +75,32 @@ public enum ProbeSubject: String, Sendable, Equatable, CaseIterable {
 /// program: a status panel that lies is worse than no status panel.
 public enum SystemChecks {
 
+    /// - Parameter folders: what a probe found out about each configured
+    ///   path, keyed by the path. Passed in rather than measured here: this
+    ///   used to call `FileManager` directly, and the caller was the window's
+    ///   own 500 ms timer — so a dead CIFS mount blocked the drawing thread
+    ///   in `stat` for sixty seconds a go and froze the window shut. A path
+    ///   with no entry reads as unreachable, which is the truthful answer to
+    ///   "can I use this folder right now".
+    ///
+    ///   The side effect is that this function now touches nothing at all:
+    ///   no filesystem, no clock it did not get given, no settings
+    ///   singleton. Every lamp below can be produced from values, which is
+    ///   how a status panel ought to be testable.
     public static func all(
         settings: WebSettings,
-        tools: RemoteTools,
         ffmpegAvailable: Bool,
         secrets: Set<SecretKey>,
         probes: [ProbeSubject: ProbeResult],
+        folders: [String: FolderFacts] = [:],
         nextScheduledRun: Date? = nil,
-        fileManager: FileManager = .default,
+        settingsProblem: String? = nil,
         now: Date = Date()
     ) -> [SystemCheck] {
         var checks: [SystemCheck] = []
+
+        checks.append(settingsCheck(settings: settings,
+                                    fileProblem: settingsProblem))
 
         checks.append(folder(id: "source",
                              name: Text.s("Importordner", "Import folder"),
@@ -96,7 +110,7 @@ public enum SystemChecks {
                                     + "durchsuchen.",
                                 "No folder chosen yet — without one there is nothing to "
                                     + "look through."),
-                             fileManager: fileManager))
+                             facts: folders[settings.sourceFolder]))
 
         // With a server configured, the local library folders are not where
         // the library lives, so demanding them would be a red lamp for a
@@ -111,14 +125,38 @@ public enum SystemChecks {
                                 "Kein Ordner gewählt — Filme werden dort umbenannt, wo "
                                     + "sie liegen.",
                                 "No folder chosen — films are renamed where they lie."),
-                             missingState: .warning, fileManager: fileManager))
+                             missingState: .warning,
+                             facts: folders[settings.moviesFolder]))
         checks.append(folder(id: "series", name: Text.s("Serien", "Series"),
                              path: settings.seriesFolder,
                              missingDetail: Text.s(
                                 "Kein Ordner gewählt — Serien werden dort umbenannt, wo "
                                     + "sie liegen.",
                                 "No folder chosen — series are renamed where they lie."),
-                             missingState: .warning, fileManager: fileManager))
+                             missingState: .warning,
+                             facts: folders[settings.seriesFolder]))
+        // The fourth root, which had no lamp at all.
+        //
+        // `musicFolder` is a destination the program moves files into and a
+        // first-class mode in the window, and the folder lamp exists
+        // precisely so an unmounted library is red before anything is
+        // moved. With the share down, its mount point is an ordinary empty
+        // local directory: the tracks were filed onto it, the share came
+        // back and shadowed them, and the history said "umbenannt" while
+        // undo could not find them. With films in the same state the user
+        // gets "Laufwerk nicht eingebunden?" and stops.
+        //
+        // Grey rather than amber when it is empty: music is a mode the user
+        // may never touch, and the films and series lamps are amber there
+        // because renaming in place is a real fallback — for music there is
+        // no such thing, the mode simply is not in use.
+        checks.append(folder(id: "music", name: Text.s("Musik", "Music"),
+                             path: settings.musicFolder,
+                             missingDetail: Text.s(
+                                "Kein Ordner gewählt — Musik wird nicht einsortiert.",
+                                "No folder chosen — music is not filed."),
+                             missingState: .off,
+                             facts: folders[settings.musicFolder]))
 
         checks.append(SystemCheck(
             id: "ffmpeg", name: "FFmpeg",
@@ -135,11 +173,96 @@ public enum SystemChecks {
                                      probes: probes, now: now))
         checks.append(jellyfin(settings: settings, secrets: secrets,
                                probes: probes, now: now))
-        checks.append(contentsOf: remote(settings: settings, tools: tools,
-                                         secrets: secrets, probes: probes,
-                                         fileManager: fileManager, now: now))
+        checks.append(encryption(settings: settings))
         checks.append(schedule(settings.schedule, nextRun: nextScheduledRun, now: now))
         return checks
+    }
+
+    /// Whether the settings themselves are usable.
+    ///
+    /// The rules are `WebSettings.problems()`, which until now had no caller
+    /// in the program: a relative library path was accepted, used as the
+    /// move root, and resolved against the process's working directory.
+    /// `fileProblem` is what the coordinator found when it loaded the file —
+    /// unreadable, or readable and invalid.
+    static func settingsCheck(settings: WebSettings,
+                              fileProblem: String?) -> SystemCheck {
+        let name = Text.s("Einstellungen", "Settings")
+        if let fileProblem, !fileProblem.isEmpty {
+            return SystemCheck(
+                id: "settings", name: name, state: .failed,
+                detail: Text.s(
+                    "Die gespeicherten Einstellungen sind nicht benutzbar: "
+                        + fileProblem,
+                    "The saved settings are not usable: " + fileProblem))
+        }
+        let problems = settings.problems()
+        guard problems.isEmpty else {
+            return SystemCheck(
+                id: "settings", name: name, state: .failed,
+                detail: problems.map(\.message).joined(separator: " "))
+        }
+        // Grey, not green, with nothing filled in: a green lamp for a
+        // question nobody asked is how this panel learned to be ignored.
+        let anything = [settings.sourceFolder, settings.moviesFolder,
+                        settings.seriesFolder, settings.musicFolder,
+                        settings.localLLMBaseURL, settings.jellyfinBaseURL]
+            .contains { !$0.isEmpty }
+        guard anything else {
+            return SystemCheck(id: "settings", name: name, state: .off,
+                               detail: Text.s("Noch nichts eingetragen.",
+                                              "Nothing entered yet."))
+        }
+        return SystemCheck(
+            id: "settings", name: name, state: .ok,
+            detail: Text.s("Die Eingaben sind in Ordnung.",
+                           "The entries are in order."))
+    }
+
+    /// Whether a stored key would travel in the clear.
+    ///
+    /// The model server and Jellyfin each take a credential, and over
+    /// `http://` it goes on the wire readable. On a local network that is
+    /// the normal arrangement and this lamp says nothing about it; to a
+    /// public host it is the one thing on this panel that cannot be seen
+    /// any other way, because the request succeeds either way.
+    static func encryption(settings: WebSettings) -> SystemCheck {
+        let name = Text.s("Verschlüsselung", "Encryption")
+        var exposed: [String] = []
+        if URLSafety.sendsCredentialsInTheClear(settings.localLLMBaseURL) {
+            exposed.append(Text.s("Modellserver", "model server"))
+        }
+        if URLSafety.sendsCredentialsInTheClear(settings.jellyfinBaseURL) {
+            exposed.append("Jellyfin")
+        }
+        guard exposed.isEmpty else {
+            return SystemCheck(
+                id: "encryption", name: name, state: .warning,
+                detail: Text.s(
+                    "\(exposed.joined(separator: " und ")) wird über http:// "
+                        + "angesprochen, und der Host sieht nicht nach einem Rechner "
+                        + "im eigenen Netz aus — dann ist der hinterlegte Schlüssel "
+                        + "unterwegs mitlesbar. https:// verwenden. (Liegt der Rechner "
+                        + "doch im eigenen Netz, ist hier nichts zu tun.)",
+                    "\(exposed.joined(separator: " and ")) is addressed over http:// "
+                        + "and the host does not look like one on your own network, in "
+                        + "which case the stored key is readable in transit. Use "
+                        + "https://. (If the machine is on your own network after all, "
+                        + "there is nothing to do here.)"))
+        }
+        let configured = !settings.localLLMBaseURL.isEmpty
+            || !settings.jellyfinBaseURL.isEmpty
+        guard configured else {
+            return SystemCheck(id: "encryption", name: name, state: .off,
+                               detail: Text.s("Keine Adresse eingetragen.",
+                                              "No address entered."))
+        }
+        return SystemCheck(
+            id: "encryption", name: name, state: .ok,
+            detail: Text.s("Jede eingetragene Adresse ist entweder https:// oder "
+                               + "liegt im eigenen Netz.",
+                           "Every address entered is either https:// or on your own "
+                               + "network."))
     }
 
     /// Whether the unattended run is really going to happen.
@@ -201,29 +324,45 @@ public enum SystemChecks {
                "Set up, but not checked yet.")
     }
 
-    private static func folder(id: String, name: String, path: String,
-                               missingDetail: String,
-                               missingState: SystemCheck.State = .failed,
-                               fileManager: FileManager) -> SystemCheck {
+    static func folder(id: String, name: String, path: String,
+                       missingDetail: String,
+                       missingState: SystemCheck.State = .failed,
+                       facts: FolderFacts?) -> SystemCheck {
         guard !path.isEmpty else {
             return SystemCheck(id: id, name: name, state: missingState,
                                detail: missingDetail)
         }
-        var isDirectory: ObjCBool = false
-        let exists = fileManager.fileExists(atPath: path, isDirectory: &isDirectory)
-        guard exists, isDirectory.boolValue else {
+        // No entry means no probe has come back for this path, which is the
+        // same situation as one that timed out: nothing is known, and a lamp
+        // that shows the last known green about a folder that went away is
+        // the failure this panel exists to prevent.
+        let facts = facts ?? .unreachable
+        guard !facts.timedOut else {
+            // Distinct from "does not exist". The drive IS mounted; it is
+            // not answering, and no setting fixes that.
+            return SystemCheck(id: id, name: name, state: .failed,
+                               detail: Text.s(
+                                "\(path) antwortet nicht. Ein eingebundenes "
+                                    + "Netzlaufwerk, das weg ist, braucht einen "
+                                    + "Neustart der Einbindung — die Oberfläche "
+                                    + "wartet nicht darauf.",
+                                "\(path) is not answering. A mounted network share "
+                                    + "that has gone away needs remounting — the "
+                                    + "interface does not wait for it."))
+        }
+        guard facts.exists, facts.isDirectory else {
             // Set but not there is always red, whatever the field: this is
             // the unmounted-drive case, and it is the one where carrying on
             // silently does real damage.
             return SystemCheck(id: id, name: name, state: .failed,
-                               detail: exists
+                               detail: facts.exists
                                    ? Text.s("\(path) ist kein Ordner.",
                                             "\(path) is not a folder.")
                                    : Text.s(
                                     "\(path) gibt es nicht — Laufwerk nicht eingebunden?",
                                     "\(path) does not exist — drive not mounted?"))
         }
-        guard fileManager.isWritableFile(atPath: path) else {
+        guard facts.isWritable else {
             return SystemCheck(id: id, name: name, state: .failed,
                                detail: Text.s("\(path) ist nicht beschreibbar.",
                                               "\(path) is not writable."))
@@ -280,100 +419,6 @@ public enum SystemChecks {
         }
         return probed(id: "jellyfin", name: "Jellyfin", probe: probes[.jellyfin],
                       untested: Self.untested, now: now)
-    }
-
-    private static func remote(settings: WebSettings, tools: RemoteTools,
-                               secrets: Set<SecretKey>,
-                               probes: [ProbeSubject: ProbeResult],
-                               fileManager: FileManager = .default,
-                               now: Date) -> [SystemCheck] {
-        let target = settings.remote
-        guard target.isEnabled else {
-            return [SystemCheck(id: "remote", name: "Server", state: .off,
-                                detail: Text.s("Nicht eingeschaltet.", "Not switched on."))]
-        }
-
-        var checks: [SystemCheck] = []
-        let missing = tools.missing(for: target)
-        checks.append(SystemCheck(
-            id: "remote-tools",
-            name: Text.s("Übertragungsprogramme", "Transfer programs"),
-            state: missing.isEmpty ? .ok : .failed,
-            detail: missing.isEmpty
-                ? Text.s("\(target.transport.rawValue) und OpenSSH sind da.",
-                         "\(target.transport.rawValue) and OpenSSH are present.")
-                : Text.s("Fehlt: \(missing.joined(separator: ", ")). ",
-                         "Missing: \(missing.joined(separator: ", ")). ")
-                    + "sudo apt install \(missing.joined(separator: " "))"))
-
-        let problems = target.problems()
-        if !problems.isEmpty {
-            checks.append(SystemCheck(
-                id: "remote", name: "Server", state: .failed,
-                detail: problems.map(\.message).joined(separator: " ")))
-            return checks
-        }
-        if target.authentication == .password, !secrets.contains(.remotePassword) {
-            checks.append(SystemCheck(id: "remote", name: "Server", state: .failed,
-                                      detail: Text.s(
-                                        "Anmeldung per Passwort gewählt, aber keines "
-                                            + "hinterlegt.",
-                                        "Password login is selected but none is stored.")))
-            return checks
-        }
-        if let lamp = login(target, secrets: secrets, fileManager: fileManager) {
-            checks.append(lamp)
-        }
-        checks.append(probed(id: "remote", name: "Server", probe: probes[.remote],
-                             untested: Self.untested, now: now))
-        return checks
-    }
-
-    /// The login trap, made visible.
-    ///
-    /// Key login puts ssh in batch mode: it may not ask for anything. So a
-    /// key file that is not there fails in a tenth of a second with
-    /// "Permission denied", and a password sitting in the store is never
-    /// offered — nothing anywhere said that it would not be. This is the
-    /// lamp for exactly that, because it is what happened.
-    static func login(_ target: RemoteTarget, secrets: Set<SecretKey>,
-                      fileManager: FileManager) -> SystemCheck? {
-        guard target.authentication == .key else { return nil }
-        let name = Text.s("Anmeldung", "Login")
-        let key = (target.identityFile as NSString).expandingTildeInPath
-
-        if !target.identityFile.isEmpty, !fileManager.fileExists(atPath: key) {
-            return SystemCheck(
-                id: "remote-login", name: name, state: .failed,
-                detail: Text.s(
-                    "Die Schlüsseldatei \(target.identityFile) ist nicht da, und bei "
-                        + "Anmeldung per Schlüssel darf ssh nicht nach einem Passwort "
-                        + "fragen — die Anmeldung scheitert also sofort."
-                        + (secrets.contains(.remotePassword)
-                            ? " Ein Passwort ist hinterlegt: „Anmeldung“ auf „Passwort“ "
-                                + "stellen, dann wird es benutzt."
-                            : " Entweder den Pfad berichtigen, das Feld leeren, oder bei "
-                                + "„Anmeldung“ auf „Passwort“ stellen."),
-                    "The key file \(target.identityFile) is not there, and with key login "
-                        + "ssh is not allowed to ask for a password — so the login fails "
-                        + "at once."
-                        + (secrets.contains(.remotePassword)
-                            ? " A password is stored: set “Login” to “Password” and it "
-                                + "will be used."
-                            : " Either correct the path, empty the field, or set “Login” "
-                                + "to “Password”.")))
-        }
-        if secrets.contains(.remotePassword) {
-            return SystemCheck(
-                id: "remote-login", name: name, state: .warning,
-                detail: Text.s(
-                    "Ein Passwort ist hinterlegt, aber die Anmeldung steht auf Schlüssel "
-                        + "— das Passwort wird nicht benutzt. „Anmeldung“ auf „Passwort“ "
-                        + "stellen, wenn es benutzt werden soll.",
-                    "A password is stored but the login is set to key, so the password is "
-                        + "not used. Set “Login” to “Password” if it should be."))
-        }
-        return nil
     }
 
     /// A lamp whose colour comes from an actual connection attempt.

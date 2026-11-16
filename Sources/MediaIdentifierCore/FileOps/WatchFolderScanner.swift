@@ -28,6 +28,9 @@ public final class WatchFolderScanner {
         var current: [String: Int64] = [:]
 
         for url in entries where VideoFileTypes.isVideo(url) {
+            // Nobody is watching an unattended run, so a sample picked up
+            // here would collide with the real file in the dark.
+            guard !VideoFileTypes.isSample(url) else { continue }
             let path = url.standardizedFileURL.path
             let size = Int64((try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0)
             current[path] = size

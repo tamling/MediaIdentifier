@@ -8,11 +8,50 @@ public struct ConversionOptions: Codable, Sendable, Equatable {
         case h264   // libx264 / h264_videotoolbox
         case av1    // libsvtav1 (optional, needs AV1 HW decode on playback)
         case copy
+
+        /// What the choice is called where somebody has to make it.
+        ///
+        /// Named by what it does to the file rather than by the codec alone:
+        /// "h265" tells a user nothing about whether their television will
+        /// play it, and that is the only question they have.
+        public var label: String {
+            switch self {
+            case .h265:
+                return Text.s("H.265 — klein, braucht einen neueren Fernseher",
+                              "H.265 — small, needs a newer television")
+            case .h264:
+                return Text.s("H.264 — größer, spielt überall",
+                              "H.264 — larger, plays everywhere")
+            case .av1:
+                return Text.s("AV1 — am kleinsten, spielt kaum irgendwo",
+                              "AV1 — smallest, plays almost nowhere")
+            case .copy:
+                return Text.s("Nicht neu kodieren, nur umpacken",
+                              "Do not re-encode, only repackage")
+            }
+        }
     }
 
     /// x264/x265 preset names. FR-1 requires at least "slow".
     public enum Preset: String, Codable, Sendable, CaseIterable {
         case slow, slower, veryslow, medium, fast, faster, veryfast
+
+        /// The trade is time against size at the same quality, so that is
+        /// what the label says. The numbers are not promises; they are the
+        /// order of magnitude a user needs to choose.
+        public var label: String {
+            switch self {
+            case .veryslow: return Text.s("Sehr langsam — kleinste Datei",
+                                          "Very slow — smallest file")
+            case .slower: return Text.s("Langsamer", "Slower")
+            case .slow: return Text.s("Langsam — empfohlen", "Slow — recommended")
+            case .medium: return Text.s("Mittel", "Medium")
+            case .fast: return Text.s("Schnell", "Fast")
+            case .faster: return Text.s("Schneller", "Faster")
+            case .veryfast: return Text.s("Sehr schnell — größte Datei",
+                                          "Very fast — largest file")
+            }
+        }
 
         /// SVT-AV1 uses a numeric preset (0 slowest … 13 fastest).
         var svtAV1Level: Int {
@@ -32,6 +71,19 @@ public struct ConversionOptions: Codable, Sendable, Equatable {
         case passthrough   // keep the original stream (Auto-Passthru)
         case opus
         case aac
+
+        public var label: String {
+            switch self {
+            case .passthrough:
+                return Text.s("Ton unverändert übernehmen",
+                              "Keep the audio as it is")
+            case .opus:
+                return Text.s("Opus — klein, moderne Geräte",
+                              "Opus — small, modern devices")
+            case .aac:
+                return Text.s("AAC — spielt überall", "AAC — plays everywhere")
+            }
+        }
     }
 
     public var videoCodec: VideoCodec
@@ -88,6 +140,12 @@ public struct ConversionOptions: Codable, Sendable, Equatable {
     }
 
     /// Suggested RF for a given height (FR-1): ~20–22 for 1080p, ~22–26 for 4K.
+    ///
+    /// Read by the settings window beside the quality field: a number between
+    /// 0 and 51 means nothing to somebody who has not encoded video before,
+    /// and "21 is usual at this resolution" is the one sentence that makes it
+    /// choosable. 4K tolerates a higher number because the same artefact is
+    /// spread over four times the pixels.
     public static func suggestedQuality(forHeight height: Int?) -> Int {
         guard let height else { return 21 }
         return height >= 1600 ? 24 : 21
@@ -192,16 +250,28 @@ public final class FFmpegConverter {
         case ffmpegNotFound
         case conversionFailed(code: Int32, message: String)
 
+        /// Through `Text.s`, like every other message the user can see.
+        ///
+        /// These two were raw English until the feature had an entrance.
+        /// The window draws `lastResult` verbatim, and ffmpeg missing is
+        /// this feature's most likely failure as well as the only message
+        /// carrying the fix — so an English-only sentence here was the
+        /// first thing a German user would have met.
         public var errorDescription: String? {
             switch self {
             case .ffmpegNotFound:
-                return """
-                FFmpeg was not found. Install it — `apt install ffmpeg` on Debian \
-                or Ubuntu, `brew install ffmpeg` on macOS — or set its path in \
-                the settings.
-                """
+                return Text.s("""
+                FFmpeg wurde nicht gefunden. Installieren — `apt install \
+                ffmpeg` unter Debian oder Ubuntu, `brew install ffmpeg` \
+                unter macOS — oder den Pfad in den Einstellungen setzen.
+                """, """
+                FFmpeg was not found. Install it — `apt install ffmpeg` on \
+                Debian or Ubuntu, `brew install ffmpeg` on macOS — or set \
+                its path in the settings.
+                """)
             case let .conversionFailed(code, message):
-                return "FFmpeg exited with code \(code): \(message)"
+                return Text.s("FFmpeg endete mit Code \(code): \(message)",
+                              "FFmpeg exited with code \(code): \(message)")
             }
         }
     }

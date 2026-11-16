@@ -5,6 +5,54 @@ on:
   workflow_dispatch:
 
 jobs:
+  # First, and on a bare runner rather than in a container: PyYAML is there
+  # on a GitHub-hosted image and is not guaranteed in the Swift container.
+  #
+  # This exists because `yaml.safe_load` accepts a mapping with the same key
+  # twice and keeps the last one, while GitHub Actions rejects it outright.
+  # A bad edit put two `with:` blocks on one step of the release workflow, a
+  # permissive load called it fine, and the next release refused to start --
+  # which is a thing you find out at the moment you need a release.
+  workflows:
+    name: Workflow files
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Refuse a workflow Actions would refuse
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -c 'import yaml' 2>/dev/null || pip install --quiet pyyaml
+          python3 tools/check-workflows.py .github/workflows/*.yml
+          # Pango markup is XML and the text going into it is filenames. One
+          # place may produce it, and that place escapes.
+          ./tools/check-markup.sh
+          # And the fault this project keeps repeating: a defence with a
+          # careful name, a careful comment, three passing tests and no
+          # caller anywhere in the program. It has happened with path
+          # sanitising, with every settings rule, with the history's flush
+          # and with its write-failure field. A new one fails the build now.
+          python3 tools/check-unused.py
+          # And the sharper version of the same fault: not a declaration
+          # with no caller, but a whole FEATURE with no entrance. Five of
+          # the engine's eighteen commands had no sender anywhere in the
+          # program -- the entire conversion feature, the Jellyfin test and
+          # clearing the history -- because they had been reachable from a
+          # web front end that was removed. Every handler was tested and
+          # green, because the tests call the engine directly. An audit of
+          # 38 findings read all of them and asked whether they were right,
+          # which they were. Nothing asked whether anything could ask for
+          # them.
+          python3 tools/check-reachable.py
+          # And the same shape again, in the packaging: three files have to
+          # agree about one icon name and one list of sizes, and every way
+          # they can drift apart is silent. A size added on one side only
+          # never ships; a rename on the entry's side alone leaves a blank
+          # tile in the application menu, which looks exactly like an icon
+          # theme that has not refreshed yet.
+          python3 tools/check-icons.py
+
   test:
     name: Core tests
     runs-on: macos-15
@@ -42,6 +90,26 @@ jobs:
     container: swift:6.0-jammy
     steps:
       - uses: actions/checkout@v4
+      # A URLSession that is released instead of invalidated aborts the
+      # process on Linux: "_MultiHandle deallocated with non-zero retain
+      # count". That cost an evening, and the Swift test for it can only prove
+      # the process survived -- it cannot stop a new one being built somewhere
+      # else. This can.
+      - name: Only one place may build a URLSession
+        shell: bash
+        run: |
+          set -euo pipefail
+          stray="$(grep -rn "URLSession(configuration" Sources/ \
+            --include='*.swift' \
+            | grep -v "^Sources/MediaIdentifierCore/Networking/HTTPTransport.swift" \
+            || true)"
+          if [ -n "$stray" ]; then
+            echo "FAIL: a URLSession is built outside HTTPTransport.swift:"
+            echo "$stray"
+            echo "Use SharedHTTPSession.ephemeral — releasing a session aborts on Linux."
+            exit 1
+          fi
+          echo "ok: only HTTPTransport.swift builds a session"
       - name: Swift version
         run: swift --version
       # `swift build` with no product builds every target, and on Linux that
@@ -53,128 +121,7 @@ jobs:
           set -euo pipefail
           apt-get update -qq
           apt-get install -y -qq pkg-config libgtk-3-dev
-      # A real SSH server, so the transfer code is tested by transferring
-      # rather than by reading its own arguments back. Everything else about
-      # that feature can be checked without a network; whether the command
-      # lines actually work cannot.
-      - name: Start an SSH server for the transfer tests
-        shell: bash
-        run: |
-          set -euo pipefail
-          apt-get install -y -qq openssh-server openssh-client rsync sshpass
-
-          # A separate sshd on a high port with its own config: nothing here
-          # touches the container's own ssh setup, and the whole thing dies
-          # with the job.
-          mkdir -p /run/sshd /tmp/mediafin-sshd /tmp/mediafin-remote
-          ssh-keygen -q -t ed25519 -f /tmp/mediafin-sshd/host_key -N ""
-
-          # The account the tests log in as. A throwaway password, printed
-          # here on purpose: it exists for ninety seconds inside a container
-          # that is discarded, and pretending it is a secret would only make
-          # the next person wonder where the real one is.
-          useradd -m -s /bin/bash mediafintest
-          echo 'mediafintest:transfer-test-password' | chpasswd
-          chmod 777 /tmp/mediafin-remote
-
-          ssh-keygen -q -t ed25519 -f /tmp/mediafin-sshd/client_key -N ""
-          install -d -m 700 -o mediafintest -g mediafintest /home/mediafintest/.ssh
-          install -m 600 -o mediafintest -g mediafintest \
-            /tmp/mediafin-sshd/client_key.pub /home/mediafintest/.ssh/authorized_keys
-
-          cat > /tmp/mediafin-sshd/sshd_config <<CONF
-          Port 2222
-          ListenAddress 127.0.0.1
-          HostKey /tmp/mediafin-sshd/host_key
-          PidFile /tmp/mediafin-sshd/sshd.pid
-          PasswordAuthentication yes
-          PubkeyAuthentication yes
-          UsePAM no
-          PermitRootLogin no
-          Subsystem sftp /usr/lib/openssh/sftp-server
-          CONF
-          /usr/sbin/sshd -f /tmp/mediafin-sshd/sshd_config
-          for _ in $(seq 1 30); do
-            ss -ltn 2>/dev/null | grep -q ':2222' && break
-            sleep 0.5
-          done
-
-          # The host key goes into known_hosts the same way a user would put
-          # it there: by looking at it once. StrictHostKeyChecking stays on,
-          # and one test deliberately uses a name that is NOT in here to
-          # prove the check still bites.
-          #
-          # Written to the system-wide file as well as this user's, because
-          # the Swift test process need not have the same HOME as this step
-          # — and a first attempt failed exactly there, with ssh reporting
-          # the key as unknown while the file sat in another home directory.
-          # stderr is NOT discarded: a keyscan that prints nothing would
-          # otherwise leave an empty file and a green step.
-          install -d -m 700 ~/.ssh
-          ssh-keyscan -p 2222 127.0.0.1 > /tmp/mediafin-sshd/known_hosts
-          grep -q ed25519 /tmp/mediafin-sshd/known_hosts || {
-            echo "FAIL: ssh-keyscan returned no ed25519 key for 127.0.0.1:2222"
-            cat /tmp/mediafin-sshd/known_hosts
-            exit 1
-          }
-          cat /tmp/mediafin-sshd/known_hosts >> ~/.ssh/known_hosts
-          chmod 600 ~/.ssh/known_hosts
-          install -d -m 755 /etc/ssh
-          cat /tmp/mediafin-sshd/known_hosts >> /etc/ssh/ssh_known_hosts
-          chmod 644 /etc/ssh/ssh_known_hosts
-
-          # Prove it before the tests rely on it. A login that works here
-          # with strict checking on is the one thing that distinguishes
-          # "the server is ready" from "the server exists".
-          ssh -i /tmp/mediafin-sshd/client_key -p 2222 \
-            -o StrictHostKeyChecking=yes -o BatchMode=yes -o IdentitiesOnly=yes \
-            mediafintest@127.0.0.1 'echo ssh login ok' || {
-            echo "FAIL: cannot log in to the test server with the host key known"
-            echo "HOME=$HOME"
-            ls -l ~/.ssh/known_hosts /etc/ssh/ssh_known_hosts || true
-            exit 1
-          }
-          # testAnUnknownHostIsRefused reaches the same sshd as "localhost"
-          # and expects to be turned away. That only means anything while
-          # "localhost" resolves and is absent from known_hosts.
-          getent hosts localhost > /dev/null || {
-            echo "FAIL: localhost does not resolve; the unknown-host test would"
-            echo "      fail for the wrong reason"
-            exit 1
-          }
-          if grep -qw localhost ~/.ssh/known_hosts /etc/ssh/ssh_known_hosts; then
-            echo "FAIL: localhost is in known_hosts; the unknown-host test would"
-            echo "      pass without proving anything"
-            exit 1
-          fi
-          # Why the sftp arguments are ordered the way they are, demonstrated
-          # rather than asserted in a comment. `sftp -b` appends its own
-          # "-obatchmode yes" as it parses -b, and ssh keeps the FIRST
-          # setting of an option — so BatchMode=no only takes effect ahead of
-          # -b. If a future OpenSSH changes that, this step says so plainly
-          # instead of the password test failing with "Permission denied".
-          export SSHPASS=transfer-test-password
-          echo "put /etc/hostname /tmp/mediafin-remote/order-check.txt" > /tmp/mediafin-sshd/b
-          after=0
-          sshpass -e sftp -b /tmp/mediafin-sshd/b -P 2222 \
-            -o BatchMode=no -o PubkeyAuthentication=no \
-            -o StrictHostKeyChecking=yes mediafintest@127.0.0.1 >/dev/null 2>&1 || after=$?
-          before=0
-          sshpass -e sftp -o BatchMode=no -o PubkeyAuthentication=no \
-            -o StrictHostKeyChecking=yes -b /tmp/mediafin-sshd/b -P 2222 \
-            mediafintest@127.0.0.1 >/dev/null 2>&1 || before=$?
-          echo "sftp password login — options after -b: exit $after, before -b: exit $before"
-          test "$before" -eq 0 || {
-            echo "FAIL: password login over sftp does not work even with the options"
-            echo "      ahead of -b; the ordering fix in RemoteCommand.sftp rests on this"
-            exit 1
-          }
-          rm -f /tmp/mediafin-remote/order-check.txt
-          unset SSHPASS
-
-          echo "sshd is up on 127.0.0.1:2222"
-      # A real yt-dlp against a real HTTP server, for the same reason the
-      # transfer tests run against a real sshd: the command line can only
+      # A real yt-dlp against a real HTTP server: the command line can only
       # be proved by running it. No internet is involved — the file is
       # built here and served from 127.0.0.1.
       - name: Serve a media file locally for the download tests
@@ -244,14 +191,6 @@ jobs:
         # has no `set -o pipefail` and would abort the step immediately.
         shell: bash
         env:
-          # Picked up by RemoteTransferIntegrationTests, which skip entirely
-          # when this is unset — as they do on macOS, where there is no sshd.
-          MEDIAFIN_SSH_TEST_HOST: 127.0.0.1
-          MEDIAFIN_SSH_TEST_PORT: "2222"
-          MEDIAFIN_SSH_TEST_USER: mediafintest
-          MEDIAFIN_SSH_TEST_KEY: /tmp/mediafin-sshd/client_key
-          MEDIAFIN_SSH_TEST_PASSWORD: transfer-test-password
-          MEDIAFIN_SSH_TEST_BASE: /tmp/mediafin-remote
           # Picked up by VideoDownloadIntegrationTests, which skip without it.
           MEDIAFIN_HTTP_TEST_URL: http://127.0.0.1:18080/Sample.Video.2024.1080p.mp4
           MEDIAFIN_HTTP_TEST_FILE: /tmp/mediafin-www/Sample.Video.2024.1080p.mp4
@@ -266,9 +205,10 @@ jobs:
           grep -E ": error:|XCTAssert.* failed" test.log | head -60 || true
           echo "--- totals ---"
           grep -E "Executed [0-9]+ tests" test.log | tail -2 || true
-      # Same reasoning as the transfer guard below: a skipped test reports
-      # success, and this suite has already had one silently skip itself
-      # five runs in a row.
+      # A skipped test reports success, and a skip is quiet: this suite has
+      # already silently skipped itself five runs in a row. This makes it
+      # loud — if the HTTP server stops coming up, the job fails here
+      # instead of going green with the feature untested.
       - name: The download tests must have run
         shell: bash
         run: |
@@ -285,41 +225,26 @@ jobs:
             echo "FAIL: expected at least 5 download tests, saw $ran"
             exit 1
           }
-      # A skipped transfer test is a test that proves nothing, and a skip is
-      # quiet. This makes it loud: if the sshd setup silently stops working,
-      # the job fails here instead of going green with the feature untested.
-      - name: The transfer tests must have run
+      # Not a gate: it reports, it does not fail. Swift 6's strict
+      # concurrency is where the sync-over-async in the coordinator will
+      # become a real problem — `runAndWaitReturning` waits on a semaphore
+      # for a Task, which deadlocks if the cooperative pool is starved. It
+      # is stable today because the work underneath is URLSession's, on
+      # URLSession's own threads. This step is how we find out when that
+      # stops being true, rather than finding out from a hung window.
+      - name: Strict concurrency, as a report
         shell: bash
+        continue-on-error: true
         run: |
           set -uo pipefail
-          # Both suites: RemoteSendIntegrationTests covers the deletion
-          # path and was not named here, although its own header said the
-          # CI step guarded it.
-          if grep -qE "Remote(Transfer|Send)IntegrationTests.*skipped" test.log; then
-            echo "FAIL: transfer tests were skipped; the SSH server did not come up"
-            grep -E "Remote(Transfer|Send)IntegrationTests" test.log | head -20
-            exit 1
-          fi
-          ran=$(grep -cE "Test Case .*RemoteTransferIntegrationTests.* passed" test.log || true)
-          sent=$(grep -cE "Test Case .*RemoteSendIntegrationTests.* passed" test.log || true)
-          echo "transfer tests passed: $ran, send tests passed: $sent"
-          test "$sent" -ge 5 || {
-            echo "FAIL: expected at least 5 send tests, saw $sent"
-            exit 1
-          }
-          test "$ran" -ge 7 || {
-            echo "FAIL: expected at least 7 transfer tests to run, saw $ran"
-            exit 1
-          }
-      # openssl creates the self-signed certificate on first start.
-      - name: Ensure openssl and curl are present
-        shell: bash
-        run: |
-          command -v openssl >/dev/null && command -v curl >/dev/null && exit 0
-          apt-get update -qq
-          apt-get install -y -qq openssl curl
-      # Runs the real binary against a real socket: HTTPS, the access gate and
-      # the refusal to answer plaintext on the TLS port.
+          swift build -Xswiftc -strict-concurrency=complete 2>&1 \
+            | tee strict.log | tail -40 || true
+          count=$(grep -cE "warning:.*(concurren|Sendable|isolated|data race)" \
+                  strict.log || true)
+          echo "strict-concurrency warnings: ${count:-0}"
+      # Runs the real binary: that --once comes back, that --watch stays up
+      # and stops on SIGTERM, and that a bare invocation refuses rather than
+      # silently doing nothing.
       - name: Smoke-test the mediafin binary
         shell: bash
         run: ./tools/smoke-mediafin.sh
@@ -344,7 +269,7 @@ jobs:
     container: swift:6.0-jammy
     steps:
       - uses: actions/checkout@v4
-      - name: Install GTK3, Xvfb and a font
+      - name: Install GTK3, Xvfb, a font and FFmpeg
         shell: bash
         run: |
           set -euo pipefail
@@ -357,34 +282,51 @@ jobs:
           # GTK's bare fallbacks: Cantarell is the font the Adwaita theme is
           # designed around, and without an icon theme the header bar's
           # controls render as "missing image" squares.
+          #
+          # FFmpeg, because the conversion step below really converts: the
+          # whole feature was reachable from the removed web front-end and
+          # from nothing else, so what is worth checking is that pressing
+          # Konvertieren produces a file on disk. It is installed in the Core
+          # job too, for its own reasons; this job needs its own copy.
           apt-get install -y -qq pkg-config libgtk-3-dev xvfb file \
-            fonts-dejavu-core fonts-cantarell adwaita-icon-theme
+            fonts-dejavu-core fonts-cantarell adwaita-icon-theme ffmpeg
+          # Said out loud: without it the conversion step dies with
+          # "command not found", which is how this failed the first time.
+          ffmpeg -version | head -1
       - name: Build
         run: swift build -c release --product mediafin-gtk
-      - name: The terminal interface starts and leaves the terminal alone
+      - name: The README lists the modes the window has
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The table in "How it is tested" listed four modes for a binary
+          # that had seven, and nobody noticed: an incomplete list reads
+          # exactly like a complete one. The sharper version is a table
+          # naming a mode that no longer exists, which a reader types and
+          # is told is unknown. Both fail here, against the binary's own
+          # --help, because that is what a reader reaches for next.
+          python3 tools/check-modes.py .build/release/mediafin-gtk
+      # The headless runner draws nothing, so what is worth checking is that
+      # it says what it offers rather than silently doing nothing, and that
+      # --once finishes instead of hanging like the old server did.
+      - name: The headless runner says what it offers and --once returns
         shell: bash
         run: |
           set -euo pipefail
           swift build -c release --product mediafin
-          # There is no terminal in CI, so this is the path that must refuse
-          # rather than the one that draws: a program that puts a pipe into
-          # raw mode and then exits leaves the shell that started it unusable.
+          .build/release/mediafin --help | grep -q -- "--watch"
+          .build/release/mediafin --help | grep -q -- "--once"
+          # No arguments must not start something: there is nothing to start.
           code=0
-          .build/release/mediafin --tui < /dev/null > tui.log 2>&1 || code=$?
-          cat tui.log
-          test "$code" = 2 || {
-            echo "FAIL: expected exit 2 with no terminal, got $code"
-            exit 1
-          }
-          # --serve rather than the sentence: the message is translated, and
-          # which language CI gets depends on its LANG. The flag it points
-          # at is in both.
-          grep -q -- "--serve" tui.log || {
-            echo "FAIL: it exited 2 without saying what to do instead"
-            exit 1
-          }
-          # And the other direction: options still mean the server.
-          .build/release/mediafin --help | grep -q -- "--tui"
+          .build/release/mediafin > bare.log 2>&1 || code=$?
+          test "$code" = 64 || { echo "FAIL: bare invocation exited $code"; exit 1; }
+          grep -q "mediafin-gtk" bare.log || {
+            echo "FAIL: it did not say where the interface is"; exit 1; }
+          # --once with nothing scheduled has nothing to do, and has to come
+          # back rather than sit there: a cron line that never returns piles up.
+          timeout 60 env MEDIAFIN_CONFIG_DIR="$(mktemp -d)" \
+            .build/release/mediafin --once || {
+            echo "FAIL: --once did not finish"; exit 1; }
       - name: Render the window headless
         shell: bash
         env:
@@ -446,6 +388,1436 @@ jobs:
             echo "late capture (3000 ms): $late bytes — this now renders."
             echo "  The early-capture workaround in main.swift may be removable."
           fi
+
+          # The panels, which is where most of this window now lives:
+          # settings, status, fetching and converting are all behind the
+          # menu, and until now the only picture anything ever took was of
+          # the main surface.
+          #
+          # What this catches is a panel that draws nothing — clipped,
+          # unbuilt, or blank. It would NOT have caught the bug that
+          # prompted it: the conversion list shipped without its empty
+          # state, and one missing sentence is 16.7 kB against 19.3 kB,
+          # nowhere near any floor one could set. That one is asserted as
+          # text, in the --press-convert step below. Both are needed and
+          # neither replaces the other.
+          for panel in settings status fetch convert; do
+            timeout 60 xvfb-run -a --server-args="-screen 0 1280x900x24" \
+              .build/release/mediafin-gtk --demo --panel "$panel" \
+              --screenshot "panel-$panel.png" --delay 900 > /dev/null
+            file "panel-$panel.png" \
+              | grep -qE 'PNG image data, [0-9]{3,} x [0-9]{3,}' || {
+              echo "FAIL: the $panel panel rendered at no size at all"
+              file "panel-$panel.png" || true
+              exit 1
+            }
+            size="$(stat -c %s "panel-$panel.png")"
+            echo "$panel panel: $size bytes"
+            # Lower than the main window's floor, because a panel is smaller
+            # and plainer — but a panel drawing nothing but its background
+            # comes out under 5 kB, and every one of these is over 15 kB when
+            # it draws its contents.
+            test "$size" -gt 8000 || {
+              echo "FAIL: the $panel panel rendered blank or nearly so"
+              exit 1
+            }
+          done
+      # The window's buttons, pressed for real.
+      #
+      # Everything above renders a picture: it proves the window draws, and it
+      # has never pressed anything. So "the scan button does nothing and says
+      # nothing" was a report this job had no way of contradicting, and a
+      # check that cannot run looks exactly like one that passes. This presses
+      # Scan and insists the window then says something.
+      - name: Pressing Scan must do something and say so
+        shell: bash
+        run: |
+          set -euo pipefail
+          # MEDIAFIN_CONFIG_DIR rather than HOME: it is the one variable the
+          # engine reads first, so the test points at its config directly
+          # instead of relying on how XDG paths are assembled.
+          run_window() {
+            timeout 90 xvfb-run -a --server-args="-screen 0 1280x900x24" \
+              env MEDIAFIN_CONFIG_DIR="$1" .build/release/mediafin-gtk --press-scan
+          }
+
+          # First with nothing configured at all, which is the state a new
+          # install is in and the one the button used to be greyed out for.
+          # Saying nothing here is the exact complaint.
+          empty="$(mktemp -d)"
+          echo "=== no import folder set ==="
+          run_window "$empty" | tee empty.log
+          grep -q "^scan button available: true" empty.log || {
+            echo "FAIL: the scan button was not even available"; exit 1; }
+          # Stop, Umbenennen and Rückgängig must be on the main window, not
+          # inside a panel. The send button was once built into a panel and
+          # became unreachable when that panel moved behind the menu; the
+          # window now has three panels full of buttons, so the same mistake
+          # has three more places to happen in.
+          grep -q "^urgent buttons on main surface: true" empty.log || {
+            echo "FAIL: Stop, Umbenennen or Rückgängig is not on the main "
+            echo "      window -- somebody who needs it urgently would have "
+            echo "      to find the right panel first"
+            grep "^urgent buttons" empty.log || echo "(no line at all)"
+            exit 1
+          }
+          grep -qiE "^status: .*(import|Importordner)" empty.log || {
+            echo "FAIL: pressing Scan did not name the missing import folder"
+            exit 1
+          }
+          # And it has to say so in the middle of the window, not only in the
+          # small dim footer line. "It does nothing, no status, nothing at
+          # all" was reported about a window that did in fact answer -- down
+          # at the bottom edge, where nobody was looking.
+          grep -qiE "^middle: .*(import|Importordner)" empty.log || {
+            echo "FAIL: the empty list did not say what happened; only the footer did"
+            exit 1
+          }
+          # The traffic light belongs in the bar at the bottom, not only
+          # behind the menu: "is everything plugged in" is the standing
+          # question, and a panel you have to open to answer it is a panel
+          # nobody opens. It has to carry a verdict and counts, not be blank.
+          grep -qE "^lamp bar: .+ · .*[0-9]" empty.log || {
+            echo "FAIL: the bar at the bottom says nothing about the lamps"
+            grep "^lamp bar:" empty.log || echo "(no lamp bar line at all)"
+            exit 1
+          }
+
+          # Then with a folder that has a film in it: the button has to
+          # produce proposals, not merely a sentence.
+          ready="$(mktemp -d)"
+          mkdir -p "$ready/config" "$ready/downloads"
+          # A real file: the scanner reads names, not contents, but it does
+          # insist the file is there.
+          : > "$ready/downloads/Tenet.2020.1080p.BluRay.x264-GROUP.mkv"
+          # The release sample, and this is the one that bit. A sample is a
+          # video file, so Scan proposed it as a film of its own; its name
+          # parses to the same film, so both rows wanted one destination; the
+          # pair was refused as a duplicate and NEITHER was renamed. One
+          # proposal below, not two, is the whole assertion.
+          : > "$ready/downloads/Tenet.2020.1080p.BluRay.x264-GROUP-sample.mkv"
+          # And a film that merely has the word in its title, which must
+          # still be found: making a sample of a film is the worse mistake,
+          # because the row simply is not there and nothing says why.
+          : > "$ready/downloads/Free.Samples.2012.1080p.BluRay.x264-GROUP.mkv"
+          # printf and not a heredoc: a heredoc terminator has to sit at
+          # column zero, which ends the YAML block scalar it is written in.
+          printf '{"sourceFolder":"%s","identification":"offline","language":"en"}\n' \
+            "$ready/downloads" > "$ready/config/settings.json"
+          # Applying settings has to be visibly an event, not a word that was
+          # already on screen. Two presses, and the time has to move.
+          # The engine half of a drop. GTK's drag plumbing cannot be faked
+          # from a script -- there is no public way to build a drag context --
+          # but everything after it can be, and that is the half with the
+          # engine in it. A real drop that still dies after this passes
+          # narrows the fault to the plumbing, which is worth more than
+          # another guess.
+          echo "=== handing files over as a drop does ==="
+          dropped="$(mktemp -d)"
+          mkdir -p "$dropped/config" "$dropped/elsewhere"
+          : > "$dropped/elsewhere/Dark.S01E01.GERMAN.1080p.WEB-DL.mkv"
+          # Two .nfo files, and the whole point is that they are different.
+          # The group's own note is ASCII art and gets deleted; Jellyfin's
+          # own sidecar carries the same extension, the same stem rule, and
+          # everything the user ever corrected by hand, and must be kept.
+          # An EMPTY .nfo used to stand here, which proved nothing at all
+          # about how the two are told apart.
+          printf '%s\n' \
+            '+===============================================+' \
+            '|  Source ..: WEB-DL      Video ..: x264        |' \
+            '|  Audio ...: DD5.1       Runtime : 51 min      |' \
+            '+===============================================+' \
+            > "$dropped/elsewhere/Dark.S01E01.GERMAN.1080p.WEB-DL.nfo"
+          mkdir -p "$dropped/library"
+          : > "$dropped/library/Dark - S01E02.mkv"
+          printf '%s\n' \
+            '<?xml version="1.0" encoding="utf-8" standalone="yes"?>' \
+            '<episodedetails>' \
+            '  <title>Luegen</title>' \
+            '  <plot>Corrected by hand. Not recoverable by undo.</plot>' \
+            '</episodedetails>' \
+            > "$dropped/library/Dark - S01E02.nfo"
+          printf '{"identification":"offline","language":"en"}\n' \
+            > "$dropped/config/settings.json"
+          timeout 90 xvfb-run -a --server-args="-screen 0 1280x900x24" \
+            env MEDIAFIN_CONFIG_DIR="$dropped/config" \
+            .build/release/mediafin-gtk --drop \
+            "$dropped/elsewhere/Dark.S01E01.GERMAN.1080p.WEB-DL.mkv" \
+            "$dropped/library/Dark - S01E02.mkv" 2>&1 \
+            | tee dropped.log
+          # Two files are handed over now: the release note's film, and an
+          # already-filed episode with Jellyfin's own sidecar beside it.
+          grep -q "^mediafin: drop: 2 handed to the engine" dropped.log || {
+            echo "FAIL: the drop never reached the engine"
+            grep "^mediafin: drop:" dropped.log || echo "(no drop line)"
+            exit 1; }
+          got="$(sed -n 's/^proposals: \([0-9]*\)$/\1/p' dropped.log)"
+          echo "proposals from the drop: ${got:-none}"
+          test "${got:-0}" -ge 1 || {
+            echo "FAIL: a dropped film produced no proposal"; exit 1; }
+          # Jellyfin's own sidecar, read off the row that says it stays.
+          # This is the assertion that would have caught the bug where
+          # tidying up an existing library destroyed its metadata: the
+          # extension was checked twice and the content never.
+          grep -q "^kept notes: 1" dropped.log || {
+            echo "FAIL: the row says nothing about the sidecar it keeps"
+            grep -E "^(kept notes|keeps|deletion notes|deletes):" dropped.log \
+              || echo "(no note lines at all)"
+            exit 1
+          }
+          grep -q "^keeps: .*Dark - S01E02.nfo" dropped.log || {
+            echo "FAIL: the kept note does not name Jellyfin's own sidecar"
+            grep "^keeps:" dropped.log || echo "(no keeps line)"
+            exit 1
+          }
+          # And it must not be on the deletion list under any wording.
+          if grep -q "^deletes: .*Dark - S01E02.nfo" dropped.log; then
+            echo "FAIL: Jellyfin's own metadata sidecar is planned for deletion"
+            grep -E "^(deletes|keeps):" dropped.log
+            exit 1
+          fi
+          # The file itself, not only the label: nothing has been pressed,
+          # so both .nfo files must still be there.
+          test -s "$dropped/library/Dark - S01E02.nfo" || {
+            echo "FAIL: the sidecar is gone from disk"; exit 1; }
+          # The tick box, pressed through the widget and read back out of the
+          # engine. The tick used to live nowhere but the widget, so an
+          # exclusion was discarded the moment the list was rebuilt and the
+          # file was renamed anyway -- while the counts row went on saying
+          # everything was ticked. Both numbers, because the bug was exactly
+          # that they disagreed.
+          grep -q "^after untick, ticked rows: 1" dropped.log || {
+            echo "FAIL: pressing a row's tick box did not untick it"
+            grep -E "^(ticked rows|engine ready|after untick)" dropped.log \
+              || echo "(no tick lines at all)"
+            exit 1
+          }
+          grep -q "^after untick, engine ready: 1" dropped.log || {
+            echo "FAIL: the untick never reached the engine"
+            grep -E "^(ticked rows|engine ready|after untick)" dropped.log \
+              || echo "(no tick lines at all)"
+            exit 1
+          }
+          # The row has to say WHERE, absolutely. It used to read
+          # "-> Dark/Season 01/…" and say nothing about the folder that sits
+          # under, which is the difference between a library and burying the
+          # file a level deeper where it already lies. Read off the label, so
+          # this is what the window shows and not what the engine thinks.
+          grep -qE "^destination: → /" dropped.log || {
+            echo "FAIL: the row does not say where the file is going"
+            grep "^destination:" dropped.log || echo "(no destination line)"
+            exit 1
+          }
+          # Deleting is the one thing here that undo cannot reverse, so the
+          # window may not do it silently. Read off the row's label.
+          grep -q "^deletion notes: 1" dropped.log || {
+            echo "FAIL: the row says nothing about the .nfo it will delete"
+            grep -E "^(deletion notes|deletes):" dropped.log \
+              || echo "(no deletion line at all)"
+            exit 1
+          }
+          grep -q "^deletes: .*Dark.S01E01.GERMAN.1080p.WEB-DL.nfo" dropped.log || {
+            echo "FAIL: the row does not name the file it will delete"
+            grep "^deletes:" dropped.log || echo "(no deletes line)"
+            exit 1
+          }
+          # And it must not claim it is deleting the film. `if`, not
+          # `grep && { exit 1; }`: the step runs under `set -e`, where a
+          # grep that finds nothing makes the whole && list fail and aborts
+          # a build that was passing.
+          if grep -q "^deletes: .*mkv" dropped.log; then
+            echo "FAIL: the row says it will delete a video file"
+            grep "^deletes:" dropped.log
+            exit 1
+          fi
+          # The destination must not be an .nfo either: the note used to be
+          # planned as a companion move into the library.
+          if grep -qE "^destination: .*\.nfo$" dropped.log; then
+            echo "FAIL: an .nfo is still being moved into the library"
+            exit 1
+          fi
+
+          echo "=== pressing Apply in the settings ==="
+          applied="$(mktemp -d)"
+          # Settings the window has to show and hand back. Every value is
+          # deliberately NOT the default, so a card that is on screen but
+          # wired to nothing prints the defaults and fails below. This is
+          # the whole conversion feature's only route into the program: it
+          # was reachable from the removed web front-end and from nothing
+          # else for as long as the GTK window has existed.
+          cat > "$applied/settings.json" <<'SETTINGS'
+          {
+            "sourceFolder": "", "moviesFolder": "", "seriesFolder": "",
+            "musicFolder": "", "libraryMode": "video",
+            "identification": "offline",
+            "localLLMBaseURL": "http://127.0.0.1:1", "localLLMModel": "",
+            "jellyfinBaseURL": "http://192.168.3.9:8096",
+            "conflictPolicy": "skip", "watchSourceFolder": false,
+            "conversion": {
+              "videoCodec": "av1", "quality": 28, "preset": "veryfast",
+              "targetHeight": 720, "audioMode": "opus",
+              "stripSubtitles": true, "ffmpegPath": "/opt/ffmpeg/bin/ffmpeg"
+            },
+            "schedule": {"isEnabled": false, "alsoRename": false,
+                         "cadence": "daily", "hour": 3, "minute": 0,
+                         "everyHours": 6}
+          }
+          SETTINGS
+          timeout 90 xvfb-run -a --server-args="-screen 0 1280x900x24" \
+            env MEDIAFIN_CONFIG_DIR="$applied" \
+            .build/release/mediafin-gtk --press-apply | tee applied.log
+          first="$(sed -n 's/^applied once: //p' applied.log)"
+          second="$(sed -n 's/^applied twice: //p' applied.log)"
+          echo "first: ${first:-nothing}"
+          echo "second: ${second:-nothing}"
+          test -n "$first" || { echo "FAIL: Apply said nothing at all"; exit 1; }
+          # The button itself: mapped, and outside the scroller.
+          #
+          # The press goes through `gtk_button_clicked` now rather than
+          # calling the handler -- it used to call `saveFolders()` behind the
+          # button's back, so this whole ~120-line step was a test of that
+          # method and would have passed with Übernehmen unwired or packed
+          # into a container nobody shows.
+          #
+          # "Mapped" alone was this check for one day and it was green for
+          # the exact regression it names: a GtkScrolledWindow's viewport
+          # maps its whole child whatever the scroll offset, so a button six
+          # sections below the fold reads mapped. Measured both ways with
+          # Übernehmen packed back into the scroller: mapped true, the
+          # tightened predicate false, and `applied once: Übernommen um …`
+          # still printed -- which is why clicking cannot catch this. The
+          # accessor now also asks that the button has no
+          # GtkScrolledWindow ancestor, which is the invariant the footer
+          # move established and does not depend on the window's size or
+          # scroll position.
+          on_screen="$(sed -n 's/^apply button on screen: //p' applied.log)"
+          test "$on_screen" = "true" || {
+            echo "FAIL: the settings panel's Apply button is not on screen "
+            echo "      (read: ${on_screen:-nothing})"
+            exit 1
+          }
+          # Two SETTLED labels, not a settled one against one in flight.
+          #
+          # "Pressing again is visibly a second press" is a claim about two
+          # timestamps. Now that the label says "Wird übernommen …" until
+          # the engine answers, comparing `applied once` against `applied
+          # twice` would differ whatever the clock did -- it would be a
+          # check that cannot fail. So the comparison is against the third
+          # press's settled reading, and both have to carry a clock.
+          settled_later="$(sed -n 's/^corrected apply settles as: //p' applied.log)"
+          case "$first" in
+            *"Übernommen um"*|*"Applied at"*) : ;;
+            *) echo "FAIL: the first Apply never settled into a clock:"
+               echo "      ${first:-nothing}"
+               exit 1 ;;
+          esac
+          case "$settled_later" in
+            *"Übernommen um"*|*"Applied at"*) : ;;
+            *) echo "FAIL: the later Apply never settled into a clock:"
+               echo "      ${settled_later:-nothing}"
+               exit 1 ;;
+          esac
+          test "$first" != "$settled_later" || {
+            echo "FAIL: two Applies seconds apart produced the identical "
+            echo "      label, so a second press is invisible: $first"
+            exit 1
+          }
+          # And the in-flight reading of the second press says it is on its
+          # way rather than claiming a clock it does not have yet.
+          case "$second" in
+            *"Wird übernommen"*|*"Applying"*) : ;;
+            *) echo "FAIL: the second press said nothing about being on its "
+               echo "      way: ${second:-nothing}"
+               exit 1 ;;
+          esac
+
+          # The conversion card, read off the widgets themselves.
+          expected="codec=av1 quality=28 preset=veryfast height=720 audio=opus subtitles=true ffmpeg=/opt/ffmpeg/bin/ffmpeg"
+          shown="$(sed -n 's/^conversion read: //p' applied.log)"
+          kept="$(sed -n 's/^conversion after apply: //p' applied.log)"
+          echo "conversion shown: ${shown:-nothing}"
+          test "$shown" = "$expected" || {
+            echo "FAIL: the conversion card does not show the stored settings"
+            echo "  wanted: $expected"
+            echo "  got   : ${shown:-nothing}"
+            exit 1
+          }
+          test "$kept" = "$expected" || {
+            echo "FAIL: Apply changed the conversion settings it was handed"
+            echo "  wanted: $expected"
+            echo "  got   : ${kept:-nothing}"
+            exit 1
+          }
+          server="$(sed -n 's/^media server read: //p' applied.log)"
+          test "$server" = "http://192.168.3.9:8096" || {
+            echo "FAIL: the media server field does not show the stored address"
+            echo "  got: ${server:-nothing}"
+            exit 1
+          }
+          # A refused Apply, and the corrected retry after it.
+          #
+          # The mode now makes two edits in one press -- a codec it means to
+          # keep and a quality with a typo in it -- because `save()` refuses
+          # the WHOLE write on any problems() and the window used to carry
+          # on regardless. It printed "Übernommen um HH:MM:SS" with a moving
+          # clock for a save that never happened (the refusal's own text
+          # goes to the main window, behind the panel being looked at), and
+          # it advanced its merge baseline to the values it had just failed
+          # to write -- so on the corrected retry the codec compared equal
+          # to that baseline and was silently dropped. One typo lost the
+          # other edit made in the same breath.
+          typo_estimate="$(sed -n 's/^estimate with a typo: //p' applied.log)"
+          case "$typo_estimate" in
+            *"Zahl zwischen 0 und 51"*|*"number between 0 and 51"*) : ;;
+            *) echo "FAIL: the estimate answered 'what will this do' for an "
+               echo "      unreadable quality instead of saying so:"
+               echo "      ${typo_estimate:-nothing}"
+               exit 1 ;;
+          esac
+          refused="$(sed -n 's/^refused apply says: //p' applied.log)"
+          case "$refused" in
+            *"Nicht übernommen"*|*"Not applied"*) : ;;
+            *) echo "FAIL: a refused save still reported success:"
+               echo "      ${refused:-nothing}"
+               exit 1 ;;
+          esac
+          after_refusal="$(sed -n 's/^engine after the refusal: //p' applied.log)"
+          case "$after_refusal" in
+            *"quality=28"*) : ;;
+            *) echo "FAIL: the refused save changed the stored settings:"
+               echo "      ${after_refusal:-nothing}"
+               exit 1 ;;
+          esac
+          # Two reads of the same press, and they have to say different
+          # things.
+          #
+          # `submit` is asynchronous: the instant the button is released
+          # nothing has been written, and the window used to print
+          # "Übernommen um HH:MM:SS" there anyway -- a clock reporting on a
+          # file nothing had touched. It is the settled read, one tick
+          # later, that may claim a save.
+          corrected="$(sed -n 's/^corrected apply says: //p' applied.log)"
+          case "$corrected" in
+            *"Übernommen um"*|*"Applied at"*)
+               echo "FAIL: the window reported a save the instant the button "
+               echo "      was pressed, before the engine had written "
+               echo "      anything: ${corrected:-nothing}"
+               exit 1 ;;
+          esac
+          case "$corrected" in
+            *"Wird übernommen"*|*"Applying"*) : ;;
+            *) echo "FAIL: a press that is on its way said nothing about it:"
+               echo "      ${corrected:-nothing}"
+               exit 1 ;;
+          esac
+          settled="$(sed -n 's/^corrected apply settles as: //p' applied.log)"
+          case "$settled" in
+            *"Übernommen um"*|*"Applied at"*) : ;;
+            *) echo "FAIL: the corrected Apply did not report a save:"
+               echo "      ${settled:-nothing}"
+               exit 1 ;;
+          esac
+          instant="$(sed -n 's/^applied the instant it was pressed: //p' applied.log)"
+          case "$instant" in
+            *"Übernommen um"*|*"Applied at"*)
+               echo "FAIL: the first Apply claimed success before the engine "
+               echo "      had been asked: ${instant:-nothing}"
+               exit 1 ;;
+          esac
+
+          # The credential and the address it was typed beside.
+          #
+          # They live in two stores and are paired only when a request is
+          # made: `localLLMProvider` builds the provider from
+          # settings.localLLMBaseURL and the stored secret. The key used to
+          # be written above the refusal, so a refused press left the NEW
+          # key paired with the OLD address -- someone moving to a different
+          # model server who mistypes a quality value in the same press then
+          # has "Verbindung testen" send their new credential, as a Bearer
+          # token, to the server they were leaving. The field was cleared
+          # too, so they could not see it had gone. Measured both ways.
+          #
+          # Names only below, never values: CI logs are kept.
+          refused_secrets="$(sed -n 's/^secrets after the refusal: //p' applied.log)"
+          echo "secrets after the refusal: ${refused_secrets:-nothing}"
+          test "$refused_secrets" = "[]" || {
+            echo "FAIL: a refused Apply stored the API key anyway, leaving "
+            echo "      it paired with the server address that was NOT "
+            echo "      saved: $refused_secrets"
+            exit 1
+          }
+          refused_server="$(sed -n 's/^model server after the refusal: //p' applied.log)"
+          test "$refused_server" = "http://127.0.0.1:1" || {
+            echo "FAIL: the refused Apply moved the model server address:"
+            echo "      ${refused_server:-nothing}"
+            exit 1
+          }
+          kept="$(sed -n 's/^key field kept after the refusal: //p' applied.log)"
+          test "$kept" = "true" || {
+            echo "FAIL: the refused Apply emptied the API key field, so the "
+            echo "      key is gone and nothing on screen says so (read: "
+            echo "      ${kept:-nothing})"
+            exit 1
+          }
+          # And the other direction, or storing the key never would pass:
+          # the corrected press has to land both, together.
+          retry_secrets="$(sed -n 's/^secrets after the retry: //p' applied.log)"
+          case "$retry_secrets" in
+            *local-llm-api-key*) : ;;
+            *) echo "FAIL: the corrected Apply never stored the key:"
+               echo "      ${retry_secrets:-nothing}"
+               exit 1 ;;
+          esac
+          retry_server="$(sed -n 's/^model server after the retry: //p' applied.log)"
+          test "$retry_server" = "http://127.0.0.1:9" || {
+            echo "FAIL: the corrected Apply stored the key but not the "
+            echo "      address it belongs with: ${retry_server:-nothing}"
+            exit 1
+          }
+          echo "ok   : key and address land together, or not at all"
+          retried="$(sed -n 's/^engine after the retry: //p' applied.log)"
+          echo "engine after the retry: ${retried:-nothing}"
+          case "$retried" in
+            *"codec=h264"*) : ;;
+            *) echo "FAIL: the codec edit made in the refused press was "
+               echo "      silently dropped by the retry. Read: ${retried:-nothing}"
+               exit 1 ;;
+          esac
+          case "$retried" in
+            *"quality=24"*) : ;;
+            *) echo "FAIL: the corrected quality never reached the engine:"
+               echo "      ${retried:-nothing}"
+               exit 1 ;;
+          esac
+
+          # A write the engine ACCEPTS and then cannot perform.
+          #
+          # The window only ever saw `problems()`. A failing disk write --
+          # read-only configuration directory, full disk, settings.json
+          # replaced by a directory -- left "Übernommen um HH:MM:SS" on
+          # screen, with the engine's own "nicht gespeichert" on the main
+          # window behind the panel. Worse, the merge baseline had advanced
+          # to values that were never stored, and the merge writes back only
+          # fields that differ from that baseline: the next press compared
+          # every edit equal and dropped it, so the edit was lost for good
+          # and the user could not even correct it. The mode puts a
+          # directory where settings.json goes, which cannot be renamed
+          # over, presses Apply with quality=26, then removes it and presses
+          # the same thing again.
+          blocked="$(sed -n 's/^apply onto an unwritable file says: //p' applied.log)"
+          echo "unwritable: ${blocked:-nothing}"
+          case "$blocked" in
+            *"Nicht übernommen"*|*"Not applied"*) : ;;
+            *) echo "FAIL: a write the engine could not perform was still "
+               echo "      reported as applied: ${blocked:-nothing}"
+               exit 1 ;;
+          esac
+          case "$blocked" in
+            *"nicht gespeichert"*|*"could not be saved"*) : ;;
+            *) echo "FAIL: the panel did not say WHY the write failed; that "
+               echo "      sentence is on the window behind it. Read: "
+               echo "      ${blocked:-nothing}"
+               exit 1 ;;
+          esac
+          blocked_engine="$(sed -n 's/^engine after the unwritable write: //p' applied.log)"
+          case "$blocked_engine" in
+            *"quality=24"*) : ;;
+            *) echo "FAIL: a write that failed still moved the engine's "
+               echo "      settings: ${blocked_engine:-nothing}"
+               exit 1 ;;
+          esac
+          # And the edit is not lost: the same press, once the file is
+          # writable, has to arrive. This is the half the old code could not
+          # do at all.
+          recovered="$(sed -n 's/^apply once the file is writable again says: //p' applied.log)"
+          case "$recovered" in
+            *"Übernommen um"*|*"Applied at"*) : ;;
+            *) echo "FAIL: the retry after a failed write reported no save:"
+               echo "      ${recovered:-nothing}"
+               exit 1 ;;
+          esac
+          came_back="$(sed -n 's/^engine after the file came back: //p' applied.log)"
+          echo "engine after the file came back: ${came_back:-nothing}"
+          case "$came_back" in
+            *"quality=26"*) : ;;
+            *) echo "FAIL: the edit made while the file was unwritable was "
+               echo "      lost for good -- the merge baseline had moved to "
+               echo "      values that were never stored, so pressing Apply "
+               echo "      again changed nothing. Read: ${came_back:-nothing}"
+               exit 1 ;;
+          esac
+          case "$came_back" in
+            *"codec=h264"*) : ;;
+            *) echo "FAIL: the recovered write lost the codec: ${came_back:-nothing}"
+               exit 1 ;;
+          esac
+
+          # And what the file says afterwards: every field the presses never
+          # touched is still there, with the edits that were made.
+          python3 - "$applied/settings.json" <<'CHECK'
+          import json, sys
+          stored = json.load(open(sys.argv[1]))
+          want = {"videoCodec": "h264", "quality": 26, "preset": "veryfast",
+                  "targetHeight": 720, "audioMode": "opus",
+                  "stripSubtitles": True, "ffmpegPath": "/opt/ffmpeg/bin/ffmpeg"}
+          for key, value in want.items():
+              got = stored["conversion"].get(key)
+              if got != value:
+                  sys.exit(f"FAIL: Apply wrote conversion.{key}={got!r}, "
+                           f"wanted {value!r}")
+          if stored["jellyfinBaseURL"] != "http://192.168.3.9:8096":
+              sys.exit("FAIL: Apply wiped jellyfinBaseURL: "
+                       + repr(stored["jellyfinBaseURL"]))
+          print("settings.json kept every untouched conversion field, took "
+                "the edits from the refused press and from the failed write, "
+                "and kept the server address")
+          CHECK
+          # The estimate line, which is the only thing that says what the
+          # chosen settings will do before a run starts. The fixture chooses
+          # 720p, so the line has to name BOTH sources: the saving from a
+          # downscale is the difference between the source and the target,
+          # and the estimator's own default of 1080 made four of the five
+          # resolutions print an identical number -- a setting that looked
+          # inert and, for 4K libraries, was wrong by a factor of four.
+          estimate="$(sed -n 's/^estimate: //p' applied.log)"
+          echo "estimate: ${estimate:-nothing}"
+          case "$estimate" in
+            *%*) : ;;
+            *) echo "FAIL: no size estimate under the conversion settings"; exit 1 ;;
+          esac
+          case "$estimate" in
+            *1080p*4K*|*1080p*|*4K*) : ;;
+            *) echo "FAIL: the estimate does not say which source it assumes."
+               echo "      One number for every resolution is the bug this "
+               echo "      line is supposed to have stopped telling."
+               exit 1 ;;
+          esac
+          # Both numbers, and they must differ: equal ones mean the source
+          # height is being ignored again.
+          python3 - "$estimate" <<'ESTIMATE'
+          import re, sys
+          line = sys.argv[1]
+          numbers = [int(n) for n in re.findall(r"(\d+) ?%", line)]
+          if len(numbers) != 2:
+              sys.exit(f"FAIL: expected two percentages at 720p, got {numbers} "
+                       f"in: {line}")
+          if numbers[0] <= numbers[1]:
+              sys.exit(f"FAIL: a 4K source must come out smaller than a 1080p "
+                       f"one at the same target; got {numbers}")
+          print(f"estimate names both sources: {numbers[0]} % and {numbers[1]} %")
+          ESTIMATE
+          # And the words beside the number: "21" means nothing on its own.
+          case "$estimate" in
+            *"Das Bild wird dabei"*|*"The picture comes out"*) : ;;
+            *) echo "FAIL: the estimate does not say what the picture becomes"
+               exit 1 ;;
+          esac
+
+          echo "=== converting, end to end ==="
+          # The feature nothing could ask for. Two real files, one unticked,
+          # and FFmpeg actually runs: the output has to appear beside the
+          # original, the original has to survive, and the file taken out of
+          # the run has to be left alone.
+          conv="$(mktemp -d)"
+          mkdir -p "$conv/config" "$conv/movies"
+          for name in A B; do
+            ffmpeg -nostdin -loglevel error -y \
+              -f lavfi -i testsrc=size=320x180:rate=10 -t 2 \
+              -c:v libx264 -preset ultrafast -pix_fmt yuv420p \
+              "$conv/movies/Film $name (2020).mkv"
+          done
+          python3 - "$conv" > "$conv/config/settings.json" <<'MAKE'
+          import json, sys
+          root = sys.argv[1]
+          print(json.dumps({
+              "sourceFolder": "", "moviesFolder": root + "/movies",
+              "seriesFolder": "", "musicFolder": "", "libraryMode": "video",
+              "identification": "offline", "localLLMBaseURL": "",
+              "localLLMModel": "", "jellyfinBaseURL": "",
+              "conflictPolicy": "skip", "watchSourceFolder": False,
+              "conversion": {"videoCodec": "h264", "quality": 30,
+                             "preset": "veryfast", "targetHeight": None,
+                             "audioMode": "passthrough",
+                             "stripSubtitles": False, "ffmpegPath": ""},
+              "schedule": {"isEnabled": False, "alsoRename": False,
+                           "cadence": "daily", "hour": 3, "minute": 0,
+                           "everyHours": 6},
+          }))
+          MAKE
+          timeout 240 xvfb-run -a --server-args="-screen 0 1280x900x24" \
+            env MEDIAFIN_CONFIG_DIR="$conv/config" \
+            .build/release/mediafin-gtk --press-convert | tee convert.log
+
+          # A value, not a constant. This used to grep for "pressed stop
+          # while idle: yes", printed unconditionally two lines after the
+          # press -- an assertion that could only fail if the process had
+          # already died, which pipefail catches anyway. Deleting the
+          # Stopp button's whole wiring left it passing.
+          stop_idle="$(sed -n 's/^stop pressable while idle: //p' convert.log)"
+          test "$stop_idle" = "false" || {
+            echo "FAIL: the panel's Stopp was pressable with nothing "
+            echo "      converting (read: $stop_idle)"
+            exit 1
+          }
+          # Every sample, not the first one.
+          #
+          # `head -1` read the single at-risk sample: the poll refreshes,
+          # THEN takes the snapshot that decides whether to print, so a tick
+          # that catches `converting` turning true describes widgets drawn
+          # one refresh earlier -- Stopp still grey. The mode refreshes again
+          # before reading now, and these ask that at least one sample says
+          # the right thing, plus that a sample exists at all, so neither
+          # half can quietly become vacuous.
+          samples="$(grep -c '^stop pressable while converting: ' convert.log || true)"
+          test "${samples:-0}" -ge 1 || {
+            echo "FAIL: the poll never caught the conversion running, so "
+            echo "      none of the during-a-conversion checks below ran"
+            exit 1
+          }
+          grep -q '^stop pressable while converting: true' convert.log || {
+            echo "FAIL: the panel's Stopp was NOT pressable during a "
+            echo "      conversion, in any of $samples samples. A button "
+            echo "      that is grey while a 40-minute encode runs is the "
+            echo "      fault that matters, and a one-sided check cannot "
+            echo "      tell it from a correctly gated one."
+            sed -n 's/^stop pressable while converting: /  read: /p' convert.log
+            exit 1
+          }
+          # A job that measures itself must say so, which is the other half
+          # of the rule --press-check asserts from the silent side.
+          test "$(grep -c '^converting subtitle: ' convert.log || true)" -ge 1 || {
+            echo "FAIL: no subtitle was read during the conversion at all"
+            exit 1
+          }
+          grep -q '^converting subtitle: .*%' convert.log || {
+            echo "FAIL: no percentage in the header during a conversion, in "
+            echo "      any sample:"
+            sed -n 's/^converting subtitle: /  read: /p' convert.log
+            exit 1
+          }
+          # Before anything is searched for, the list has to say so. It
+          # shipped drawing nothing at all — the first refresh compared an
+          # empty id list against an empty id list, decided nothing had
+          # changed, and never built the empty state — so the panel looked
+          # like a working one that had found no files.
+          grep -q "^convert list before:" convert.log || {
+            echo "FAIL: the conversion list said nothing before the search."
+            echo "      An empty list with no sentence in it reads as a "
+            echo "      finished search that found nothing."
+            exit 1
+          }
+          found="$(sed -n 's/^convertible found: \([0-9]*\)$/\1/p' convert.log)"
+          test "${found:-0}" -eq 2 || {
+            echo "FAIL: Suchen found ${found:-0} files, expected 2"; exit 1; }
+          rows="$(sed -n 's/^convert rows: \([0-9]*\)$/\1/p' convert.log)"
+          test "${rows:-0}" -eq 2 || {
+            echo "FAIL: the panel drew ${rows:-0} rows for 2 files"; exit 1; }
+          before="$(sed -n 's/^ticked: \([0-9]*\)$/\1/p' convert.log)"
+          after="$(sed -n 's/^after untick, ticked: \([0-9]*\)$/\1/p' convert.log)"
+          echo "ticked before: ${before:-none}, after: ${after:-none}"
+          test "${before:-0}" -eq 2 || {
+            echo "FAIL: a fresh search did not tick what it found"; exit 1; }
+          # The assertion the tick box exists for: pressing it changes what
+          # the engine is asked to convert. With the exclusions ignored this
+          # reads 2, and both files get converted.
+          test "${after:-0}" -eq 1 || {
+            echo "FAIL: unticking a row left ${after:-0} files in the run"
+            exit 1
+          }
+          grep -q "^after untick, counts: .*1 angehakt" convert.log \
+            || grep -q "^after untick, counts: .*1 ticked" convert.log || {
+            echo "FAIL: the counts line does not follow the tick"
+            grep "^after untick, counts:" convert.log || echo "(no counts line)"
+            exit 1
+          }
+          # A second Suchen must not undo the untick. The window holds the
+          # user's exclusions by PATH, because a fresh search builds fresh
+          # candidates with fresh UUIDs -- hold them by id and this reads 2,
+          # and the file the user took out is converted anyway.
+          again="$(sed -n 's/^after second search, ticked: \([0-9]*\)$/\1/p' \
+            convert.log)"
+          test "${again:-0}" -eq 1 || {
+            echo "FAIL: searching again re-ticked what the user took out"
+            echo "      (${again:-nothing} ticked, expected 1)"
+            exit 1
+          }
+          status="$(sed -n 's/^convert status: //p' convert.log)"
+          echo "status: ${status:-nothing}"
+          case "$status" in
+            *Konvertiert\ 1*|*Converted\ 1*) : ;;
+            *) echo "FAIL: the run did not report converting exactly one file"
+               exit 1 ;;
+          esac
+          # And on disk, which is the only thing that settles it.
+          ls -l "$conv/movies"
+          test -f "$conv/movies/Film B (2020).x264.mkv" || {
+            echo "FAIL: no converted file was written beside the original"
+            exit 1
+          }
+          test -s "$conv/movies/Film B (2020).x264.mkv" || {
+            echo "FAIL: the converted file is empty"; exit 1; }
+          test -f "$conv/movies/Film B (2020).mkv" || {
+            echo "FAIL: the original is gone -- a conversion must never "
+            echo "      touch it, because re-encoding cannot be undone"
+            exit 1
+          }
+          # Read between the two runs, from the listing the mode printed
+          # there. On disk after the process exits this is the wrong
+          # question: the second run converts that file on purpose.
+          grep -q "^after the first run, library holds: Film B (2020).x264.mkv$" \
+            convert.log || {
+            echo "FAIL: the first run did not write the file it was asked to"
+            exit 1
+          }
+          if grep -q "^after the first run, library holds: Film A (2020).x264.mkv$" \
+               convert.log; then
+            echo "FAIL: the file taken out of the run was converted anyway"
+            exit 1
+          fi
+
+          # The second run, with everything ticked, which empties the list.
+          #
+          # What this can see: an emptied list is one of the empty states,
+          # and they all used to draw "Noch nichts gesucht — „Suchen"
+          # drücken." -- so a finished run left a panel denying it had
+          # happened, and the user pressed the button they had just pressed.
+          #
+          # What it CANNOT see, though the comment here used to claim it:
+          # the `pending.isEmpty` branch that announced "Es war nichts
+          # angehakt" over a run that had encoded everything. That branch
+          # needs ids that are no longer on the candidate list -- a second
+          # press closer together than the 500 ms refresh timer -- and this
+          # mode presses Alle once and Konvertieren once, so the file is
+          # still listed and `pending` is never empty. The guard for it is
+          # tested where it is deterministic, in
+          # StoppedConversionTests.testAStaleSecondRunDoesNotClaimNothing
+          # WasTicked. The `case` below stays as a cheap backstop.
+          second="$(sed -n 's/^second run status: //p' convert.log)"
+          case "$second" in
+            *Konvertiert*|*Converted*) : ;;
+            *) echo "FAIL: the second run did not report a conversion "
+               echo "      (read: ${second:-nothing})"
+               exit 1 ;;
+          esac
+          case "$second" in
+            *angehakt*|*ticked*)
+              echo "FAIL: a finished run ended by saying nothing was ticked:"
+              echo "      $second"
+              exit 1 ;;
+          esac
+          left="$(sed -n \
+            's/^convertible after the second run: \([0-9]*\)$/\1/p' convert.log)"
+          test "${left:-1}" -eq 0 || {
+            echo "FAIL: ${left:-?} candidates left after converting them all"
+            exit 1
+          }
+          empty="$(sed -n 's/^convert list when empty: //p' convert.log)"
+          test -n "$empty" || {
+            echo "FAIL: the panel said nothing at all after the run"; exit 1; }
+          # The sentence this state must produce, not one it must not.
+          #
+          # Both of these used to be a blacklist of the single sentence the
+          # four-state split replaced, so `.fresh` was the only state they
+          # could reject: `.searching`, `.searched` and `.converted` were
+          # interchangeable as far as CI was concerned, and breaking each
+          # state in turn still passed. The window has no unit tests at all,
+          # so these two `case` statements are the whole net under that
+          # state machine.
+          case "$empty" in
+            *Fertig*|*"Done."*) : ;;
+            *) echo "FAIL: after converting everything the panel does not "
+               echo "      say the new files are there: $empty"
+               exit 1 ;;
+          esac
+          case "$empty" in
+            *"Wird gesucht"*|*"Looking for files"*)
+              echo "FAIL: the panel is still stuck on searching after the "
+              echo "      run finished: $empty"
+              exit 1 ;;
+            *"Noch nichts gesucht"*|*"Nothing looked for yet"*)
+              echo "FAIL: after converting everything the panel still says "
+              echo "      nothing has been searched for: $empty"
+              exit 1 ;;
+          esac
+          echo "panel after the run: $empty"
+          test -f "$conv/movies/Film A (2020).x264.mkv" || {
+            echo "FAIL: the second run did not convert the file that was "
+            echo "      unticked in the first"
+            exit 1
+          }
+
+          echo "=== the conversion panel when a search finds nothing ==="
+          # The third empty state. Searched and found nothing used to draw
+          # the never-searched sentence, so the panel was identical to the
+          # one the user had just opened.
+          #
+          # The mode exits non-zero here on purpose -- it has no row to
+          # untick -- so what is checked is the log, not the status.
+          none="$(mktemp -d)"
+          mkdir -p "$none/config" "$none/src" "$none/movies"
+          python3 - "$none" > "$none/config/settings.json" <<'EMPTY'
+          import json, sys
+          root = sys.argv[1]
+          print(json.dumps({
+              "sourceFolder": root + "/src", "moviesFolder": root + "/movies",
+              "seriesFolder": "", "musicFolder": "", "libraryMode": "video",
+              "identification": "offline", "language": "de",
+              "localLLMBaseURL": "", "localLLMModel": "", "jellyfinBaseURL": "",
+              "conflictPolicy": "skip", "watchSourceFolder": False,
+              "conversion": {"videoCodec": "h264", "quality": 28,
+                             "preset": "ultrafast", "targetHeight": None,
+                             "audioMode": "passthrough",
+                             "stripSubtitles": False, "ffmpegPath": ""},
+              "schedule": {"isEnabled": False, "alsoRename": False,
+                           "cadence": "daily", "hour": 3, "minute": 0,
+                           "everyHours": 6},
+          }))
+          EMPTY
+          timeout 120 xvfb-run -a --server-args="-screen 0 1280x900x24" \
+            env MEDIAFIN_CONFIG_DIR="$none/config" \
+            .build/release/mediafin-gtk --press-convert > none.log 2>&1 || true
+          cat none.log
+          searched="$(sed -n 's/^convert list after search: //p' none.log | head -1)"
+          test -n "$searched" || {
+            echo "FAIL: the panel said nothing after a search"; exit 1; }
+          case "$searched" in
+            *"Keine Dateien zum Konvertieren gefunden"*|*"No files to convert"*) : ;;
+            *) echo "FAIL: a search of an empty library does not say it "
+               echo "      found nothing: $searched"
+               exit 1 ;;
+          esac
+          case "$searched" in
+            *"Noch nichts gesucht"*|*"Nothing looked for yet"*)
+              echo "FAIL: a search that found nothing still tells the user "
+              echo "      to press Suchen: $searched"
+              exit 1 ;;
+            *"Wird gesucht"*|*"Looking for files"*)
+              echo "FAIL: the panel is still stuck on searching after the "
+              echo "      search ended: $searched"
+              exit 1 ;;
+          esac
+          echo "panel after an empty search: $searched"
+
+          # And the state the panel could not tell apart from that one: a
+          # search the engine REFUSED to run.
+          #
+          # With no library folder configured, `findConvertible` returns at
+          # its first guard without ever setting `busy`, and the flip out of
+          # "Wird gesucht …" keyed on the engine going quiet -- so the panel
+          # announced "Keine Dateien zum Konvertieren gefunden.", a claim
+          # about a library nothing had looked at. The one true sentence
+          # went to `lastResult`, which is drawn on the main window BEHIND
+          # this panel. A fresh install hits this on the first press of
+          # Suchen.
+          bare="$(mktemp -d)"
+          mkdir -p "$bare/config"
+          python3 - > "$bare/config/settings.json" <<'BARE'
+          import json
+          print(json.dumps({
+              "sourceFolder": "", "moviesFolder": "", "seriesFolder": "",
+              "musicFolder": "", "libraryMode": "video",
+              "identification": "offline", "language": "de",
+              "localLLMBaseURL": "", "localLLMModel": "", "jellyfinBaseURL": "",
+              "conflictPolicy": "skip", "watchSourceFolder": False,
+              "conversion": {"videoCodec": "h264", "quality": 28,
+                             "preset": "ultrafast", "targetHeight": None,
+                             "audioMode": "passthrough",
+                             "stripSubtitles": False, "ffmpegPath": ""},
+              "schedule": {"isEnabled": False, "alsoRename": False,
+                           "cadence": "daily", "hour": 3, "minute": 0,
+                           "everyHours": 6},
+          }))
+          BARE
+          timeout 120 xvfb-run -a --server-args="-screen 0 1280x900x24" \
+            env MEDIAFIN_CONFIG_DIR="$bare/config" \
+            .build/release/mediafin-gtk --press-convert > bare.log 2>&1 || true
+          refused_panel="$(sed -n 's/^convert list after search: //p' bare.log | head -1)"
+          test -n "$refused_panel" || {
+            echo "FAIL: the panel said nothing after a refused search"
+            sed -n '1,20p' bare.log
+            exit 1; }
+          case "$refused_panel" in
+            *"nicht gesucht"*|*"Nothing was searched"*) : ;;
+            *) echo "FAIL: the engine refused to look and the panel reported "
+               echo "      on the library anyway: $refused_panel"
+               exit 1 ;;
+          esac
+          case "$refused_panel" in
+            *Bibliotheksordner*|*"library folders"*) : ;;
+            *) echo "FAIL: the panel does not say what to do about it; that "
+               echo "      sentence is on the window behind it. Read: "
+               echo "      $refused_panel"
+               exit 1 ;;
+          esac
+          echo "panel after a refused search: $refused_panel"
+          rm -rf "$bare"
+
+          echo "=== the window while the engine holds its queue ==="
+          # Four commands hold the engine's serial queue without ever setting
+          # `busy`: both connection tests, Alles prüfen, and Rückgängig. The
+          # window used to key everything on `busy`, so for as long as one ran
+          # it said "Bereit" with every button live. A second press of Undo
+          # during the first reversed a batch the user never asked to reverse,
+          # because the first press had already removed the transaction it
+          # worked from.
+          #
+          # A server that accepts and never answers holds that state open for
+          # the engine's 30-second request timeout, which is what makes this
+          # observable at all.
+          silent="$(mktemp -d)"
+          cat > "$silent/silent-server.py" <<'SERVER'
+          import socket, sys, time
+          listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+          listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+          listener.bind(("127.0.0.1", 0))
+          listener.listen(16)
+          print(listener.getsockname()[1], flush=True)
+          held = []
+          deadline = time.time() + float(sys.argv[1])
+          listener.settimeout(1.0)
+          while time.time() < deadline:
+              try:
+                  held.append(listener.accept()[0])   # kept open, never written to
+              except socket.timeout:
+                  continue
+              except OSError:
+                  break
+          SERVER
+          nohup python3 "$silent/silent-server.py" 90 > "$silent/port" 2>&1 &
+          sleep 2
+          port="$(head -1 "$silent/port")"
+          echo "silent server on port ${port:-none}"
+          case "${port:-}" in
+            ''|*[!0-9]*) echo "FAIL: the silent server did not start"
+                         cat "$silent/port" || true; exit 1 ;;
+          esac
+          mkdir -p "$silent/config" "$silent/src" "$silent/movies"
+          python3 - "$silent" "$port" > "$silent/config/settings.json" <<'MAKE'
+          import json, sys
+          root, port = sys.argv[1], sys.argv[2]
+          print(json.dumps({
+              "sourceFolder": root + "/src", "moviesFolder": root + "/movies",
+              "seriesFolder": "", "musicFolder": "", "libraryMode": "video",
+              "identification": "local-llm",
+              "localLLMBaseURL": "http://127.0.0.1:" + port,
+              "localLLMModel": "qwen/test",
+              "jellyfinBaseURL": "http://127.0.0.1:" + port,
+              "conflictPolicy": "skip", "watchSourceFolder": False,
+              "conversion": {"videoCodec": "h265", "quality": 21,
+                             "preset": "slow", "targetHeight": None,
+                             "audioMode": "passthrough",
+                             "stripSubtitles": False, "ffmpegPath": ""},
+              "schedule": {"isEnabled": False, "alsoRename": False,
+                           "cadence": "daily", "hour": 3, "minute": 0,
+                           "everyHours": 6},
+          }))
+          MAKE
+          timeout 90 xvfb-run -a --server-args="-screen 0 1280x900x24" \
+            env MEDIAFIN_CONFIG_DIR="$silent/config" \
+            .build/release/mediafin-gtk --press-check | tee check.log
+
+          # The mode fails by itself if the probe finished before the window
+          # was read, so reaching here means something really was in flight.
+          queued="$(sed -n 's/^during queued: \([0-9]*\)$/\1/p' check.log)"
+          busy="$(sed -n 's/^during busy: //p' check.log)"
+          test "${queued:-0}" -ge 1 || {
+            echo "FAIL: nothing was queued, so nothing was observed"; exit 1; }
+          # busy false is the whole point: with it true the old gate would
+          # have covered this and the test would prove nothing.
+          test "$busy" = "false" || {
+            echo "FAIL: busy was ${busy:-unknown} -- this run does not "
+            echo "      exercise the gap it is meant to exercise"
+            exit 1
+          }
+          during="$(sed -n 's/^during subtitle: //p' check.log)"
+          echo "subtitle while working: ${during:-nothing}"
+          case "$during" in
+            Bereit|Ready)
+              echo "FAIL: the header said it was idle while the engine was "
+              echo "      holding its queue"
+              exit 1 ;;
+            '') echo "FAIL: no subtitle line to check"; exit 1 ;;
+          esac
+          undo="$(sed -n 's/^during undo pressable: //p' check.log)"
+          test "$undo" = "false" || {
+            echo "FAIL: Undo was still pressable while work was in flight."
+            echo "      A second press reverses a batch nobody asked to "
+            echo "      reverse: the first press has already dropped the "
+            echo "      transaction it worked from."
+            exit 1
+          }
+          scan="$(sed -n 's/^during scan pressable: //p' check.log)"
+          test "$scan" = "false" || {
+            echo "FAIL: Scan was still pressable while work was in flight"
+            exit 1
+          }
+          # The other direction of the same gate. Asserted only as "false",
+          # "Undo is gated correctly" is indistinguishable from "Undo is
+          # never pressable at all" -- the same shape as the fault this
+          # whole change is about. The line was already printed and nothing
+          # read it.
+          idle_undo="$(sed -n 's/^idle undo pressable: //p' check.log)"
+          test "$idle_undo" = "true" || {
+            echo "FAIL: Undo was not pressable even with the engine idle."
+            echo "      A permanently dead button passes a one-sided gate "
+            echo "      check."
+            exit 1
+          }
+          idle_clear="$(sed -n 's/^idle clear-history pressable: //p' check.log)"
+          test "$idle_clear" = "true" || {
+            echo "FAIL: Leeren was not pressable with the engine idle"; exit 1; }
+          during_clear="$(sed -n 's/^during clear-history pressable: //p' check.log)"
+          test "$during_clear" = "false" || {
+            echo "FAIL: Leeren was still pressable while work was in flight."
+            echo "      It destroys the undo journal, and the count its "
+            echo "      question names is read at press time while the "
+            echo "      clearing runs after the rename on the queue -- so "
+            echo "      the dialog can promise 'nothing to undo' and then "
+            echo "      destroy the undo for the rename that was running."
+            exit 1
+          }
+          # And the gate closing WITHOUT waiting for the refresh timer.
+          # This is the one the old check could not see: it called refresh()
+          # itself before reading, so it only ever observed the state after
+          # a tick. These two lines are read with no refresh in between, and
+          # both read "true" before the press handler closed the gate
+          # itself -- which is the half-second window an ordinary
+          # double-click lands in.
+          after_undo="$(sed -n \
+            's/^undo pressable straight after the press: //p' check.log)"
+          test "$after_undo" = "false" || {
+            echo "FAIL: Undo stayed pressable immediately after the press."
+            echo "      The gate is only applied by the 500 ms refresh "
+            echo "      timer, so a double-click queues two undos and the "
+            echo "      second reverses the next older batch."
+            exit 1
+          }
+          after_clear="$(sed -n \
+            's/^clear-history pressable straight after the press: //p' check.log)"
+          test "$after_clear" = "false" || {
+            echo "FAIL: Leeren stayed pressable immediately after the press"
+            exit 1
+          }
+          # A job that measures nothing must not borrow a percentage.
+          #
+          # This is the queue-held state: `busy` is false here -- the step
+          # asserts exactly that seventy lines up -- so it is NOT the state
+          # the "Arbeitet · 100 %" fault needed, and the code before that fix
+          # printed the same thing here. It cannot fail for that regression,
+          # and saying otherwise is how a check that proves nothing gets
+          # kept. The rule itself now lives in Core as `HeaderSubtitle` and
+          # HeaderSubtitleTests puts the engine into the state this cannot
+          # reach: `busy` true, nothing measurable, `renameProgress` left at
+          # 1 by an earlier rename. Six of its assertions fail on the old
+          # rule. What this line still covers is the wiring -- that the
+          # header is drawn from that function at all.
+          case "$during" in
+            *%*)
+              echo "FAIL: the header printed a percentage while the queue "
+              echo "      was merely held: $during"
+              exit 1 ;;
+          esac
+
+          echo "=== clearing the history, and the question before it ==="
+          # clearHistory empties the rename journal too, so the undo steps go
+          # with the list. The confirmation is the only thing between a stray
+          # click and a library that cannot be put back -- and a guard nothing
+          # presses is a guard somebody deletes. The mode renames a real file
+          # first, because "unchanged after Cancel" with an empty history is
+          # 0 and 0 and proves nothing.
+          hist="$(mktemp -d)"
+          mkdir -p "$hist/config" "$hist/src" "$hist/movies"
+          printf 'x' > "$hist/src/Tenet.2020.1080p.BluRay.x264.mkv"
+          python3 - "$hist" > "$hist/config/settings.json" <<'MAKE'
+          import json, sys
+          root = sys.argv[1]
+          print(json.dumps({
+              "sourceFolder": root + "/src", "moviesFolder": root + "/movies",
+              "seriesFolder": "", "musicFolder": "", "libraryMode": "video",
+              "identification": "offline", "localLLMBaseURL": "",
+              "localLLMModel": "", "jellyfinBaseURL": "",
+              "conflictPolicy": "skip", "watchSourceFolder": False,
+              "conversion": {"videoCodec": "h265", "quality": 21,
+                             "preset": "slow", "targetHeight": None,
+                             "audioMode": "passthrough",
+                             "stripSubtitles": False, "ffmpegPath": ""},
+              "schedule": {"isEnabled": False, "alsoRename": False,
+                           "cadence": "daily", "hour": 3, "minute": 0,
+                           "everyHours": 6},
+          }))
+          MAKE
+          timeout 120 xvfb-run -a --server-args="-screen 0 1280x900x24" \
+            env MEDIAFIN_CONFIG_DIR="$hist/config" \
+            .build/release/mediafin-gtk --press-clear-history | tee history.log
+
+          before="$(sed -n 's/^history before: \([0-9]*\)$/\1/p' history.log)"
+          undo_before="$(sed -n 's/^undo steps before: \([0-9]*\)$/\1/p' history.log)"
+          test "${before:-0}" -ge 1 || {
+            echo "FAIL: nothing was renamed, so there was no history to clear"
+            exit 1
+          }
+          test "${undo_before:-0}" -ge 1 || {
+            echo "FAIL: a rename left nothing to undo"; exit 1; }
+          # Cancel has to mean no. With the dialog's answer ignored this
+          # reads 0, which is how the guard going missing shows up.
+          cancelled="$(sed -n 's/^history after cancel: \([0-9]*\)$/\1/p' history.log)"
+          undo_cancelled="$(sed -n \
+            's/^undo steps after cancel: \([0-9]*\)$/\1/p' history.log)"
+          test "${cancelled:-0}" = "${before}" || {
+            echo "FAIL: Cancel cleared the history anyway"
+            echo "  before: ${before}, after cancel: ${cancelled:-nothing}"
+            exit 1
+          }
+          test "${undo_cancelled:-0}" = "${undo_before}" || {
+            echo "FAIL: Cancel threw away the undo steps anyway"; exit 1; }
+          # And confirming has to mean yes, in both places.
+          confirmed="$(sed -n 's/^history after confirm: \([0-9]*\)$/\1/p' history.log)"
+          undo_after="$(sed -n 's/^undo steps after: \([0-9]*\)$/\1/p' history.log)"
+          test "${confirmed:-1}" -eq 0 || {
+            echo "FAIL: confirming left ${confirmed} entries in the history"
+            exit 1
+          }
+          test "${undo_after:-1}" -eq 0 || {
+            echo "FAIL: confirming left the undo journal alone"; exit 1; }
+          # The file stays put: clearing the history is about the record, not
+          # the library.
+          test -f "$hist/movies/Tenet (2020)/Tenet (2020).mkv" || {
+            echo "FAIL: clearing the history moved or lost the renamed file"
+            find "$hist/movies" -type f || true
+            exit 1
+          }
+
+          echo "=== with one film to find ==="
+          run_window "$ready/config" | tee ready.log
+          found="$(sed -n 's/^proposals: \([0-9]*\)$/\1/p' ready.log)"
+          echo "proposals after pressing Scan: ${found:-none}"
+          test "${found:-0}" -ge 1 || {
+            echo "FAIL: pressing Scan found nothing in a folder with a film in it"
+            exit 1
+          }
+          # Two films and one sample in that folder: exactly two rows.
+          test "${found:-0}" -eq 2 || {
+            echo "FAIL: expected 2 proposals (Tenet and Free Samples), saw ${found:-0}"
+            echo "      3 means the sample was proposed as a film of its own;"
+            echo "      1 means Free.Samples.2012 was mistaken for a sample."
+            grep -E "^(proposals|destination):" ready.log || true
+            exit 1
+          }
+          if grep -qiE "^destination: .*sample\.mkv$" ready.log; then
+            echo "FAIL: a sample is being moved into the library"
+            grep "^destination:" ready.log
+            exit 1
+          fi
+          grep -q "Free.Samples" ready.log || {
+            echo "FAIL: a film with 'Samples' in its title was taken for a sample"
+            grep "^destination:" ready.log || true
+            exit 1
+          }
+
+      # DAST, the half that can be done here. The static review of these
+      # inputs was derived by reading, and reading is weaker: the only place
+      # the binary exists is this runner, so the only place it can be
+      # attacked is this runner.
+      - name: Hostile file names, through the real window
+        shell: bash
+        env:
+          NO_AT_BRIDGE: "1"
+          GTK_A11Y: none
+        run: |
+          set -euo pipefail
+          abuse="$(mktemp -d)"
+          mkdir -p "$abuse/config"
+          ./tools/abuse-filenames.sh "$abuse/downloads"
+          printf '{"sourceFolder":"%s","moviesFolder":"%s",' \
+            "$abuse/downloads" "$abuse/library" > "$abuse/config/settings.json"
+          printf '"identification":"offline","language":"en"}\n' \
+            >> "$abuse/config/settings.json"
+          mkdir -p "$abuse/library"
+
+          # Exit code first. A crash here is the whole point of the step:
+          # two releases went out before a dropped file was known to take
+          # the window down with it.
+          timeout 120 xvfb-run -a --server-args="-screen 0 1280x900x24" \
+            env MEDIAFIN_CONFIG_DIR="$abuse/config" \
+            .build/release/mediafin-gtk --press-scan 2>&1 | tee abuse.log
+          status=${PIPESTATUS[0]}
+          echo "exit status: $status"
+          test "$status" -eq 0 || {
+            echo "FAIL: the window did not survive the hostile folder"
+            exit 1
+          }
+
+          # It must propose something: a run that refuses everything looks
+          # exactly like a run that crashed early, from the outside.
+          found="$(sed -n 's/^proposals: \([0-9]*\)$/\1/p' abuse.log)"
+          echo "proposals: ${found:-none}"
+          test "${found:-0}" -ge 5 || {
+            echo "FAIL: only ${found:-0} proposals from the hostile folder;"
+            echo "      something is refusing names it should be handling"
+            exit 1
+          }
+
+          # Every destination inside the library, absolute, and no component
+          # over 255 bytes. Read off the row's label, not off the engine.
+          python3 - abuse.log "$abuse/library" <<'CHECK'
+          import sys, unicodedata
+          log, library = sys.argv[1], sys.argv[2]
+          rows = [l.split("destination: ", 1)[1].rstrip("\n")
+                  for l in open(log, encoding="utf-8", errors="replace")
+                  if l.startswith("destination: ")]
+          if not rows:
+              sys.exit("FAIL: no destination lines to check")
+          bad = []
+          for row in rows:
+              path = row.removeprefix("\u2192 ").strip()
+              if not path.startswith("/"):
+                  bad.append(("not absolute", path))
+              if ".." in path.split("/"):
+                  bad.append(("climbs out", path))
+              if not path.startswith(library + "/"):
+                  bad.append(("outside the library", path))
+              for part in path.split("/"):
+                  if len(part.encode("utf-8")) > 255:
+                      bad.append(("component over 255 bytes", part[:60]))
+                  if any(ord(c) < 0x20 or ord(c) == 0x7f for c in part):
+                      bad.append(("control character", repr(part)[:60]))
+          for why, what in bad:
+              print(f"FAIL: {why}: {what}")
+          print(f"checked {len(rows)} destinations")
+          if not rows:
+              sys.exit("FAIL: no destination lines to check")
+          sys.exit(1 if bad else 0)
+          CHECK
+
+          # And the same folder handed over as a drop, which is the path that
+          # has crashed before.
+          timeout 120 xvfb-run -a --server-args="-screen 0 1280x900x24" \
+            env MEDIAFIN_CONFIG_DIR="$abuse/config" \
+            .build/release/mediafin-gtk --drop "$abuse/downloads" 2>&1 \
+            | tee abuse-drop.log
+          test "${PIPESTATUS[0]}" -eq 0 || {
+            echo "FAIL: dropping the hostile folder took the window down"
+            exit 1
+          }
+
+      # A model server that answers badly on purpose: a 400-character title,
+      # a title of "../../etc", control characters, 8 MB of JSON, truncated
+      # JSON, an empty body, a Content-Length that lies, a reply after 45
+      # seconds. Everything the review said about this path was derived by
+      # reading; this is the half that runs.
+      - name: A hostile model server, through the real window
+        shell: bash
+        env:
+          NO_AT_BRIDGE: "1"
+          GTK_A11Y: none
+        run: |
+          set -euo pipefail
+          nohup python3 tools/hostile-llm.py 18099 > hostile.log 2>&1 &
+          # Python and not curl: this container has pkg-config and GTK and
+          # not much else, and curl is genuinely absent — the step failed
+          # with "the hostile server did not come up" while the server's own
+          # first line was in the log saying it had.
+          ready() {
+            python3 - <<'PROBE'
+          import sys, urllib.request
+          try:
+              urllib.request.urlopen("http://127.0.0.1:18099/v1/models", timeout=2)
+          except Exception:
+              sys.exit(1)
+          PROBE
+          }
+          for _ in $(seq 1 30); do
+            if ready; then break; fi
+            sleep 0.5
+          done
+          ready || {
+            echo "FAIL: the hostile server did not come up"
+            cat hostile.log || true
+            exit 1
+          }
+
+          hostile="$(mktemp -d)"
+          mkdir -p "$hostile/config" "$hostile/downloads" "$hostile/library"
+          for n in 1 2 3 4 5 6 7 8 9; do
+            : > "$hostile/downloads/Film.200$n.1080p.BluRay.x264-GRP.mkv"
+          done
+          printf '{"sourceFolder":"%s","moviesFolder":"%s",' \
+            "$hostile/downloads" "$hostile/library" \
+            > "$hostile/config/settings.json"
+          # "local-llm", not "localLLM": that is the enum's raw value. The
+          # settings decoder is deliberately lenient -- an unknown value
+          # falls back to the default -- so the wrong spelling left
+          # identification at "offline", no provider was ever built, and
+          # this whole step never contacted the model server at all.
+          printf '"identification":"local-llm",' >> "$hostile/config/settings.json"
+          printf '"localLLMBaseURL":"http://127.0.0.1:18099",' \
+            >> "$hostile/config/settings.json"
+          printf '"localLLMModel":"hostile","language":"en"}\n' \
+            >> "$hostile/config/settings.json"
+
+          # 180 s: the server sleeps 45 on one reply, and the engine's own
+          # request timeout is 30. If this needs the full timeout the run is
+          # not giving up the way M1.4 says it does.
+          timeout 180 xvfb-run -a --server-args="-screen 0 1280x900x24" \
+            env MEDIAFIN_CONFIG_DIR="$hostile/config" \
+            .build/release/mediafin-gtk --press-scan 2>&1 | tee hostile-run.log
+          status=${PIPESTATUS[0]}
+          echo "exit status: $status"
+          pkill -f hostile-llm.py || true
+          test "$status" -eq 0 || {
+            echo "FAIL: the window did not survive the hostile model server"
+            exit 1
+          }
+
+          # How many replies it actually asked for. M1.4 gives up after
+          # three in a row that say nothing, so this must not be nine.
+          asked=$(grep -c "^hostile-llm: reply" hostile.log || true)
+          echo "requests the engine made: $asked"
+          # Both sides. `-le 9` alone passes at zero, which is exactly what
+          # this step did for as long as the settings file misspelled the
+          # identification mode: a hostile-server test that never contacted
+          # the server, green on every run.
+          test "$asked" -ge 1 || {
+            echo "FAIL: the engine never asked the model server anything, so"
+            echo "      nothing here was tested. Check identification in the"
+            echo "      settings file against the enum's raw value."
+            cat "$hostile/config/settings.json"
+            exit 1
+          }
+          test "$asked" -le 9 || {
+            echo "FAIL: it asked $asked times for 9 files"
+            exit 1
+          }
+
+          # Nothing escaped, whatever the server said.
+          python3 - hostile-run.log "$hostile/library" <<'CHECK'
+          import sys
+          log, library = sys.argv[1], sys.argv[2]
+          rows = [l.split("destination: ", 1)[1].rstrip("\n")
+                  for l in open(log, encoding="utf-8", errors="replace")
+                  if l.startswith("destination: ")]
+          bad = []
+          for row in rows:
+              path = row.removeprefix("\u2192 ").strip()
+              if not path.startswith(library + "/"):
+                  bad.append(("outside the library", path))
+              if ".." in path.split("/"):
+                  bad.append(("climbs out", path))
+              for part in path.split("/"):
+                  if len(part.encode("utf-8")) > 255:
+                      bad.append(("component over 255 bytes", str(len(part))))
+                  if any(ord(c) < 0x20 or ord(c) == 0x7f for c in part):
+                      bad.append(("control character", repr(part)[:60]))
+          for why, what in bad:
+              print(f"FAIL: {why}: {what}")
+          print(f"checked {len(rows)} destinations against a hostile server")
+          # Its twin two steps up has had this guard all along. Without it
+          # the check passes by finding nothing, which is what it did for as
+          # long as the identification mode was misspelled.
+          if not rows:
+              sys.exit("FAIL: no destination lines to check")
+          sys.exit(1 if bad else 0)
+          CHECK
       # Before the checks that can fail: the rendered window is the most
       # useful thing this job produces, and a later failing assertion must not
       # be what stops it being readable.
@@ -561,7 +1933,81 @@ jobs:
             window.png
             window-1024x600.png
             window-1024x420.png
+            panel-settings.png
+            panel-status.png
+            panel-fetch.png
+            panel-convert.png
           if-no-files-found: warn
+      - name: Refuse to touch a real library
+        shell: bash
+        run: |
+          # The guard on the three modes that move or re-encode real files,
+          # pressed -- which nothing did.
+          #
+          # Every one of the twenty mediafin-gtk invocations in this file
+          # sets MEDIAFIN_CONFIG_DIR or passes --demo, so the refusal itself
+          # had no check and was never run. Its whole test was "the variable
+          # is a non-empty string", and MEDIAFIN_CONFIG_DIR is the
+          # DOCUMENTED, first-precedence way to relocate a real Mediafin
+          # configuration -- so the supported way to point these modes at a
+          # real library satisfied the guard that exists to stop exactly
+          # that. --press-clear-history would have scanned it, renamed
+          # everything a scan proposed and then destroyed the undo journal.
+          # "A guard nothing presses is a guard somebody deletes."
+          set -uo pipefail
+          home="$(mktemp -d)"
+          mkdir -p "$home/.config/mediafin"
+          ln -s "$home/.config/mediafin" "$home/link-to-real"
+          fails=0
+          # `env` wants every -u BEFORE the NAME=VALUE assignments. The
+          # other way round it reads "-u" as the command to run and exits
+          # 127 -- which is not 64 either, so a refusal check written that
+          # way passes while testing nothing. (It did, in the first draft of
+          # this step.)
+          refuse() {
+            local label="$1"; shift
+            local code=0
+            timeout 20 env -u XDG_CONFIG_HOME "$@" HOME="$home" \
+              .build/release/mediafin-gtk --press-clear-history \
+              > refusal.log 2>&1 || code=$?
+            if [ "$code" != 64 ]; then
+              echo "FAIL: $label was not refused (exit $code)"
+              sed -n '1,3p' refusal.log
+              fails=1
+            else
+              echo "ok   : $label refused"
+            fi
+          }
+          refuse "an unset MEDIAFIN_CONFIG_DIR" -u MEDIAFIN_CONFIG_DIR
+          refuse "the real configuration directory" \
+            MEDIAFIN_CONFIG_DIR="$home/.config/mediafin"
+          refuse "a symlink to the real configuration directory" \
+            MEDIAFIN_CONFIG_DIR="$home/link-to-real"
+          refuse "a relative path" MEDIAFIN_CONFIG_DIR=.
+          refuse "a path with a trailing dot segment" \
+            MEDIAFIN_CONFIG_DIR="$home/.config/mediafin/."
+          # And the other direction, or a guard that refuses everything
+          # would pass all of the above: a throwaway directory has to get
+          # through. Exactly 2, not merely "not 64": every way of failing to
+          # start the binary at all is also not 64, so "not 64" would be a
+          # check that cannot fail. 2 is the no-display exit, which the
+          # program only reaches after the guard has let it past.
+          code=0
+          timeout 20 env -u XDG_CONFIG_HOME -u DISPLAY -u WAYLAND_DISPLAY \
+            MEDIAFIN_CONFIG_DIR="$home/throwaway" HOME="$home" \
+            .build/release/mediafin-gtk --press-clear-history \
+            > allowed.log 2>&1 || code=$?
+          if [ "$code" != 2 ]; then
+            echo "FAIL: a throwaway directory did not get past the guard to "
+            echo "      the no-display exit; got $code"
+            sed -n '1,3p' allowed.log
+            fails=1
+          else
+            echo "ok   : a throwaway directory gets through to gtk_init"
+          fi
+          rm -rf "$home"
+          exit $fails
+
       - name: Refuse to hang without a display
         shell: bash
         run: |
@@ -583,49 +2029,3 @@ jobs:
           fi
           echo "ok    : exits 2 with no display and writes nothing"
 
-  app:
-    name: Build .app
-    runs-on: macos-15
-    # Measured at about five minutes once the app links SwiftNIO, so 40 is
-    # ample and still catches a hang quickly.
-    timeout-minutes: 40
-    steps:
-      - uses: actions/checkout@v4
-      - uses: maxim-lobanov/setup-xcode@v1
-        with:
-          xcode-version: latest-stable
-      - name: Install XcodeGen
-        run: brew install xcodegen
-      - name: Generate Xcode project
-        run: xcodegen generate
-      - name: Build (Release, unsigned)
-        run: |
-          set -o pipefail
-          xcodebuild \
-            -project Mediafin.xcodeproj \
-            -scheme Mediafin \
-            -configuration Release \
-            -derivedDataPath build \
-            -destination 'generic/platform=macOS' \
-            ARCHS="arm64 x86_64" ONLY_ACTIVE_ARCH=NO \
-            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
-            build
-      - name: Package .app
-        run: |
-          APP=$(find build/Build/Products/Release -maxdepth 1 -name '*.app' | head -1)
-          echo "Built: $APP"
-          ARCHS_OUT=$(lipo -archs "$APP/Contents/MacOS/Mediafin")
-          echo "Architectures: $ARCHS_OUT"
-          case "$ARCHS_OUT" in
-            *arm64*x86_64*|*x86_64*arm64*) echo "Universal binary OK." ;;
-            *) echo "::error::Expected a universal binary but got: $ARCHS_OUT"; exit 1 ;;
-          esac
-          # Ad-hoc sign so the unsigned universal app is not rejected as "damaged".
-          codesign --force --deep --sign - "$APP"
-          ditto -c -k --keepParent "$APP" Mediafin.app.zip
-      - name: Upload .app artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: Mediafin-app
-          path: Mediafin.app.zip
-          if-no-files-found: error

@@ -5,12 +5,15 @@ import FoundationNetworking
 
 /// Carries out the commands a front-end submits.
 ///
-/// This is the engine both interfaces drive: the web UI and the native GTK
-/// window send the same `WebCommand` values here and read the same snapshot
-/// back. It lives in Core rather than beside the HTTP server because it never
-/// needed the server — only `WebServer.swift` imports SwiftNIO — and leaving
-/// it there would have meant either a second copy of this logic for the GTK
-/// front-end, or that front-end linking a web server it never starts.
+/// This is the engine. The window submits `WebCommand` values here and reads
+/// the snapshot back; the headless runner holds one so the schedule can fire
+/// with no window open.
+///
+/// It once served four front-ends — this window, a terminal interface, a local
+/// web interface and a SwiftUI app — and keeping them in step was most of the
+/// work and none of the value. The three nobody ran are gone. The `Web` prefix
+/// on `WebCommand`, `WebSettings` and `StatusSnapshot`'s file is left over
+/// from that time and means nothing now.
 ///
 /// Every command runs on one serial queue, so two scans or a scan and a rename
 /// can never interleave, and requests are never made to wait: they submit and
@@ -20,7 +23,7 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
     public struct FolderScan: Sendable {
         /// Hard limit so pointing Mediafin at a huge tree cannot exhaust
         /// memory before the user sees anything.
-        public static let maximumFiles = 5_000
+        public static let maximumFiles = MediaScanner.maximumFiles
 
         /// Music files under a folder.
         ///
@@ -56,6 +59,10 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
             var found: [URL] = []
             for case let url as URL in enumerator {
                 guard VideoFileTypes.isVideo(url) else { continue }
+                // A release sample is an excerpt, not a film. Proposing it
+                // as one put a near-duplicate in the library and, worse,
+                // collided with the real file so that neither was renamed.
+                guard !VideoFileTypes.isSample(url) else { continue }
                 found.append(url)
                 if found.count >= maximumFiles { break }
             }
@@ -101,18 +108,84 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
     /// Convert commands submitted but not yet taken off the queue, so a cancel
     /// can tell "stop the run that is coming" from "there is nothing to stop".
     private var _queuedConversionRuns = 0
+    /// Set for the whole of a conversion run, FFmpeg up or not.
+    ///
+    /// `_runningConversion` is nil between two files and for the stretch at
+    /// the start of a run before the first encoder launches, and
+    /// `_queuedConversionRuns` is already back to zero by then -- so a Stopp
+    /// pressed in either gap armed nothing and answered "Es konvertiert
+    /// gerade nichts." while the bar was moving.
+    private var _conversionRunning = false
     /// The running FFmpeg, so a cancel can end it.
     private var _runningConversion: Process?
-    private var _cancelTransfers = false
-    private var _queuedTransferRuns = 0
-    private var _runningTransfer: Process?
-    /// True from the moment a send starts until it ends, including the gaps
-    /// between files when no process exists.
-    private var _transferRunning = false
     private var _runningDownload: Process?
     private var _cancelDownload = false
     private var _queuedDownloads = 0
+    /// Set by a cancel; read between files by the scan and by `enriching`.
+    ///
+    /// Deliberately not cleared when a run starts, for the same reason the
+    /// conversion flag is not: a cancel pressed while the scan was still
+    /// waiting its turn on the queue would otherwise be discarded and the
+    /// run would go ahead after the interface had already said it was
+    /// stopping.
+    private var _stopRequested = false
+    /// The walk for convertible files is running.
+    ///
+    /// It sets `busy` and nothing else, and the one Stopp outside the menu is
+    /// sensitive on bare `busy` -- so the button lit up for the whole walk
+    /// and pressing it answered "Es wird gerade nicht gesucht.", because
+    /// `cancelScan`'s target test covers scans and renames only. Nothing
+    /// could act on this walk at all.
+    private var _findingConvertible = false
+    /// Walks asked for but not started, counted like `_queuedScans`.
+    ///
+    /// `submit` runs `.cancelScan` synchronously on the caller's thread -- on
+    /// purpose, so a Stopp cannot queue behind the thing it stops -- so the
+    /// press almost always lands BEFORE the walk has begun, and a flag that
+    /// is only raised once the walk runs would be false exactly when it is
+    /// read.
+    private var _queuedConvertibleSearches = 0
+    /// Scans submitted but not yet taken off the queue, so a cancel can tell
+    /// "stop the one that is coming" from "there is nothing to stop".
+    private var _queuedScans = 0
+    private var _scanDepth = 0
+    /// Whether a rename is running. Stop applies to it as well: the window
+    /// lights the button for the whole of a rename, and it used to answer
+    /// "Es wird gerade nicht gesucht" and carry on.
+    private var _renameRunning = false
+    /// Renames submitted and still waiting their turn, counted like queued
+    /// scans so a Stop pressed before the run starts is not thrown away as
+    /// "nothing is running".
+    private var _queuedRenames = 0
+    /// The source paths the user has unticked.
+    ///
+    /// Kept by path rather than by id because a rescan builds new items with
+    /// new ids. Without this, a drop, a watch poll or a scheduled scan while
+    /// the window was open replaced the plan and every exclusion with it —
+    /// and the next press of Umbenennen moved the files the user had taken
+    /// out on purpose.
+    private var _excludedPaths: Set<String> = []
     private var _probes: [ProbeSubject: ProbeResult] = [:]
+    /// Set only by the test hook below.
+    private var _providerOverride: MetadataProvider?
+    /// Something `enriching` needs to tell the user, carried to the end of
+    /// the run so the closing sentence can include it rather than replace it.
+    private var _identificationNote: String?
+    /// The lamps, as last worked out on the queue.
+    ///
+    /// Cached rather than computed on demand because the only caller is the
+    /// window's 500 ms drawing timer, and working them out means asking the
+    /// filesystem about every configured folder. On a dead network mount
+    /// that blocked the drawing thread in `stat` and froze the window — in
+    /// the state where the settings that would fix the path are unreachable.
+    private var _systemChecks: [SystemCheck] = []
+    private let folderInspector: FolderInspector
+    /// Where the lamps are worked out. Separate from `queue` so a long scan
+    /// cannot delay the lamp that says why the scan is failing.
+    private let lampQueue = DispatchQueue(label: "mediafin.lamps", qos: .utility)
+    /// Re-measures the folders even when the user does nothing, so an
+    /// unmounted drive turns the lamp red by itself.
+    private var lampTimer: DispatchSourceTimer?
     /// Commands accepted but not finished.
     ///
     /// Counted in `submit`, before the queue is even touched, because the
@@ -126,10 +199,19 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
     /// so instead of silently running on defaults.
     public let settingsProblem: String?
 
-    /// - Parameter watchInterval: how often the import folder is looked at
-    ///   when watching is on. Injectable so the tests do not wait.
-    public init(configDirectory: URL, watchInterval: TimeInterval = 15) {
+    /// - Parameters:
+    ///   - watchInterval: how often the import folder is looked at when
+    ///     watching is on. Injectable so the tests do not wait.
+    ///   - lampInterval: how often the folders behind the status lamps are
+    ///     re-measured. 0 switches the timer off, which is what the tests
+    ///     want: a timer firing mid-test is noise.
+    ///   - folderInspector: injectable so a test can make a probe block and
+    ///     prove that nothing waits for it.
+    public init(configDirectory: URL, watchInterval: TimeInterval = 15,
+                lampInterval: TimeInterval = 5,
+                folderInspector: FolderInspector = FolderInspector()) {
         self.watchInterval = max(1, watchInterval)
+        self.folderInspector = folderInspector
         self.configDirectory = configDirectory
         settingsStore = SettingsStore(directory: configDirectory)
         scheduleState = ScheduleStateStore(directory: configDirectory)
@@ -148,7 +230,16 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         if case .unreadable(let detail) = loaded.state {
             settingsProblem = detail
         } else {
-            settingsProblem = nil
+            // A file that decodes can still be unusable, and this is the
+            // only way to configure the headless service: `"moviesFolder":
+            // "~/Filme"` was accepted and used as the move root, where
+            // URL(fileURLWithPath:) resolves it against the process's
+            // working directory — "/" for the packaged unit. Every rename
+            // then failed on a path the user never typed.
+            let problems = loaded.settings.problems()
+            settingsProblem = problems.isEmpty
+                ? nil
+                : problems.map(\.message).joined(separator: " ")
         }
         // A secrets file left readable by other accounts is a problem whether
         // or not it is read today.
@@ -159,6 +250,29 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
                     + "ersetzt werden.",
                 "The credentials file was readable by other accounts; its permissions "
                     + "have been corrected. Consider replacing the stored keys.")
+        }
+        // The server-sending feature is gone; its stored password must not
+        // outlive it in clear text.
+        let forgotten = secretStore.forgetUnknownKeys()
+        if !forgotten.isEmpty {
+            log.append(RenameLogEntry(
+                oldName: "secrets.json", newName: "—", status: .skipped,
+                errorDescription: Text.s(
+                    "Nicht mehr benötigte Zugangsdaten gelöscht: "
+                        + forgotten.joined(separator: ", "),
+                    "Removed credentials that are no longer used: "
+                        + forgotten.joined(separator: ", "))))
+        }
+        // A journal or a log that cannot be written is worth saying once:
+        // the journal is what makes Undo a promise rather than a hope, and
+        // both used to swallow the error.
+        if let unwritable = journal.lastWriteFailure ?? log.lastWriteFailure {
+            _snapshot.hasError = true
+            _snapshot.lastResult = Text.s(
+                "\(unwritable) kann nicht geschrieben werden — Verlauf und "
+                    + "Rückgängig überleben einen Neustart nicht.",
+                "\(unwritable) cannot be written — the history and Undo will not "
+                    + "survive a restart.")
         }
         refreshSnapshotCounts()
         // Not on the queue yet, so hand it over rather than touching the timer.
@@ -171,12 +285,33 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         queue.async { [weak self] in
             self?.updateWatchState()
             self?.updateScheduleState(.startup)
+            // The first measurement, so the panel has something true to show
+            // before anybody presses anything.
+            self?.refreshSystemChecks()
         }
+        startLampTimer(every: lampInterval)
     }
 
     deinit {
         watchTimer?.cancel()
         scheduleTimer?.cancel()
+        lampTimer?.cancel()
+    }
+
+    /// Re-measures the folders on a timer of its own.
+    ///
+    /// Its own timer and not `queue`, deliberately: a folder probe must not
+    /// queue behind a scan that is going to take an hour, or the lamp for
+    /// the drive that just went away would not turn red until the scan it is
+    /// breaking has finished. `refreshSystemChecks` only reads shared state
+    /// under the lock and writes one array under it, so it is safe here.
+    private func startLampTimer(every interval: TimeInterval) {
+        guard interval > 0 else { return }
+        let timer = DispatchSource.makeTimerSource(queue: lampQueue)
+        timer.schedule(deadline: .now() + interval, repeating: interval)
+        timer.setEventHandler { [weak self] in self?.refreshSystemChecks() }
+        timer.resume()
+        lampTimer = timer
     }
 
     // MARK: State the interface reads
@@ -209,15 +344,12 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
             cancelConversions()
             return
         }
-        // Counted here rather than when the run starts, so a cancel issued
-        // while the command is still waiting its turn is not mistaken for a
-        // cancel with nothing to cancel.
-        if case .cancelTransfers = command {
-            cancelTransfers()
-            return
-        }
         if case .cancelDownload = command {
             cancelDownload()
+            return
+        }
+        if case .cancelScan = command {
+            cancelScan()
             return
         }
         // Counted here rather than when the run starts, so a cancel issued
@@ -226,11 +358,20 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         if case .convertFiles = command {
             lock.lock(); _queuedConversionRuns += 1; lock.unlock()
         }
-        if case .transferFiles = command {
-            lock.lock(); _queuedTransferRuns += 1; lock.unlock()
+        if case .applyProposedRenames = command {
+            lock.lock(); _queuedRenames += 1; lock.unlock()
         }
         if case .downloadURL = command {
             lock.lock(); _queuedDownloads += 1; lock.unlock()
+        }
+        if case .scanSourceFolder = command {
+            lock.lock(); _queuedScans += 1; lock.unlock()
+        }
+        if case .addFiles = command {
+            lock.lock(); _queuedScans += 1; lock.unlock()
+        }
+        if case .findConvertible = command {
+            lock.lock(); _queuedConvertibleSearches += 1; lock.unlock()
         }
         if Self.isWork(command) {
             // The count is read out while the lock is held and then used
@@ -246,6 +387,12 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         queue.async { [weak self] in
             guard let self else { return }
             self.execute(command)
+            // The lamps follow what just happened rather than waiting up to
+            // a whole timer period: changing the import folder and watching
+            // the lamp stay red for five seconds reads as "it did not take".
+            // On the lamp queue, so measuring a folder cannot extend the
+            // serial queue's own work.
+            self.lampQueue.async { [weak self] in self?.refreshSystemChecks() }
             if Self.isWork(command) {
                 self.lock.lock()
                 self._pendingWork = max(0, self._pendingWork - 1)
@@ -256,7 +403,11 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         }
     }
 
-    var pendingWorkCount: Int { lock.lock(); defer { lock.unlock() }; return _pendingWork }
+    // No `pendingWorkCount`. It read the same counter a second way and had
+    // no reader at all -- not in the program, not in a test, despite the
+    // unused-declaration baseline filing it under "accessors that exist for
+    // the tests". `queuedWork` on the snapshot is the published number, and
+    // `StatusSnapshot.isWorking` is what the window gates on.
 
     /// Whether a command does something the user should see progress for.
     ///
@@ -266,12 +417,12 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         switch command {
         case .saveSettings, .setSecret, .setAllAccepted, .setAccepted,
              .clearHistory,
-             .cancelConversions, .cancelTransfers, .cancelDownload:
+             .cancelConversions, .cancelDownload, .cancelScan:
             return false
-        case .scanSourceFolder, .applyProposedRenames, .undoLastRename,
-             .findConvertible, .convertFiles, .transferFiles, .downloadURL,
+        case .scanSourceFolder, .addFiles, .applyProposedRenames, .undoLastRename,
+             .findConvertible, .convertFiles, .downloadURL,
              .testLocalLLMConnection, .testJellyfinConnection,
-             .testRemoteConnection, .checkEverything:
+             .checkEverything:
             return true
         }
     }
@@ -294,17 +445,23 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         queue.sync {}
     }
 
+    /// Does whatever the schedule says is due, and returns once it is done.
+    ///
+    /// Public because the headless runner needs it, and it is not a test
+    /// hook: `mediafin --once` is meant for a cron line, and a cron line that
+    /// returned while the rename was still running would have the service
+    /// manager kill the work it had just started. So this waits for the queue
+    /// before giving control back.
+    public func runDueWorkNow() {
+        queue.sync { self.runIfDue() }
+        queue.sync {}
+    }
+
     /// Whether a cancel is currently armed. Only for tests: the end-to-end
     /// path needs FFmpeg, which CI does not install, so the flag's own rules
     /// are checked directly.
     var cancelIsArmedForTesting: Bool {
         lock.lock(); defer { lock.unlock() }; return _cancelConversions
-    }
-
-    /// The same, for transfers. Only for tests: the end-to-end path needs an
-    /// SSH server, so the flag's own rules are checked directly.
-    var transferCancelIsArmedForTesting: Bool {
-        lock.lock(); defer { lock.unlock() }; return _cancelTransfers
     }
 
     // MARK: Execution
@@ -320,7 +477,14 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         case .testJellyfinConnection:
             testJellyfin()
         case .scanSourceFolder:
+            // Only the queue accounting here. Whether a scan is running, and
+            // when the stop flag may be cleared, is the scan's own business
+            // — see `scanSourceFolder`.
+            startedQueuedScan()
             scanSourceFolder()
+        case .addFiles(let urls):
+            startedQueuedScan()
+            addFiles(urls)
         case .applyProposedRenames(let accepting):
             applyRenames(accepting: accepting)
         case .undoLastRename:
@@ -336,18 +500,11 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
             setAllAccepted(accepted)
         case let .setAccepted(id, accepted):
             setAccepted(id, accepted)
-        case .transferFiles(let accepting):
-            transferFiles(accepting: accepting)
-        case .cancelTransfers:
-            // Handled in `submit`, off the queue.
-            break
         case .downloadURL(let url):
             downloadURL(url)
-        case .cancelDownload:
+        case .cancelDownload, .cancelScan:
             // Handled in `submit`, off the queue.
             break
-        case .testRemoteConnection:
-            testRemote()
         case .checkEverything:
             checkEverything()
         case .clearHistory:
@@ -356,6 +513,32 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
     }
 
     private func save(_ settings: WebSettings) {
+        // Checked before anything is written. `problems()` and `isValid`
+        // existed, were covered by three test files, and had no caller
+        // anywhere in the program — so "the folder must be an absolute
+        // path", "must not contain '..'", "the address must look like
+        // http://host:port" and "the time must be between 00:00 and 23:59"
+        // were green in CI and never ran. Two comments elsewhere already
+        // described this behaviour as if it happened.
+        //
+        // Nothing is saved when something is wrong, which is what the
+        // settings window's own comment promises. The typed values stay in
+        // the fields, so the correction is one edit, and the previous
+        // settings keep working in the meantime.
+        let candidate = settings.normalised()
+        let problems = candidate.problems()
+        guard problems.isEmpty else {
+            update {
+                $0.hasError = true
+                $0.settingsSave = SettingsSaveReport(
+                    generation: $0.settingsSave.generation + 1, failed: true)
+                $0.lastResult = Text.s(
+                    "Nicht gespeichert: " + problems.map(\.message)
+                        .joined(separator: " "),
+                    "Not saved: " + problems.map(\.message).joined(separator: " "))
+            }
+            return
+        }
         do {
             let previous = self.settings
             try settingsStore.save(settings)
@@ -365,7 +548,6 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
             // the login or the target path makes the stored answer describe
             // a different machine — and it used to be kept, so a green lamp
             // could be reporting on a server nobody had ever contacted.
-            if settings.remote != previous.remote { _probes[.remote] = nil }
             if settings.localLLMBaseURL != previous.localLLMBaseURL
                 || settings.localLLMModel != previous.localLLMModel {
                 _probes[.localLLM] = nil
@@ -377,8 +559,12 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
             if settings.language != previous.language {
                 Text.start(configured: settings.language)
             }
-            update { $0.lastResult = Text.s("Einstellungen gespeichert.",
-                                            "Settings saved.") }
+            update {
+                $0.settingsSave = SettingsSaveReport(
+                    generation: $0.settingsSave.generation + 1, failed: false)
+                $0.lastResult = Text.s("Einstellungen gespeichert.",
+                                       "Settings saved.")
+            }
             updateWatchState()
             // Only a changed schedule resets the clock. Saving an unrelated
             // setting at 02:59 must not push tonight's 03:00 run to tomorrow.
@@ -389,27 +575,43 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
             // scan.
             refreshSnapshotCounts()
         } catch {
-            update { $0.lastResult = Text.s("Einstellungen nicht gespeichert: \(error)",
-                                            "Settings could not be saved: \(error)") }
+            update {
+                $0.hasError = true
+                $0.settingsSave = SettingsSaveReport(
+                    generation: $0.settingsSave.generation + 1, failed: true)
+                $0.lastResult = Text.s("Einstellungen nicht gespeichert: \(error)",
+                                       "Settings could not be saved: \(error)")
+            }
         }
     }
 
     private func setSecret(_ key: SecretKey, _ value: String) {
         do {
-            try secretStore.set(value, for: key)
+            let keptAsidePath = try secretStore.set(value, for: key)
             lock.lock()
             switch key {
-            case .remotePassword: _probes[.remote] = nil
             case .localLLMAPIKey: _probes[.localLLM] = nil
             case .jellyfinToken: _probes[.jellyfin] = nil
             case .tmdbAPIKey: break
             }
             lock.unlock()
+            // Said in the same breath, because the other stored keys are
+            // now out of reach and the user is the only one who can fix it.
+            let kept = keptAsidePath.map { path in
+                Text.s(" Die bisherige Datei mit den Zugangsdaten war nicht "
+                           + "lesbar und liegt jetzt unter „\(path)“ — die anderen "
+                           + "dort gespeicherten Schlüssel müssen neu eingetragen "
+                           + "werden.",
+                       " The previous credentials file could not be read and is "
+                           + "now at “\(path)” — the other keys stored in it have "
+                           + "to be entered again.")
+            } ?? ""
             // Never echo the value, not even its length.
             update {
-                $0.lastResult = value.isEmpty
+                $0.lastResult = (value.isEmpty
                     ? Text.s("\(key.label) entfernt.", "\(key.label) removed.")
-                    : Text.s("\(key.label) gespeichert.", "\(key.label) stored.")
+                    : Text.s("\(key.label) gespeichert.", "\(key.label) stored."))
+                    + kept
             }
         } catch {
             update { $0.lastResult = Text.s("\(key.label) ließ sich nicht speichern.",
@@ -499,6 +701,50 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         }
     }
 
+    /// Whatever an error can say for itself.
+    ///
+    /// It lived among the sending code and went out with it, although the
+    /// callers are the converter and the downloader — which is why removing
+    /// a feature broke two that had nothing to do with it. There is an
+    /// overload taking a download progress, so the compiler did not report a
+    /// missing function but a type mismatch two call sites away.
+    static func describe(_ error: Error) -> String {
+        let text = (error as? LocalizedError)?.errorDescription
+            ?? String(describing: error)
+        return redacting(text)
+    }
+
+    /// Strips anything that looks like a credential out of a message.
+    ///
+    /// TMDb's v3 API is designed to carry its key as a query parameter, and
+    /// `URLError` keeps the failing URL in its userInfo. Today
+    /// `errorDescription` is used first and does not include the URL — but
+    /// that is a property of URLError's LocalizedError conformance, not
+    /// something this code asked for, and the fallback branch above prints
+    /// userInfo and everything in it. The message goes into
+    /// `rename-log.json`, which is a file people paste into bug reports.
+    ///
+    /// Done by pattern and not by remembering to redact at each call site,
+    /// for the same reason the path sanitiser moved to the boundary.
+    static func redacting(_ text: String) -> String {
+        var cleaned = text
+        for name in ["api_key", "access_token", "token", "key", "password"] {
+            // name=value up to the next separator. Non-greedy and anchored
+            // on the separator set so a URL with more parameters after it
+            // keeps them.
+            cleaned = cleaned.replacingOccurrences(
+                of: "(?i)\\b\(name)=[^&\\s\"'<>)\\]]+",
+                with: "\(name)=<redacted>",
+                options: .regularExpression)
+        }
+        // A bearer token in a quoted header dump.
+        cleaned = cleaned.replacingOccurrences(
+            of: "(?i)Bearer\\s+[A-Za-z0-9._~+/-]+=*",
+            with: "Bearer <redacted>",
+            options: .regularExpression)
+        return cleaned
+    }
+
     /// The raw reason, including the numeric code, because a bare
     /// "could not connect" tells the user nothing they can fix. Apple's
     /// transport-security refusal (-1022) in particular looks like a network
@@ -526,6 +772,17 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
     ///   means renaming and sending a list nobody has looked at.
     @discardableResult
     private func scanSourceFolder() -> Bool {
+        // The bookkeeping is here, inside the scan, and not at the command
+        // that asked for it. It used to be at the two command cases, and
+        // `scanSourceFolder` has three other callers — the watch poll, the
+        // scan after a download, and the scheduled run — none of which
+        // touched it. So for all three, `_scanDepth` stayed at zero while the
+        // window showed "Identifying…" and lit Stop, and pressing Stop
+        // answered "Es wird gerade nicht gesucht" and changed nothing.
+        // Nothing said afterwards that a search had been interrupted either,
+        // because the sentence for that was also at the command.
+        beginScan()
+        defer { reportIfScanWasCancelled(); endScan() }
         let settings = self.settings
         let source = settings.sourceFolder
         guard !source.isEmpty else {
@@ -553,7 +810,7 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
             return scanForMusic(under: root, settings: settings)
         }
 
-        update { $0.busy = true; $0.convertStatus = "Looking for media…" }
+        update { $0.busy = true; $0.convertStatus = Text.s("Wird gesucht …", "Looking for media…") }
         let urls = FolderScan.videoFiles(under: root)
         guard !urls.isEmpty else {
             lock.lock(); _items = []; lock.unlock()
@@ -568,48 +825,452 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
             return true
         }
 
-        var mediaFiles = scanner.scan(urls: urls)
-        if let provider = enrichmentProvider(settings) {
-            update { $0.convertStatus = "Identifying…" }
-            var enriched: [MediaFile] = []
-            for var file in mediaFiles {
-                let input = file.parsed
-                let parsed = runAndWaitReturning {
-                    await MetadataEnricher(provider: provider).enrich(input)
-                }
-                file.parsed = parsed ?? file.parsed
-                enriched.append(file)
+        let proposed = videoProposals(for: enriching(scanner.scan(urls: urls), settings),
+                                      settings: settings)
+        let plan = proposed.items
+
+        lock.lock(); _items = applyingExclusions(to: plan); lock.unlock()
+        // Read out before `update`, which takes the same non-recursive lock.
+        let identification = identificationNote()
+        update {
+            $0.busy = false
+            $0.convertStatus = nil
+            $0.hasError = !identification.isEmpty
+            // "Nothing to do" and "nothing found" look identical as a zero,
+            // and they are not: one means the library is tidy, the other
+            // means something is wrong with the folder you chose.
+            if plan.isEmpty, proposed.alreadyFiled > 0 {
+                $0.lastResult = Text.s(
+                    "Nichts zu tun: \(proposed.alreadyFiled) Datei"
+                        + "\(proposed.alreadyFiled == 1 ? " liegt" : "en liegen") "
+                        + "schon richtig.",
+                    "Nothing to do: \(proposed.alreadyFiled) file"
+                        + "\(proposed.alreadyFiled == 1 ? " is" : "s are") "
+                        + "already filed correctly.")
+            } else {
+                $0.lastResult = Text.s(
+                    "\(plan.count) Datei\(plan.count == 1 ? "" : "en") bereit zum Umbenennen."
+                        + (proposed.alreadyFiled > 0
+                            ? " \(proposed.alreadyFiled) liegen schon richtig." : ""),
+                    "\(plan.count) file\(plan.count == 1 ? "" : "s") ready to rename."
+                        + (proposed.alreadyFiled > 0
+                            ? " \(proposed.alreadyFiled) already filed." : ""))
             }
-            mediaFiles = enriched
+            // Appended rather than replacing: both sentences matter, and
+            // this one is the reason the names may be worse than usual.
+            $0.lastResult = ($0.lastResult ?? "") + identification
+        }
+        refreshSnapshotCounts()
+        return true
+    }
+
+    // MARK: Files handed over one at a time
+
+    /// What `addFiles` worked out from a list of URLs, before anything slow
+    /// has run. Pure, so every rule below can be tested without a disk.
+    struct HandedOver: Equatable {
+        var videos: [URL] = []
+        var audio: [URL] = []
+        /// Dropped, but neither video nor audio — a PDF, a folder of photos.
+        /// Counted so the answer can say "three of those were not media"
+        /// rather than silently ignoring them.
+        var ignored: [URL] = []
+    }
+
+    /// Sorts what was handed over, expanding folders.
+    ///
+    /// Each file goes by what it IS, not by whatever the library mode happens
+    /// to be set to: dropping an album while the mode says "films" is not a
+    /// mistake worth punishing, and the two namers are perfectly happy to run
+    /// side by side.
+    static func sorting(_ handed: [URL],
+                        isDirectory: (URL) -> Bool,
+                        videosIn: (URL) -> [URL],
+                        audioIn: (URL) -> [URL]) -> HandedOver {
+        var out = HandedOver()
+        var seen: Set<String> = []
+        func take(_ url: URL) {
+            let path = url.standardizedFileURL.path
+            guard seen.insert(path).inserted else { return }
+            if VideoFileTypes.isVideo(url) { out.videos.append(url) }
+            else if AudioFileTypes.isAudio(url) { out.audio.append(url) }
+            else { out.ignored.append(url) }
+        }
+        for url in handed {
+            if isDirectory(url) {
+                // A folder is what people drop when they mean "this series".
+                for found in videosIn(url) + audioIn(url) { take(found) }
+            } else {
+                take(url)
+            }
+        }
+        return out
+    }
+
+    /// Adds proposals for files somebody pointed at, keeping what is listed.
+    ///
+    /// The import folder is not consulted. A file dropped on the window is
+    /// the one the user means, wherever it lives — which is the whole reason
+    /// this exists beside the folder scan.
+    private func addFiles(_ handed: [URL]) {
+        beginScan()
+        defer { reportIfScanWasCancelled(); endScan() }
+        let settings = self.settings
+        let manager = FileManager.default
+        let sorted = Self.sorting(
+            handed,
+            isDirectory: { url in
+                var isDir: ObjCBool = false
+                return manager.fileExists(atPath: url.path, isDirectory: &isDir)
+                    && isDir.boolValue
+            },
+            videosIn: { FolderScan.videoFiles(under: $0) },
+            audioIn: { FolderScan.audioFiles(under: $0) })
+
+        guard !sorted.videos.isEmpty || !sorted.audio.isEmpty else {
+            update {
+                $0.busy = false
+                $0.hasError = true
+                $0.lastResult = handed.isEmpty
+                    ? Text.s("Es wurde nichts übergeben.", "Nothing was handed over.")
+                    : Text.s(
+                        "Darin war keine Video- oder Musikdatei.",
+                        "There was no video or music file among those.")
+            }
+            return
         }
 
-        // The namer produces a path relative to a library root and does not
-        // prefix "Movies"/"Series", so movies and episodes need their own
-        // roots. Anything without a configured root is renamed where it is.
+        // Already listed is not an error and not a second row: dropping the
+        // same folder twice is something people do, and two proposals for one
+        // file would both be ticked and race each other.
+        lock.lock(); let existing = Set(_items.map {
+            $0.mediaFile.url.standardizedFileURL.path
+        }); lock.unlock()
+        let videos = sorted.videos.filter {
+            !existing.contains($0.standardizedFileURL.path)
+        }
+        let audio = sorted.audio.filter {
+            !existing.contains($0.standardizedFileURL.path)
+        }
+        let alreadyThere = (sorted.videos.count - videos.count)
+            + (sorted.audio.count - audio.count)
+
+        update { $0.busy = true; $0.convertStatus = Text.s("Wird gesucht …", "Looking for media…") }
+
+        var added: [RenameItem] = []
+        var alreadyFiled = 0
+        if !videos.isEmpty {
+            let proposed = videoProposals(
+                for: enriching(scanner.scan(urls: videos), settings),
+                settings: settings)
+            added += proposed.items
+            alreadyFiled = proposed.alreadyFiled
+        }
+
+        var unreadable = 0
+        var missingMusicFolder = false
+        var missingFFmpeg = false
+        if !audio.isEmpty {
+            if settings.musicFolder.isEmpty {
+                missingMusicFolder = true
+            } else if let reader = AudioTagReader() {
+                let root = URL(fileURLWithPath: settings.musicFolder, isDirectory: true)
+                let read = musicProposals(for: audio, reader: reader, under: root)
+                added += read.items
+                unreadable = read.unreadable
+            } else {
+                missingFFmpeg = true
+            }
+        }
+
+        // Conflicts across the whole list, not only within what arrived: a
+        // dropped file that lands on a proposal already listed is exactly the
+        // collision worth warning about, and checking the new ones alone
+        // would miss it.
+        lock.lock()
+        // Capped, because nothing bounded this. `FolderScan.maximumFiles`
+        // is a per-call ceiling applied inside each enumeration, so
+        // dropping folder after folder accumulated past 5,000 without
+        // limit — and every drop re-ran conflict detection over the whole
+        // list and rebuilt a widget subtree per row.
+        var combined = Self.markingConflicts(in: _items + added)
+        var droppedForTheCeiling = 0
+        if combined.count > MediaScanner.maximumFiles {
+            droppedForTheCeiling = combined.count - MediaScanner.maximumFiles
+            combined.removeLast(droppedForTheCeiling)
+        }
+        _items = applyingExclusions(to: combined)
+        let total = _items.count
+        lock.unlock()
+
+        // Read out before `update`, which takes the same non-recursive lock.
+        let identification = identificationNote()
+        update {
+            $0.busy = false
+            $0.convertStatus = nil
+            $0.hasError = added.isEmpty || !identification.isEmpty
+            var parts: [String] = []
+            if added.isEmpty, alreadyFiled > 0 {
+                // Not an error: the file is where it belongs.
+                $0.hasError = false
+                parts.append(Text.s(
+                    "Nichts zu tun — liegt schon richtig.",
+                    "Nothing to do — already filed correctly."))
+            } else if added.isEmpty {
+                parts.append(Text.s("Nichts hinzugefügt.", "Nothing added."))
+            } else {
+                parts.append(Text.s(
+                    "\(added.count) hinzugefügt, \(total) in der Liste.",
+                    "\(added.count) added, \(total) in the list."))
+            }
+            if droppedForTheCeiling > 0 {
+                // Said, not silently dropped. The ceiling is the engine's
+                // own, and a list that quietly stops growing looks like a
+                // drop that did not arrive.
+                parts.append(Text.s(
+                    "\(droppedForTheCeiling) nicht aufgenommen — die Liste ist bei "
+                        + "\(MediaScanner.maximumFiles) voll. Erst umbenennen, dann "
+                        + "den Rest hinzufügen.",
+                    "\(droppedForTheCeiling) not added — the list is full at "
+                        + "\(MediaScanner.maximumFiles). Rename these first, then "
+                        + "add the rest."))
+            }
+            if alreadyThere > 0 {
+                parts.append(Text.s("\(alreadyThere) war\(alreadyThere == 1 ? "" : "en") "
+                                        + "schon dabei.",
+                                    "\(alreadyThere) \(alreadyThere == 1 ? "was" : "were") "
+                                        + "already listed."))
+            }
+            if alreadyFiled > 0, !added.isEmpty {
+                parts.append(Text.s("\(alreadyFiled) liegen schon richtig.",
+                                    "\(alreadyFiled) already filed."))
+            }
+            if unreadable > 0 {
+                parts.append(Text.s(
+                    "\(unreadable) ohne ausreichende Tags übersprungen.",
+                    "\(unreadable) skipped for want of tags."))
+            }
+            if missingMusicFolder {
+                parts.append(Text.s(
+                    "Musik übersprungen: der Musikordner fehlt in den Einstellungen.",
+                    "Music skipped: the music folder is missing from the settings."))
+            }
+            if missingFFmpeg {
+                parts.append(Text.s(
+                    "Musik übersprungen: ffmpeg/ffprobe fehlen (sudo apt install ffmpeg).",
+                    "Music skipped: ffmpeg/ffprobe are missing (sudo apt install ffmpeg)."))
+            }
+            if !sorted.ignored.isEmpty {
+                parts.append(Text.s(
+                    "\(sorted.ignored.count) keine Mediendatei.",
+                    "\(sorted.ignored.count) not a media file."))
+            }
+            // Last, and appended rather than replacing: it is the reason the
+            // names in this batch may be worse than usual.
+            if !identification.isEmpty {
+                parts.append(identification.trimmingCharacters(in: .whitespaces))
+            }
+            $0.lastResult = parts.joined(separator: " ")
+        }
+        refreshSnapshotCounts()
+    }
+
+    // MARK: The pieces a scan and a dropped file share
+
+    /// Asks the metadata provider about each file, when one is configured.
+    ///
+    /// Shared so that a file handed over one at a time is identified exactly
+    /// as a scanned one is. "It behaves differently when you drop it" is a
+    /// bug report nobody can act on.
+    /// How many identifications in a row may come back with nothing before
+    /// the rest of the run goes offline.
+    ///
+    /// Three attempts into a model server that has stopped answering is
+    /// information; two thousand are 30-second timeouts stacked into
+    /// sixteen hours, during which the serial queue is held and every button
+    /// in the window does nothing. The remaining files still get a proposal
+    /// — from their own names, which is what offline identification is.
+    static let identificationGiveUpAfter = 3
+
+    private func enriching(_ mediaFiles: [MediaFile],
+                           _ settings: WebSettings) -> [MediaFile] {
+        guard let provider = enrichmentProvider(settings) else { return mediaFiles }
+        update { $0.convertStatus = Text.s("Wird erkannt …", "Identifying…") }
+        var enriched: [MediaFile] = []
+        var failedInARow = 0
+        var gaveUp = false
+        for (index, var file) in mediaFiles.enumerated() {
+            // Between files, never inside one: a request already sent is
+            // bounded by its own timeout and interrupting it buys nothing.
+            if stopRequested {
+                // The rest keep the names they were parsed with, so a
+                // cancelled scan still shows what it had found.
+                enriched.append(contentsOf: mediaFiles[index...])
+                break
+            }
+            if gaveUp {
+                enriched.append(file)
+                continue
+            }
+            let input = file.parsed
+            let parsed = runAndWaitReturning {
+                await MetadataEnricher(provider: provider).enrich(input)
+            }
+            if parsed == nil || parsed == input {
+                failedInARow += 1
+                if failedInARow >= Self.identificationGiveUpAfter {
+                    gaveUp = true
+                    // Stored, not written into lastResult. The run composes
+                    // its own closing sentence afterwards and would
+                    // overwrite this one — which is exactly what happened,
+                    // and the test that asked for the warning got "8 files
+                    // ready to rename" instead. A warning the user cannot
+                    // see is the same as no warning.
+                    lock.lock()
+                    // In the history as well. `enriching` wrote nothing
+                    // here, so the footer sentence was the only channel —
+                    // and on the unattended run nobody is looking at the
+                    // footer, which is then replaced anyway.
+                    log.append(RenameLogEntry(
+                        oldName: "—", newName: "—", status: .skipped,
+                        errorDescription: Text.s(
+                            "Die Identifizierung hat nach "
+                                + "\(Self.identificationGiveUpAfter) erfolglosen "
+                                + "Versuchen aufgehört zu fragen. Die restlichen "
+                                + "Namen sind nur geparst, nicht nachgeschlagen.",
+                            "Identification stopped asking after "
+                                + "\(Self.identificationGiveUpAfter) replies that "
+                                + "said nothing. The remaining names are parsed "
+                                + "only, not looked up.")))
+                    _identificationNote = Text.s(
+                        "Die Erkennung antwortet nicht (\(failedInARow)× nichts) — "
+                            + "der Rest des Laufs benutzt nur die Dateinamen.",
+                        "Identification is not answering (\(failedInARow) × "
+                            + "nothing) — the rest of this run used the file names "
+                            + "only.")
+                    lock.unlock()
+                }
+            } else {
+                failedInARow = 0
+            }
+            file.parsed = parsed ?? file.parsed
+            enriched.append(file)
+        }
+        return enriched
+    }
+
+    /// Video files to proposals, each rooted by what it turned out to be.
+    ///
+    /// The namer produces a path relative to a library root and does not
+    /// prefix "Movies"/"Series", so movies and episodes need their own roots.
+    /// Anything without a configured root is renamed where it lies.
+    /// - Returns: the proposals, and how many files were dropped because
+    ///   they are already filed exactly where they belong. The second number
+    ///   is the difference between "nothing to do" and "nothing found", and
+    ///   the window has to be able to say which.
+    private func videoProposals(for mediaFiles: [MediaFile],
+                                settings: WebSettings)
+        -> (items: [RenameItem], alreadyFiled: Int) {
         let movies = settings.moviesFolder.isEmpty
             ? nil : URL(fileURLWithPath: settings.moviesFolder, isDirectory: true)
         let series = settings.seriesFolder.isEmpty
             ? nil : URL(fileURLWithPath: settings.seriesFolder, isDirectory: true)
-        let plan = planner.makePlan(for: mediaFiles, outputRoot: nil, libraryRoot: nil)
+        let planned = planner.makePlan(for: mediaFiles, outputRoot: nil)
             .map { item -> RenameItem in
                 let root = item.mediaFile.parsed.kind == .episode ? series : movies
-                guard let root else { return item }
+                guard let root else {
+                    // No library folder for this kind, so the file is renamed
+                    // where it lies — and if it is ALREADY filed under that
+                    // name, "where it lies" is one level inside its own
+                    // proposal. See `settled`.
+                    return Self.settled(item) ?? item
+                }
                 var moved = item
                 moved.outputRoot = root
                 return planner.reconcile(item: moved)
             }
-
-        lock.lock(); _items = plan; lock.unlock()
-        update {
-            $0.busy = false
-            $0.convertStatus = nil
-            $0.hasError = false
-            $0.lastResult = Text.s(
-                "\(plan.count) Datei\(plan.count == 1 ? "" : "en") bereit zum Umbenennen.",
-                "\(plan.count) file\(plan.count == 1 ? "" : "s") ready to rename.")
+        // A proposal that would move a file onto itself is not a proposal.
+        // Dropping it here rather than showing it keeps the list to what
+        // there is actually something to do about.
+        let worthDoing = planned.filter {
+            $0.primaryDestination.standardizedFileURL.path
+                != $0.mediaFile.url.standardizedFileURL.path
         }
-        refreshSnapshotCounts()
-        return true
+        // Conflicts against the destinations that survived the re-rooting,
+        // which is the second time they are computed and the first time the
+        // answer is about the paths the files will actually take.
+        //
+        // `makePlan` ran `detectConflicts` over destinations rooted at each
+        // file's OWN parent directory, because outputRoot was nil, and the
+        // map above then replaced every root. `reconcile` refreshes only
+        // `.existingFile` and says so outright — "Batch duplicate detection
+        // is left to makePlan" — which is the pass that ran on the paths
+        // that were thrown away. So two rips of one film in separate release
+        // folders came up as two clean proposals, both ticked, and the apply
+        // step then refused the pair and named them, after the preview had
+        // said nothing. The drop path and the music path both do this; only
+        // the video scan did not, under a comment claiming it was covered.
+        return (Self.markingConflicts(in: worthDoing),
+                planned.count - worthDoing.count)
+    }
+
+    /// Re-roots an item whose file is already filed exactly where its own
+    /// proposal would put it, so the proposal becomes a no-op.
+    ///
+    /// This is the fix for files disappearing into themselves. With no
+    /// library folder set, a file is renamed beside itself: the root is the
+    /// folder it is in. Point that at a library that is already sorted and
+    /// every run digs a level deeper —
+    ///
+    ///     <Series>/Show/Season 03/Show - S03E01.mkv
+    ///  →  <Series>/Show/Season 03/Show/Season 03/Show - S03E01.mkv
+    ///  →  <Series>/Show/Season 03/Show/Season 03/Show/Season 03/…
+    ///
+    /// — and the folder you are looking at appears to empty itself, because
+    /// the files are in a subfolder with the same name. Nothing is lost and
+    /// nothing says where they went.
+    ///
+    /// So: when the file's path already ends with its own proposed relative
+    /// path, the root is the folder ABOVE that structure, which makes the
+    /// destination equal to the source. The caller then drops it.
+    static func settled(_ item: RenameItem) -> RenameItem? {
+        let source = item.mediaFile.url.standardizedFileURL.path
+        let relative = item.proposedRelativePath
+        guard !relative.isEmpty, source.hasSuffix("/" + relative) else { return nil }
+        let ancestor = String(source.dropLast(relative.count + 1))
+        var settled = item
+        settled.outputRoot = URL(fileURLWithPath: ancestor.isEmpty ? "/" : ancestor,
+                                 isDirectory: true)
+        return settled
+    }
+
+    /// Music files to proposals, from their own tags.
+    ///
+    /// Nothing is guessed: a file whose tags do not name an artist, an album
+    /// and a title gets no proposal, and is counted as unreadable instead.
+    /// Filing it somewhere plausible puts it where the user will not think to
+    /// look, which is worse than leaving it where they put it.
+    private func musicProposals(for urls: [URL], reader: AudioTagReader,
+                                under musicRoot: URL)
+        -> (items: [RenameItem], unreadable: Int) {
+        var items: [RenameItem] = []
+        var unreadable = 0
+        for url in urls {
+            guard let tags = reader.read(url),
+                  let relative = MusicNamer.relativePath(
+                    for: tags, extension: url.pathExtension) else {
+                unreadable += 1
+                continue
+            }
+            let parsed = ParsedRelease(originalFileName: url.lastPathComponent,
+                                       title: tags.title ?? url.lastPathComponent,
+                                       year: tags.year,
+                                       kind: .unknown)
+            items.append(RenameItem(mediaFile: MediaFile(url: url, parsed: parsed),
+                                    outputRoot: musicRoot,
+                                    proposedRelativePath: relative))
+        }
+        return (items, unreadable)
     }
 
     /// Proposes a place for every music file, from its own tags.
@@ -647,31 +1308,15 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         let urls = FolderScan.audioFiles(under: root)
         let musicRoot = URL(fileURLWithPath: settings.musicFolder, isDirectory: true)
 
-        var plan: [RenameItem] = []
-        var unreadable = 0
-        for url in urls {
-            guard let tags = reader.read(url),
-                  let relative = MusicNamer.relativePath(
-                    for: tags, extension: url.pathExtension) else {
-                unreadable += 1
-                continue
-            }
-            let parsed = ParsedRelease(originalFileName: url.lastPathComponent,
-                                       title: tags.title ?? url.lastPathComponent,
-                                       year: tags.year,
-                                       kind: .unknown)
-            plan.append(RenameItem(mediaFile: MediaFile(url: url, parsed: parsed),
-                                   outputRoot: musicRoot,
-                                   proposedRelativePath: relative))
-        }
-
+        let read = musicProposals(for: urls, reader: reader, under: musicRoot)
         // The same detection the video path gets from RenamePlanner. Built
-        // by hand here, these items had no conflict set at all — so two
-        // copies of one album, which resolve to byte-identical paths, were
-        // shown without a warning and then handed to the conflict policy.
-        plan = Self.markingConflicts(in: plan)
+        // by hand, these items had no conflict set at all — so two copies of
+        // one album, which resolve to byte-identical paths, were shown
+        // without a warning and then handed to the conflict policy.
+        let plan = Self.markingConflicts(in: read.items)
+        let unreadable = read.unreadable
 
-        lock.lock(); _items = plan; lock.unlock()
+        lock.lock(); _items = applyingExclusions(to: plan); lock.unlock()
         update {
             $0.busy = false
             $0.convertStatus = nil
@@ -701,6 +1346,7 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
     /// - Returns: the outcome, or nil when nothing was attempted.
     @discardableResult
     private func applyRenames(accepting: Set<UUID>?) -> RenameOutcome? {
+        lock.lock(); _queuedRenames = max(0, _queuedRenames - 1); lock.unlock()
         var plan = items
         guard !plan.isEmpty else {
             update { $0.lastResult = Text.s(
@@ -723,7 +1369,7 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         // the policy — and under "replace" the first one, already filed, is
         // moved aside to make room for the second. Which of two rips to
         // keep is not a decision this code should make, so the pair is
-        // refused and named, exactly as the transfer does.
+        // refused and named rather than guessed at.
         var byDestination: [String: [RenameItem]] = [:]
         for item in plan {
             byDestination[item.primaryDestination.standardizedFileURL.path,
@@ -750,13 +1396,30 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
 
         let policy = settings.conflictPolicy.policy
         update { $0.busy = true; $0.renaming = true; $0.renameProgress = 0; $0.hasError = false }
+        lock.lock(); _renameRunning = true; lock.unlock()
+        defer {
+            lock.lock()
+            _renameRunning = false
+            // Same rule as a scan: a stop aimed at something still queued
+            // must not be eaten by the run finishing now.
+            if _scanDepth == 0, _queuedScans == 0, _queuedRenames == 0,
+               !_findingConvertible, _queuedConvertibleSearches == 0 {
+                _stopRequested = false
+            }
+            lock.unlock()
+        }
 
         let outcome = executor.execute(plan: plan, policy: policy,
                                        progress: { [weak self] fraction in
             self?.update { $0.renameProgress = fraction }
-        })
+        }, shouldStop: { [weak self] in self?.stopRequested ?? false })
 
-        let applied = Set(plan.map(\.id))
+        // Only the ones that actually moved leave the list. It used to be
+        // every id in the plan, which after a stop would have cleared the
+        // 300 files nobody had touched out of the window.
+        let applied = outcome.stoppedEarly
+            ? Set(outcome.landed.keys)
+            : Set(plan.map(\.id))
         lock.lock(); _items.removeAll { applied.contains($0.id) }; lock.unlock()
         update {
             $0.busy = false
@@ -770,8 +1433,44 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
                 + (outcome.failed > 0
                     ? Text.s(", fehlgeschlagen \(outcome.failed)",
                              ", failed \(outcome.failed)")
+                    : "")
+                // Said in the sentence, not left to be read out of
+                // "übersprungen 300", which looks like 300 name clashes.
+                + (outcome.stoppedEarly
+                    ? Text.s(" — vorzeitig gestoppt, der Rest ist unberührt",
+                             " — stopped early, the rest is untouched")
+                    : "")
+                // Named in the sentence, never only in the history: the one
+                // thing here that cannot be undone has to be read out.
+                + (outcome.deleted > 0
+                    ? Text.s(", \(outcome.deleted) Release-Infodatei"
+                                 + (outcome.deleted == 1 ? "" : "en") + " gelöscht",
+                             ", \(outcome.deleted) release note"
+                                 + (outcome.deleted == 1 ? "" : "s") + " deleted")
                     : "") + "."
         }
+        // The one live reader of this. It is set in RenameLog's own catch
+        // ("Kept rather than swallowed") and was read in exactly one place:
+        // the coordinator's init, where both it and the journal's are nil by
+        // construction, because `init` only loads and nothing has written
+        // yet. So a config directory that had filled up swallowed forty
+        // renames' worth of history — the window kept showing them, because
+        // `entries` is the in-memory array — and the next launch started
+        // with an empty history and nothing ever said why.
+        //
+        // In the footer and not in the history: the history is the thing
+        // that cannot be written.
+        if let unwritable = log.lastWriteFailure {
+            update {
+                $0.hasError = true
+                $0.lastResult = ($0.lastResult ?? "") + " " + Text.s(
+                    "Der Verlauf konnte nicht geschrieben werden (\(unwritable)) "
+                        + "— er überlebt einen Neustart nicht.",
+                    "The history could not be written (\(unwritable)) — it will "
+                        + "not survive a restart.")
+            }
+        }
+
         // Only for the files that are now in the library, and only for the
         // audio ones. Driving this off `libraryMode` instead meant a plan
         // scanned as video, applied after the user had switched the mode to
@@ -790,13 +1489,17 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
     /// were getting nothing.
     static func markingConflicts(in plan: [RenameItem],
                                  fileManager: FileManager = .default) -> [RenameItem] {
+        // Each path computed once. `primaryDestination` is a computed
+        // property that builds a URL and this function read it twice per
+        // item, then standardised the result both times — and a drop runs
+        // it over the whole accumulated list, so the cost was paid again on
+        // every drop.
+        let paths = plan.map { $0.primaryDestination.standardizedFileURL.path }
         var counts: [String: Int] = [:]
-        for item in plan {
-            counts[item.primaryDestination.standardizedFileURL.path, default: 0] += 1
-        }
-        return plan.map { item in
+        for path in paths { counts[path, default: 0] += 1 }
+        return plan.enumerated().map { index, item in
             var flagged = item
-            let path = item.primaryDestination.standardizedFileURL.path
+            let path = paths[index]
             if counts[path, default: 0] > 1 {
                 flagged.conflict = .duplicateInBatch
             } else if fileManager.fileExists(atPath: path) {
@@ -893,6 +1596,8 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         lock.lock()
         if let index = _items.firstIndex(where: { $0.id == id }) {
             _items[index].isAccepted = accepted
+            let path = _items[index].mediaFile.url.standardizedFileURL.path
+            if accepted { _excludedPaths.remove(path) } else { _excludedPaths.insert(path) }
         }
         lock.unlock()
         refreshSnapshotCounts()
@@ -902,6 +1607,12 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
     private func setAllAccepted(_ accepted: Bool) {
         lock.lock()
         for index in _items.indices { _items[index].isAccepted = accepted }
+        let paths = _items.map { $0.mediaFile.url.standardizedFileURL.path }
+        if accepted {
+            for path in paths { _excludedPaths.remove(path) }
+        } else {
+            _excludedPaths.formUnion(paths)
+        }
         let count = _items.count
         lock.unlock()
         update {
@@ -911,6 +1622,10 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
                     ? Text.s("Alle \(count) angehakt.", "All \(count) ticked.")
                     : Text.s("Alle abgehakt.", "All unticked."))
         }
+        // `setAccepted` has always done this and this one never did, so
+        // pressing "Keine" emptied every box and left the counts row saying
+        // "20 Vorschläge · 20 angehakt".
+        refreshSnapshotCounts()
     }
 
     private func undoLast() {
@@ -925,10 +1640,44 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         refreshSnapshotCounts()
     }
 
+    /// Writes anything still only in memory to disk, for a process that is
+    /// about to end.
+    ///
+    /// The history coalesces its writes over a quarter of a second, with a
+    /// trailing write so the last append is never the one that is lost — but
+    /// a trailing write needs the process to still be there when it fires.
+    /// `mediafin --once` finishes a scheduled rename and exits immediately;
+    /// closing the window drops out of `gtk_main` and falls off the end of
+    /// main. In both cases the tail of the history went with it, so the one
+    /// record of an unattended run was the one most likely to be incomplete.
+    ///
+    /// `flush()` has existed for exactly this since the coalescing was
+    /// added, and had callers only in the tests.
+    public func flushToDisk() {
+        log.flush()
+    }
+
     private func clearHistory() {
+        // Counted here, where it is true. The window names the cost in its
+        // question, but it reads that number at press time and this runs
+        // later on the serial queue -- so a rename that finished in between
+        // would make the question's "nothing to undo" a false promise. The
+        // button is gated now, which closes that for a press; the scheduled
+        // unattended run can still record a transaction while the question
+        // is on screen, and then this sentence is the only place the loss
+        // is stated. Silence was the problem.
+        let steps = journal.transactionCount
         log.clear()
         journal.clear()
-        update { $0.lastResult = Text.s("Verlauf geleert.", "History cleared.") }
+        update { $0.lastResult = steps == 0
+            ? Text.s("Verlauf geleert.", "History cleared.")
+            : Text.s(steps == 1
+                         ? "Verlauf geleert. 1 Rückgängig-Schritt ist weg."
+                         : "Verlauf geleert. \(steps) Rückgängig-Schritte "
+                             + "sind weg.",
+                     steps == 1
+                         ? "History cleared. 1 undo step is gone."
+                         : "History cleared. \(steps) undo steps are gone.") }
         refreshSnapshotCounts()
     }
 
@@ -937,23 +1686,61 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
     /// Lists videos in the library folders that are not already output of a
     /// previous conversion.
     private func findConvertible() {
+        // This walk is no longer queued, whatever happens below -- the
+        // refusal a few lines down included.
+        lock.lock()
+        _queuedConvertibleSearches = max(0, _queuedConvertibleSearches - 1)
+        lock.unlock()
         let settings = self.settings
         let roots = [settings.moviesFolder, settings.seriesFolder, settings.sourceFolder]
             .filter { !$0.isEmpty }
             .map { URL(fileURLWithPath: $0, isDirectory: true) }
 
         guard !roots.isEmpty else {
-            update { $0.lastResult = Text.s(
-                "Erst die Bibliotheksordner in den Einstellungen setzen.",
-                "Set your library folders in the settings first.") }
+            // A refusal is an answer, so it moves the generation too.
+            //
+            // Without it the panel in front of this window could only see
+            // the queue go quiet, which it read as "I looked and found
+            // nothing" -- while the one true sentence went to `lastResult`,
+            // on the window behind the panel. A fresh install hits this on
+            // the first press of Suchen.
+            update {
+                $0.lastResult = Text.s(
+                    "Erst die Bibliotheksordner in den Einstellungen setzen.",
+                    "Set your library folders in the settings first.")
+                $0.convertSearch = ConvertSearchReport(
+                    generation: $0.convertSearch.generation + 1,
+                    refused: true, found: 0)
+            }
             return
         }
 
-        update { $0.busy = true; $0.convertStatus = "Looking for files…" }
+        // So Stopp has something it can act on, with the same rule the
+        // scans use for dropping the flag afterwards: a stop aimed at
+        // something still queued must not be eaten by the walk finishing
+        // now.
+        lock.lock(); _findingConvertible = true; lock.unlock()
+        defer {
+            lock.lock()
+            _findingConvertible = false
+            if _scanDepth == 0, _queuedScans == 0, _queuedRenames == 0,
+               !_renameRunning, _queuedConvertibleSearches == 0 {
+                _stopRequested = false
+            }
+            lock.unlock()
+        }
+
+        update { $0.busy = true; $0.convertStatus = Text.s("Wird gesucht …", "Looking for files…") }
         var found: [ConversionCandidate] = []
         var seen: Set<String> = []
+        var stopped = false
         for root in roots {
+            if stopRequested { stopped = true; break }
             for url in FolderScan.videoFiles(under: root) {
+                // Between files as well as between roots: one library folder
+                // can hold the whole collection, and a Stopp that only takes
+                // effect at the next root is a Stopp that does nothing.
+                if stopRequested { stopped = true; break }
                 let path = url.standardizedFileURL.path
                 guard seen.insert(path).inserted else { continue }
                 // Never offer our own output: a second pass would re-encode
@@ -962,19 +1749,33 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
                 let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
                 found.append(ConversionCandidate(source: url, byteSize: Int64(size)))
             }
+            if stopped { break }
         }
 
         lock.lock(); _convertible = found; lock.unlock()
         update {
             $0.busy = false
             $0.convertStatus = nil
-            $0.lastResult = found.isEmpty
-                ? Text.s("Keine Dateien zum Konvertieren gefunden.",
-                         "No files to convert were found.")
-                : Text.s(
-                    "\(found.count) Datei\(found.count == 1 ? "" : "en") "
-                        + "könnte\(found.count == 1 ? "" : "n") konvertiert werden.",
-                    "\(found.count) file\(found.count == 1 ? "" : "s") could be converted.")
+            $0.convertSearch = ConvertSearchReport(
+                generation: $0.convertSearch.generation + 1,
+                refused: false, stopped: stopped, found: found.count)
+            if stopped {
+                // Said as a stop, not as a result: "nothing found" would be
+                // a claim about a library this walk never finished reading.
+                $0.lastResult = Text.s(
+                    "Suche gestoppt — \(found.count) Datei"
+                        + "\(found.count == 1 ? "" : "en") bis dahin gefunden.",
+                    "Search stopped — \(found.count) file"
+                        + "\(found.count == 1 ? "" : "s") found by then.")
+            } else {
+                $0.lastResult = found.isEmpty
+                    ? Text.s("Keine Dateien zum Konvertieren gefunden.",
+                             "No files to convert were found.")
+                    : Text.s(
+                        "\(found.count) Datei\(found.count == 1 ? "" : "en") "
+                            + "könnte\(found.count == 1 ? "" : "n") konvertiert werden.",
+                        "\(found.count) file\(found.count == 1 ? "" : "s") could be converted.")
+            }
         }
     }
 
@@ -989,10 +1790,36 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         let all = convertible
         let pending = all.filter { accepting.contains($0.id) }
         guard !pending.isEmpty else {
-            clearCancelRequest()
-            update { $0.lastResult = Text.s(
-                "Es war nichts angehakt, also wurde nichts konvertiert.",
-                "No files were ticked, so nothing was converted.") }
+            // Only when the user really ticked nothing.
+            //
+            // `pending` is also empty when the ids no longer match
+            // `_convertible`, which is what a SECOND queued run sees:
+            // the first run drops every file it converted off that list.
+            // So two clicks on Konvertieren closer together than the
+            // refresh timer ended with the footer saying "Es war nichts
+            // angehakt, also wurde nichts konvertiert." after six hours of
+            // encoding -- and a user who believed it pressed Suchen, was
+            // offered the untouched originals again, and re-encoded the lot
+            // into "… (2).mkv" duplicates.
+            if accepting.isEmpty {
+                update { $0.lastResult = Text.s(
+                    "Es war nichts angehakt, also wurde nichts konvertiert.",
+                    "No files were ticked, so nothing was converted.") }
+            }
+            // A run that did nothing is still a finished run, so the panel
+            // waiting on this must not be left holding the counts of the
+            // run before it.
+            update {
+                $0.convertRun = ConvertRunReport(
+                    generation: $0.convertRun.generation + 1,
+                    converted: 0, failed: 0, stopped: false)
+            }
+            // The same care as at the end of a real run, and for the same
+            // reason: a cancel that arrived while this run was queued is
+            // meant for whatever is still queued behind it.
+            lock.lock()
+            if _queuedConversionRuns == 0 { _cancelConversions = false }
+            lock.unlock()
             return
         }
         let options = settings.conversion.options
@@ -1001,7 +1828,9 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
             clearCancelRequest()
             update {
                 $0.lastResult = FFmpegConverter.ConverterError.ffmpegNotFound
-                    .errorDescription ?? "FFmpeg was not found."
+                    .errorDescription
+                    ?? Text.s("FFmpeg wurde nicht gefunden.",
+                              "FFmpeg was not found.")
             }
             return
         }
@@ -1012,6 +1841,24 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         // converts everything.
         var done = 0
         var failed = 0
+        // What this run actually dealt with, rather than a count of the
+        // first N candidates. A file the user stopped was neither
+        // converted nor failed, and it has to stay on the list.
+        var finished: Set<UUID> = []
+
+        // So Stopp has something to arm between two files.
+        //
+        // `cancelConversions` looked at `_runningConversion` and
+        // `_queuedConversionRuns`, and both are nil/0 in the gap between
+        // one encode ending and the next FFmpeg launching -- and for the
+        // whole stretch at the start of a run, because the queue counter is
+        // decremented the moment the run begins. A Stopp pressed there
+        // armed nothing and answered "Es konvertiert gerade nichts." while
+        // the bar was visibly moving.
+        lock.lock(); _conversionRunning = true; lock.unlock()
+        // A backstop only. The flag is cleared below under the same lock
+        // that drops the cancel flag; this catches a future early return.
+        defer { lock.lock(); _conversionRunning = false; lock.unlock() }
 
         for (index, candidate) in pending.enumerated() {
             lock.lock()
@@ -1052,14 +1899,48 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
                     }
                 )
                 done += 1
+                finished.insert(candidate.id)
                 log.append(RenameLogEntry(oldName: candidate.fileName,
                                           newName: destination.lastPathComponent,
                                           status: .converted))
             } catch {
-                failed += 1
                 // A half-written output is worse than none: it would look like
                 // a finished file to a media server.
                 try? FileManager.default.removeItem(at: destination)
+                // Our own Stopp is not a failure of the file.
+                //
+                // `cancelConversions` terminates the encoder, so the
+                // process exits non-zero and lands here -- and this used to
+                // count the user's own Stopp as an error: red row in the
+                // history with an FFmpeg exit code, "Mit Fehlern beendet"
+                // in the header, and the stopped file dropped off the
+                // candidate list although nothing had been done to it. The
+                // run already knows which it was; it reads the flag two
+                // dozen lines below.
+                lock.lock()
+                let weStoppedIt = _cancelConversions
+                lock.unlock()
+                guard !weStoppedIt else {
+                    log.append(RenameLogEntry(
+                        oldName: candidate.fileName,
+                        newName: candidate.fileName,
+                        status: .skipped,
+                        errorDescription: Text.s("Gestoppt, nicht angefasst.",
+                                                 "Stopped, left alone.")))
+                    break
+                }
+                failed += 1
+                // Not added to `finished`, so it stays on the candidate
+                // list -- like a stopped file, and for the same reason:
+                // nothing was done to it. The half-written output has just
+                // been deleted and the original is untouched, so the file
+                // is exactly as convertible as it was a minute ago, and
+                // dropping it meant the user had to search the whole
+                // library again to get back a file the program had failed
+                // to touch. It also took the panel's only way of telling
+                // "everything converted" from "everything failed": both
+                // emptied the list, and the panel read an empty list as
+                // success.
                 log.append(RenameLogEntry(oldName: candidate.fileName,
                                           newName: destination.lastPathComponent,
                                           status: .failure,
@@ -1068,12 +1949,35 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
             lock.lock(); _runningConversion = nil; lock.unlock()
         }
 
-        let converted = Set(pending.prefix(done + failed).map(\.id))
         lock.lock()
-        _convertible.removeAll { converted.contains($0.id) }
+        _convertible.removeAll { finished.contains($0.id) }
+        // Here and not only at the end of the loop body, because a `break`
+        // skips that line.
+        //
+        // The stop path breaks out of the `for` from inside the `catch`, and
+        // so does the cancel check at the top of each iteration. Both jumped
+        // over the one assignment that cleared this, and the tail did not
+        // clear it either, so a stopped run left the terminated Process
+        // stored for good. `cancelConversions` reads this pointer to decide
+        // whether there is anything to stop: with it dangling, every later
+        // press while idle armed the cancel flag, signalled a dead pid and
+        // answered "Stoppt nach der aktuellen Datei." with nothing running
+        // -- and the next conversion the user asked for died on its first
+        // file. It could not recover on its own: that run breaks before
+        // FFmpeg starts, so nothing overwrote the pointer.
+        _runningConversion = nil
         let stopped = _cancelConversions
-        // As for transfers, and the declaration of this flag already says
-        // why: it is "deliberately not cleared when a run starts" so that a
+        // Under the same lock acquisition as the line below, and that is the
+        // point. `cancelConversions` runs on the CALLER's thread -- it
+        // deliberately bypasses the serial queue so a Stopp cannot queue
+        // behind the run it is meant to stop -- so marking the run finished
+        // and dropping its cancel flag have to be one step. Two steps leave
+        // a window in which a Stopp sees a run in flight, arms the flag,
+        // and nothing clears it: the user's next conversion would die on
+        // the spot.
+        _conversionRunning = false
+        // The declaration of this flag already says why: it is
+        // "deliberately not cleared when a run starts" so that a
         // cancel pressed while a run was still queued is not lost. Clearing
         // it unconditionally at the end of a run lost it anyway, and the
         // queued run re-encoded everything the user had already stopped.
@@ -1088,6 +1992,9 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
             $0.convertDetail = nil
             $0.pendingConversions = 0
             $0.hasError = failed > 0
+            $0.convertRun = ConvertRunReport(
+                generation: $0.convertRun.generation + 1,
+                converted: done, failed: failed, stopped: stopped)
             $0.lastResult = Text.s("Konvertiert \(done)", "Converted \(done)")
                 + (failed > 0
                     ? Text.s(", \(failed) fehlgeschlagen", ", \(failed) failed") : "")
@@ -1098,12 +2005,143 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         refreshSnapshotCounts()
     }
 
+    /// Stops a scan, running or still queued.
+    private func cancelScan() {
+        lock.lock()
+        // Only arm the flag when there is something for it to apply to, as
+        // for conversions: a stray press while idle would otherwise sit
+        // there and kill the next scan the user actually asks for.
+        let hasTarget = _scanDepth > 0 || _queuedScans > 0
+            || _renameRunning || _queuedRenames > 0
+            || _findingConvertible || _queuedConvertibleSearches > 0
+        if hasTarget { _stopRequested = true }
+        lock.unlock()
+
+        guard hasTarget else {
+            update { $0.lastResult = Text.s("Es wird gerade nicht gesucht.",
+                                            "Nothing is being searched.") }
+            return
+        }
+        update {
+            $0.lastResult = Text.s("Stoppt vor der nächsten Datei.",
+                                   "Stopping before the next file.")
+        }
+    }
+
+    /// The note `enriching` left, cleared as it is taken.
+    /// The note `enriching` left, read without consuming it.
+    ///
+    /// It used to be taken here, which was enough for a scan the user asked
+    /// for and not for the unattended run: the scan appended it to
+    /// `lastResult`, and `applyRenames` then replaced that line wholesale
+    /// and set `hasError = false`. The run's own `notes` array exists for
+    /// exactly this hazard — its comment says a warning put in `lastResult`
+    /// first "vanishe[s] unread" — and was never given this note.
+    ///
+    /// Cleared by `endScan` when the outermost scan finishes, so the
+    /// scheduled run, which brackets its whole piece of work, can still read
+    /// it after the scan inside it has returned.
+    private func identificationNote() -> String {
+        lock.lock(); defer { lock.unlock() }
+        guard let note = _identificationNote else { return "" }
+        return " " + note
+    }
+
+    /// Says so, instead of leaving the run's own "N files ready" sentence
+    /// standing as if nothing had been interrupted.
+    private func reportIfScanWasCancelled() {
+        guard stopRequested else { return }
+        update {
+            $0.busy = false
+            $0.convertStatus = nil
+            $0.lastResult = Text.s(
+                "Suche abgebrochen. Was bis dahin gefunden wurde, steht in der "
+                    + "Liste — die Namen der restlichen Dateien sind nur geparst, "
+                    + "nicht nachgeschlagen.",
+                "Search cancelled. What was found so far is in the list — the "
+                    + "remaining files' names are parsed only, not looked up.")
+        }
+    }
+
+    /// Whether a cancel is armed. Read between files, never cached.
+    private var stopRequested: Bool {
+        lock.lock(); defer { lock.unlock() }; return _stopRequested
+    }
+
+    /// Re-applies the user's exclusions to a freshly built plan, and forgets
+    /// the paths that are no longer in it so the set cannot grow for ever.
+    ///
+    /// Called with `lock` held.
+    private func applyingExclusions(to plan: [RenameItem]) -> [RenameItem] {
+        guard !_excludedPaths.isEmpty else { return plan }
+        let present = Set(plan.map { $0.mediaFile.url.standardizedFileURL.path })
+        _excludedPaths.formIntersection(present)
+        guard !_excludedPaths.isEmpty else { return plan }
+        return plan.map { item in
+            var copy = item
+            if _excludedPaths.contains(item.mediaFile.url.standardizedFileURL.path) {
+                copy.isAccepted = false
+            }
+            return copy
+        }
+    }
+
+    /// A submitted scan command has reached the front of the queue.
+    ///
+    /// Separate from `beginScan` because the two answer different questions:
+    /// this one is about a command that was waiting its turn, and there is
+    /// no such command behind the watch poll, the scheduled run or the scan
+    /// after a download.
+    private func startedQueuedScan() {
+        lock.lock()
+        _queuedScans = max(0, _queuedScans - 1)
+        lock.unlock()
+    }
+
+    /// A scan is running, whoever asked for it.
+    ///
+    /// A depth rather than a flag: the scheduled run scans and then renames,
+    /// and nesting must not clear the stop flag half way through.
+    private func beginScan() {
+        lock.lock()
+        _scanDepth += 1
+        // A note from the previous run must not be attached to this one.
+        if _scanDepth == 1 { _identificationNote = nil }
+        lock.unlock()
+    }
+
+    /// Clears the stop request only when nothing else is running or waiting,
+    /// so a stop aimed at a queued run is not consumed by the one finishing
+    /// now. The conversion path learned this the hard way and re-encoded
+    /// everything the user had just stopped.
+    private func endScan() {
+        lock.lock()
+        _scanDepth = max(0, _scanDepth - 1)
+        if _scanDepth == 0 {
+            // Not when the inner scan returns: the scheduled run brackets
+            // the scan AND the rename, and it reads this note after the
+            // scan to put it in its own summary.
+            _identificationNote = nil
+        }
+        if _scanDepth == 0, _queuedScans == 0, _queuedRenames == 0,
+           !_renameRunning, !_findingConvertible,
+           _queuedConvertibleSearches == 0 {
+            _stopRequested = false
+        }
+        lock.unlock()
+    }
+
     private func cancelConversions() {
         lock.lock()
         // Only arm the flag when there is something it can apply to: a run in
         // flight, or one waiting on the queue. Otherwise a stray press while
         // idle would sit there and stop the next run the user asks for.
-        let hasTarget = _runningConversion != nil || _queuedConversionRuns > 0
+        //
+        // `_conversionRunning` is what covers the gaps: between two files,
+        // and from the start of a run until FFmpeg is actually up, both
+        // `_runningConversion` and `_queuedConversionRuns` read empty.
+        let hasTarget = _conversionRunning || _runningConversion != nil
+            || _queuedConversionRuns > 0
         if hasTarget { _cancelConversions = true }
         let process = _runningConversion
         lock.unlock()
@@ -1215,8 +2253,11 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
                 $0.downloadDetail = nil
                 $0.lastResult = message
             }
-            // Straight into the ordinary pipeline.
-            scanSourceFolder()
+            // Straight into the ordinary pipeline — adding the file that
+            // arrived, not rescanning the folder. A rescan replaces the
+            // whole plan, so finishing a download threw away whatever else
+            // was in the list.
+            addFiles([file])
         } catch {
             lock.lock()
             _runningDownload = nil
@@ -1300,26 +2341,51 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
 
     /// The lamps, worked out from what is on this machine right now plus the
     /// last answer each service gave.
+    /// The lamps. A read, never a measurement — see `_systemChecks`.
     public var systemChecks: [SystemCheck] {
+        lock.lock(); defer { lock.unlock() }
+        return _systemChecks
+    }
+
+    /// Works the lamps out and stores them. Must run on `queue` or on the
+    /// lamp timer's own tick, never on the thread that draws: it asks the
+    /// filesystem, and `FolderInspector` bounds that wait but does not
+    /// remove it.
+    private func refreshSystemChecks() {
         lock.lock()
         let probes = _probes
         let settings = _settings
         lock.unlock()
-        return SystemChecks.all(settings: settings,
-                                tools: RemoteTools.locate(),
-                                ffmpegAvailable: ffmpegAvailable,
-                                secrets: secretStore.configuredKeys(),
-                                probes: probes,
-                                // From the snapshot rather than recomputed:
-                                // this says whether the tick is actually
-                                // armed, which is the thing worth a lamp.
-                                nextScheduledRun: snapshot.nextScheduledRun)
+
+        let facts = folderInspector.facts(for: [
+            settings.sourceFolder, settings.moviesFolder, settings.seriesFolder,
+            // The fourth, which was missing: the music lamp had no facts to
+            // show because nothing probed the path.
+            settings.musicFolder,
+        ])
+        let checks = SystemChecks.all(settings: settings,
+                                      ffmpegAvailable: ffmpegAvailable,
+                                      secrets: secretStore.configuredKeys(),
+                                      probes: probes,
+                                      folders: facts,
+                                      // From the snapshot rather than
+                                      // recomputed: this says whether the
+                                      // tick is actually armed, which is the
+                                      // thing worth a lamp.
+                                      nextScheduledRun: snapshot.nextScheduledRun,
+                                      settingsProblem: settingsProblem)
+        lock.lock(); _systemChecks = checks; lock.unlock()
     }
+
+    /// For tests: works the lamps out now, on the calling thread.
+    func refreshSystemChecksForTesting() { refreshSystemChecks() }
 
     private func record(_ subject: ProbeSubject, ok: Bool, detail: String) {
         lock.lock()
         _probes[subject] = ProbeResult(ok: ok, detail: detail)
         lock.unlock()
+        // A connection test exists to change a lamp, so the lamp changes now.
+        lampQueue.async { [weak self] in self?.refreshSystemChecks() }
     }
 
     /// Only for tests: proposals, without needing a scan and a real folder.
@@ -1334,476 +2400,57 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         record(subject, ok: ok, detail: detail)
     }
 
-    private func testRemote() {
-        let target = settings.remote
-        guard target.isEnabled else {
-            update { $0.lastResult = Text.s("Der Server ist nicht eingeschaltet.",
-                                            "The server is not switched on.") }
-            return
-        }
-        let problems = target.problems()
-        guard problems.isEmpty else {
-            let message = problems.map(\.message).joined(separator: " ")
-            record(.remote, ok: false, detail: message)
-            update { $0.hasError = true; $0.lastResult = message }
-            return
-        }
-        var password: String?
-        if target.authentication == .password {
-            password = secretStore.value(for: .remotePassword)
-            guard let stored = password, !stored.isEmpty else {
-                let message = Text.s(
-                    "Für die Anmeldung per Passwort ist keines gespeichert.",
-                    "Password login is selected but no password is stored.")
-                record(.remote, ok: false, detail: message)
-                update { $0.hasError = true; $0.lastResult = message }
-                return
-            }
-        }
-        update { $0.lastResult = Text.s("Server wird geprüft …", "Testing the server…") }
-        let outcome = RemoteTransfer().check(target, password: password)
-        record(.remote, ok: outcome.ok, detail: outcome.detail)
-        update {
-            $0.hasError = !outcome.ok
-            $0.lastResult = outcome.ok
-                ? Text.s("Der Server antwortet. ", "The server answers. ") + outcome.detail
-                : Text.s("Der Server antwortet nicht: ",
-                         "The server does not answer: ") + outcome.detail
-        }
-    }
-
     /// Every test, one after another. Each is skipped when the thing it tests
     /// is not in use, so pressing this with a plain offline setup does not
     /// produce three complaints about services nobody asked for.
     private func checkEverything() {
         let settings = self.settings
-        if settings.identification == .localLLM { testLocalLLM() }
-        if !settings.jellyfinBaseURL.isEmpty { testJellyfin() }
-        if settings.remote.isEnabled { testRemote() }
+        // Kept, because these two write the one actionable sentence —
+        // "Modellserver nicht erreichbar: Could not connect to the server.
+        // [-1004]" — and the summary below used to overwrite it microseconds
+        // later. Which is a sentence the footer is redrawn from on a 500 ms
+        // timer, so it was never drawn at all.
+        var detail: [String] = []
+        if settings.identification == .localLLM {
+            testLocalLLM()
+            if let said = snapshot.lastResult { detail.append(said) }
+        }
+        if !settings.jellyfinBaseURL.isEmpty {
+            testJellyfin()
+            if let said = snapshot.lastResult { detail.append(said) }
+        }
 
+        // Recomputed here, not read from the cache. `record` stores a probe
+        // and then queues the lamp refresh onto another queue, and that
+        // refresh starts with bounded filesystem probes — so `systemChecks`
+        // was the array from before the button was pressed. The summary
+        // described the old state, `hasError` came out false with a server
+        // that had just refused the connection, and the header subtitle
+        // stayed on "Bereit" while the lamp went red a moment later.
+        refreshSystemChecks()
         let checks = systemChecks
         update {
             $0.hasError = SystemChecks.worst(checks) == .failed
             $0.lastResult = Text.s("Prüfung fertig: ", "Check finished: ")
                 + SystemChecks.summary(checks)
+                // After the summary, not instead of it: the summary says how
+                // many lamps are which colour, and this says what to do.
+                + (detail.isEmpty ? "" : " " + detail.joined(separator: " "))
         }
-    }
-
-    // MARK: Sending to the remote library
-
-    /// Every file of one proposal and where it goes on the server.
-    ///
-    /// Companions keep the primary's folder and their own name, which is what
-    /// the planner does locally — computed from `proposedRelativePath` rather
-    /// than from the companion's absolute destination, so an item whose
-    /// output root was never set still gets a sensible remote path.
-    /// Size in bytes, or nil when the file is not there.
-    static func fileSize(_ url: URL) -> Int64? {
-        guard let values = try? url.resourceValues(forKeys: [.fileSizeKey]),
-              let size = values.fileSize else { return nil }
-        return Int64(size)
-    }
-
-    /// Which of the server's three paths this item belongs under.
-    ///
-    /// The primary decides for its companions too: a subtitle belongs beside
-    /// its film, whatever the subtitle file itself looks like.
-    static func remoteLibrary(for item: RenameItem) -> RemoteTarget.Library {
-        RemoteTarget.Library.of(item.mediaFile.url, kind: item.mediaFile.parsed.kind)
-    }
-
-    static func remoteTransfers(for item: RenameItem)
-        -> [(local: URL, relative: String, library: RemoteTarget.Library)] {
-        let library = remoteLibrary(for: item)
-        var sends: [(local: URL, relative: String, library: RemoteTarget.Library)] = [
-            (item.mediaFile.url, item.proposedRelativePath, library)
-        ]
-        let folder = (item.proposedRelativePath as NSString).deletingLastPathComponent
-        for move in item.companionMoves {
-            let name = move.destination.lastPathComponent
-            sends.append((move.source, folder.isEmpty ? name : folder + "/" + name,
-                          library))
-        }
-        return sends
-    }
-
-    /// Copies the ticked files to the remote library, sorted into the folders
-    /// the proposals name.
-    ///
-    /// A copy, not a move: the local file stays unless the user has ticked
-    /// "remove the local copy".
-    ///
-    /// Undoable only in the sense that the local file is still here. What
-    /// arrived may have replaced something — neither rsync nor sftp is told
-    /// to refuse an existing file unless the conflict policy says to skip —
-    /// and nothing here can put that back. Two proposals that resolve to
-    /// the same remote path are refused outright rather than silently
-    /// collapsing into one file on the server.
-    private func transferFiles(accepting: Set<UUID>) {
-        lock.lock(); _queuedTransferRuns = max(0, _queuedTransferRuns - 1); lock.unlock()
-        send(items.filter { accepting.contains($0.id) })
-    }
-
-    /// Sends the given items, which need not be in `items` any more.
-    ///
-    /// Taking the items rather than their ids is what lets an unattended run
-    /// send the files it has just renamed: by then they have left `items` and
-    /// moved on disk, so there is nothing left to look up.
-    private func send(_ requested: [RenameItem]) {
-        let settings = self.settings
-        let target = settings.remote
-        guard target.isEnabled else {
-            clearTransferCancelRequest()
-            update { $0.lastResult = Text.s(
-                "Der Server ist in den Einstellungen nicht aktiviert.",
-                "The server is not switched on in the settings.") }
-            return
-        }
-        let problems = target.problems()
-        guard problems.isEmpty else {
-            clearTransferCancelRequest()
-            update {
-                $0.hasError = true
-                $0.lastResult = Text.s("Die Servereinstellungen sind unvollständig: ",
-                                       "The server settings are incomplete: ")
-                    + problems.map(\.message).joined(separator: " ")
-            }
-            return
-        }
-
-        // Asked for before anything is sent: finding out halfway through that
-        // there is no password means half a library in two places.
-        var password: String?
-        if target.authentication == .password {
-            password = secretStore.value(for: .remotePassword)
-            guard let stored = password, !stored.isEmpty else {
-                clearTransferCancelRequest()
-                update {
-                    $0.hasError = true
-                    $0.lastResult = Text.s(
-                        "Für die Anmeldung per Passwort ist keines gespeichert.",
-                        "Password login is selected but no password is stored.")
-                }
-                return
-            }
-        }
-
-        var pending = requested
-        guard !pending.isEmpty else {
-            clearTransferCancelRequest()
-            update { $0.lastResult = Text.s(
-                "Es war nichts angehakt, also wurde nichts gesendet.",
-                "No files were ticked, so nothing was sent.") }
-            return
-        }
-
-        // Two ticked proposals that resolve to the same remote path would
-        // arrive one on top of the other, leaving one file where the user
-        // had two — and, with "delete the local copy" on, destroying both
-        // originals. Refused, with both named, rather than resolved
-        // silently: which of a 1080p and a 720p rip to keep is not a
-        // decision this code should make on its own.
-        var collided = false
-        var byDestination: [String: [RenameItem]] = [:]
-        for item in pending {
-            // Keyed by the path a transfer would actually write, not by the
-            // relative path: with a path per kind, two files can share a
-            // relative path and land in different libraries without
-            // colliding at all.
-            let key = RemoteCommand.remotePath(
-                item.proposedRelativePath,
-                under: target.path(for: Self.remoteLibrary(for: item)))
-            byDestination[key, default: []].append(item)
-        }
-        let collisions = byDestination.filter { $0.value.count > 1 }
-        if !collisions.isEmpty {
-            let names = collisions.values.flatMap { $0 }
-                .map(\.originalFileName).sorted().joined(separator: ", ")
-            let colliding = Set(collisions.values.flatMap { $0 }.map(\.id))
-            pending = pending.filter { !colliding.contains($0.id) }
-            collided = true
-            update {
-                $0.hasError = true
-                $0.lastResult = Text.s(
-                    "Mehrere Dateien sollen an dieselbe Stelle auf dem Server: " + names
-                        + ". Diese wurden nicht gesendet — bitte eine davon abwählen "
-                        + "oder umbenennen.",
-                    "Several files would go to the same place on the server: " + names
-                        + ". They were not sent — please untick or rename one of them.")
-            }
-            guard !pending.isEmpty else {
-                clearTransferCancelRequest()
-                return
-            }
-        }
-
-        lock.lock(); _transferRunning = true; lock.unlock()
-        defer { lock.lock(); _transferRunning = false; lock.unlock() }
-
-        let transfer = RemoteTransfer()
-        var sent = 0
-        var failed = 0
-        var removed = 0
-        var finished: [UUID] = []
-
-        for (index, item) in pending.enumerated() {
-            lock.lock()
-            let cancelled = _cancelTransfers
-            lock.unlock()
-            if cancelled { break }
-
-            let sends = Self.remoteTransfers(for: item)
-            var itemFailed = false
-            // What actually arrived, so the deletion below can be driven by
-            // what happened rather than by what was planned.
-            var arrived: [URL] = []
-
-            for (offset, (local, relative, library)) in sends.enumerated() {
-                lock.lock()
-                let stopNow = _cancelTransfers
-                lock.unlock()
-                if stopNow { itemFailed = true; break }
-                let isPrimary = offset == 0
-                // A companion that has since been deleted is not a failure of
-                // the transfer. The primary vanishing is: without this the
-                // item counted as finished, left the list, and its subtitle
-                // was deleted while the video had gone nowhere.
-                guard let before = Self.fileSize(local) else {
-                    log.append(RenameLogEntry(
-                        oldName: local.lastPathComponent, newName: relative,
-                        status: isPrimary ? .failure : .skipped,
-                        errorDescription: Text.s("Die Datei ist nicht mehr da.",
-                                                 "The file is no longer there.")))
-                    if isPrimary {
-                        // Counted, not just flagged: `hasError` is derived
-                        // from this, and without it the run ended reporting
-                        // no error at all — "0 Dateien gesendet." with a
-                        // green badge, for a file that was lost.
-                        failed += 1
-                        itemFailed = true
-                        break
-                    }
-                    continue
-                }
-                update {
-                    $0.busy = true
-                    $0.transferring = true
-                    $0.transferProgress = Double(index) / Double(pending.count)
-                    $0.currentFile = local.lastPathComponent
-                    $0.pendingTransfers = pending.count - index - 1
-                    // sftp prints no progress at all — it draws its meter
-                    // only to a terminal, and never in batch mode. Saying so
-                    // beats a bar that sits at the same number for ten
-                    // minutes and looks like a stall.
-                    $0.transferDetail = target.transport.reportsProgress
-                        ? nil : Text.s("läuft – SFTP meldet keinen Fortschritt",
-                                       "running – SFTP reports no progress")
-                }
-                do {
-                    try transfer.send(
-                        local, relativePath: relative, library: library,
-                        to: target, password: password,
-                        // "Skip the file" is a promise about the server's
-                        // copy too, not only about a local rename.
-                        keepExisting: settings.conflictPolicy == .skip,
-                        onStart: { [weak self] process in
-                            guard let self else { return }
-                            self.lock.lock()
-                            self._runningTransfer = process
-                            self.lock.unlock()
-                        },
-                        progress: { [weak self] progress in
-                            // Within this file, scaled into the whole run, so
-                            // the bar moves once from start to finish rather
-                            // than resetting on every file.
-                            let whole = (Double(index) + progress.fraction)
-                                / Double(pending.count)
-                            self?.update {
-                                $0.transferProgress = whole
-                                $0.transferDetail = [
-                                    "\(Int((progress.fraction * 100).rounded())) %",
-                                    progress.speed,
-                                ].compactMap { $0 }.joined(separator: " · ")
-                            }
-                        }
-                    )
-                    // A file that grew or shrank while it was being sent
-                    // was still being written — a downloader had not
-                    // finished with it — so what arrived is a truncated
-                    // copy. rsync exits 0 for that quite happily.
-                    let after = Self.fileSize(local)
-                    if after != before {
-                        failed += 1
-                        itemFailed = true
-                        log.append(RenameLogEntry(
-                            oldName: local.lastPathComponent, newName: relative,
-                            status: .failure,
-                            errorDescription: Text.s(
-                                "Die Datei wurde während der Übertragung noch geschrieben; "
-                                    + "was angekommen ist, ist unvollständig. Erneut "
-                                    + "senden, wenn der Download fertig ist.",
-                                "The file was still being written during the transfer; "
-                                    + "what arrived is incomplete. Send it again once the "
-                                    + "download has finished.")))
-                    } else {
-                        sent += 1
-                        arrived.append(local)
-                        log.append(RenameLogEntry(oldName: local.lastPathComponent,
-                                                  newName: relative,
-                                                  status: .sent))
-                    }
-                } catch RemoteTransfer.Failure.alreadyThere(let remote) {
-                    // The policy says skip, and the server has it. Not a
-                    // failure — but not a success either, so the item stays
-                    // on the list and nothing local is deleted for it.
-                    itemFailed = true
-                    log.append(RenameLogEntry(oldName: local.lastPathComponent,
-                                              newName: relative,
-                                              status: .skipped,
-                                              errorDescription: Text.s(
-                                                "Liegt schon auf dem Server: \(remote)",
-                                                "Already on the server: \(remote)")))
-                } catch {
-                    failed += 1
-                    itemFailed = true
-                    log.append(RenameLogEntry(oldName: local.lastPathComponent,
-                                              newName: relative,
-                                              status: .failure,
-                                              errorDescription: Self.describe(error)))
-                }
-                lock.lock(); _runningTransfer = nil; lock.unlock()
-            }
-
-            // Only a proposal whose every file arrived is taken off the list
-            // and, if asked, removed here: a half-sent item must stay visible
-            // so it can be sent again.
-            if !itemFailed {
-                finished.append(item.id)
-                if target.removeLocalAfterSend {
-                    // `arrived`, never `sends`: the planned list includes
-                    // files that were skipped, that failed, and that were
-                    // never there. Deleting from it destroyed local copies
-                    // of files the server had never received.
-                    for local in arrived {
-                        do {
-                            try FileManager.default.removeItem(at: local)
-                            removed += 1
-                        } catch {
-                            log.append(RenameLogEntry(
-                                oldName: local.lastPathComponent,
-                                newName: "—",
-                                status: .failure,
-                                errorDescription: Text.s(
-                                    "Gesendet, aber die lokale Datei ließ sich nicht "
-                                        + "löschen: ",
-                                    "Sent, but the local file could not be deleted: ")
-                                    + Self.describe(error)))
-                        }
-                    }
-                }
-            }
-        }
-
-        let done = Set(finished)
-        lock.lock()
-        _items.removeAll { done.contains($0.id) }
-        let stopped = _cancelTransfers
-        // Only when no other run is waiting. The page redirects the moment a
-        // button is pressed, so pressing "send" twice leaves two runs on the
-        // queue; a cancel during the first was armed for both — that is why
-        // `cancelTransfers` arms it when `_queuedTransferRuns > 0`. Clearing
-        // it here unconditionally threw that away, and the queued run then
-        // sent every file the cancel was meant to save and, with "remove the
-        // local copy" on, deleted each original afterwards. The interface had
-        // already confirmed the stop.
-        if _queuedTransferRuns == 0 { _cancelTransfers = false }
-        lock.unlock()
-
-        update {
-            $0.busy = false
-            $0.transferring = false
-            $0.transferProgress = 1
-            $0.transferDetail = nil
-            $0.currentFile = nil
-            $0.pendingTransfers = 0
-            // `collided` too: the refusal set hasError and this line used
-            // to clear it again, so the warning vanished with the run.
-            $0.hasError = failed > 0 || collided
-            $0.lastResult = Text.s("\(sent) Datei\(sent == 1 ? "" : "en") gesendet",
-                                   "\(sent) file\(sent == 1 ? "" : "s") sent")
-                + (failed > 0
-                    ? Text.s(", \(failed) fehlgeschlagen", ", \(failed) failed") : "")
-                + (stopped ? Text.s(" — vorzeitig gestoppt", " — stopped early") : "")
-                + (target.removeLocalAfterSend
-                    ? Text.s(", \(removed) lokal gelöscht.",
-                             ", \(removed) deleted locally.")
-                    : Text.s(". Die lokalen Dateien sind noch da.",
-                             ". The local files are still there."))
-        }
-        refreshSnapshotCounts()
-    }
-
-    private func cancelTransfers() {
-        lock.lock()
-        // `_transferRunning` as well as the process: between two files there
-        // is no process, and the queued count was already spent on the first
-        // line of the run — so a cancel pressed in that gap used to be
-        // dropped, with the interface reporting that nothing was running
-        // while the next file went out (and, with the setting on, while the
-        // last one was deleted).
-        let hasTarget = _runningTransfer != nil || _queuedTransferRuns > 0 || _transferRunning
-        if hasTarget { _cancelTransfers = true }
-        let process = _runningTransfer
-        lock.unlock()
-
-        guard hasTarget else {
-            update { $0.lastResult = Text.s("Es läuft keine Übertragung.",
-                                            "No transfer is running.") }
-            return
-        }
-        // rsync leaves a partial file behind on purpose, so the next run
-        // picks up where this one stopped instead of starting over.
-        process?.terminate()
-        update {
-            $0.lastResult = process == nil
-                ? Text.s("Stoppt vor der nächsten Datei.",
-                         "Stopping before the next file.")
-                : Text.s("Stoppt nach der aktuellen Datei.",
-                         "Stopping after the current file.")
-        }
-    }
-
-    /// Clears a cancel request, unless it still covers a queued run.
-    ///
-    /// Called on the paths where a run gives up before sending anything — no
-    /// server, no password, nothing ticked. Those are exactly the paths where
-    /// the cancel is still owed to the run behind this one, and clearing it
-    /// unconditionally handed that run a clean slate.
-    private func clearTransferCancelRequest() {
-        lock.lock()
-        if _queuedTransferRuns == 0 { _cancelTransfers = false }
-        lock.unlock()
-    }
-
-    /// Only for tests: arm a cancel with `queuedRuns` still waiting, end a
-    /// run, and report whether the cancel survived.
-    func cancelSurvivesRunEndForTesting(queuedRuns: Int) -> Bool {
-        lock.lock()
-        _queuedTransferRuns = queuedRuns
-        _cancelTransfers = true
-        lock.unlock()
-        clearTransferCancelRequest()
-        lock.lock(); defer { lock.unlock() }; return _cancelTransfers
-    }
-
-    static func describe(_ error: Error) -> String {
-        (error as? LocalizedError)?.errorDescription ?? String(describing: error)
     }
 
     // MARK: Watching the import folder
 
     /// True while the import folder is being watched.
-    var isWatching: Bool { queue.sync { watchTimer != nil } }
+    /// Whether the watch timer is really armed.
+    ///
+    /// Named *ForTesting because that is what it is: the program reads
+    /// `snapshot.watchActive`, and this reads the timer itself. The tests
+    /// assert both, deliberately — they once disagreed, and with watching
+    /// on and no import folder nothing was polled while every lamp said
+    /// "active". A test that reads only the published flag cannot catch
+    /// that, and nor can one that reads only the timer.
+    var isWatchingForTesting: Bool { queue.sync { watchTimer != nil } }
 
     /// Starts or stops watching to match the settings. Runs on `queue`.
     private func updateWatchState() {
@@ -1932,12 +2579,26 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
     /// The work of one unattended run. Separate from `runIfDue` so the tests
     /// can run it without waiting for a timer or faking a clock.
     func performScheduledRun(_ schedule: Schedule) {
+        // The whole run counts as one piece of work: a scan, and the rename
+        // it leads to. Without this the scan's own bookkeeping reaches zero
+        // between the two and clears the stop flag, so a Stop pressed during
+        // identification was honoured by the scan — and then the rename went
+        // ahead and moved every file into the library under a parse-only
+        // name, which is the one thing the press was meant to prevent.
+        beginScan()
+        defer { endScan() }
         // A scan that could not run at all — no import folder, the folder
         // gone, ffprobe missing — leaves the previous plan in place. Acting
         // on it would rename and send a list the user last saw hours ago,
         // against a folder that has moved on since. So the run stops here
         // and the reason it gives is the scan's own.
         guard scanSourceFolder() else { return }
+        // Stop means stop, including the rename this run was going to do.
+        // Without this the press was answered ("Stoppt vor der nächsten
+        // Datei"), identification was indeed abandoned — and then every file
+        // was moved into the library under a parse-only name anyway, which
+        // is the one outcome the user was trying to prevent.
+        guard !stopRequested else { return }
         let scanned = items.filter(\.isAccepted)
         guard !scanned.isEmpty else { return }
 
@@ -1960,61 +2621,42 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
             }
         }
 
-        var toSend = scanned
-
-        if schedule.alsoRename {
-            // Without a library root the planner proposes a folder beside the
-            // file itself, so an unattended run buries it one level deeper
-            // every night: Film/Film.mkv, then Film/Film/Film.mkv. Somebody
-            // looking at the proposal would see that; nobody is looking here.
-            let (renameable, blocked) = Self.unattendedRenameable(scanned,
-                                                                  settings: settings)
-            if !blocked.isEmpty {
-                failedSomething = true
-                notes.append(Text.s(
-                    "\(blocked.count) Datei" + (blocked.count == 1 ? " wurde" : "en wurden")
-                        + " nicht umbenannt, weil der Zielordner in den Einstellungen "
-                        + "fehlt — sonst landen sie in Unterordnern neben sich selbst.",
-                    "\(blocked.count) file\(blocked.count == 1 ? " was" : "s were") not "
-                        + "renamed because the target folder is missing from the settings "
-                        + "— they would end up in subfolders beside themselves."))
-                for item in blocked {
-                    log.append(RenameLogEntry(
-                        oldName: item.originalFileName, newName: "—",
-                        status: .skipped,
-                        errorDescription: Text.s(
-                            "Geplanter Lauf: kein Zielordner gesetzt.",
-                            "Scheduled run: no target folder is set.")))
-                }
-            }
-            guard !renameable.isEmpty else { return }
-
-            let outcome = applyRenames(accepting: Set(renameable.map(\.id)))
-            // Only what actually moved, and from where it actually landed.
-            // This used to re-scan the import folder instead, which finds
-            // precisely the files whose rename had *failed* — so "also send"
-            // sent the failures and left the library untouched.
-            toSend = renameable.compactMap { item in
-                guard let now = outcome?.landed[item.id] else { return nil }
-                var moved = item
-                moved.mediaFile.url = now
-                return moved
-            }
+        // Before the rename, which replaces `lastResult` and clears
+        // hasError: this is the hazard `notes` exists for.
+        let identification = identificationNote()
+        if !identification.isEmpty {
+            failedSomething = true
+            notes.append(identification.trimmingCharacters(in: .whitespaces))
         }
 
-        guard schedule.alsoSend else { return }
-        guard settings.remote.isEnabled else {
+        guard schedule.alsoRename else { return }
+
+        // Without a library root the planner proposes a folder beside the
+        // file itself, so an unattended run buries it one level deeper every
+        // night: Film/Film.mkv, then Film/Film/Film.mkv. Somebody looking at
+        // the proposal would see that; nobody is looking here.
+        let (renameable, blocked) = Self.unattendedRenameable(scanned,
+                                                              settings: settings)
+        if !blocked.isEmpty {
             failedSomething = true
             notes.append(Text.s(
-                "Senden war geplant, aber der Server ist abgeschaltet.",
-                "Sending was scheduled, but the server is switched off."))
-            return
+                "\(blocked.count) Datei" + (blocked.count == 1 ? " wurde" : "en wurden")
+                    + " nicht umbenannt, weil der Zielordner in den Einstellungen "
+                    + "fehlt — sonst landen sie in Unterordnern neben sich selbst.",
+                "\(blocked.count) file\(blocked.count == 1 ? " was" : "s were") not "
+                    + "renamed because the target folder is missing from the settings "
+                    + "— they would end up in subfolders beside themselves."))
+            for item in blocked {
+                log.append(RenameLogEntry(
+                    oldName: item.originalFileName, newName: "—",
+                    status: .skipped,
+                    errorDescription: Text.s(
+                        "Geplanter Lauf: kein Zielordner gesetzt.",
+                        "Scheduled run: no target folder is set.")))
+            }
         }
-        // Reached whether or not renaming was asked for: "also send" used to
-        // sit behind `guard alsoRename`, so ticking send on its own did
-        // nothing at all while the summary promised it.
-        guard !toSend.isEmpty else { return }
-        send(toSend)
+        guard !renameable.isEmpty else { return }
+        applyRenames(accepting: Set(renameable.map(\.id)))
     }
 
     /// Of a scanned plan, the items an unattended run may safely rename, and
@@ -2059,6 +2701,15 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
     }
 
     /// Only for tests: one tick of the schedule, synchronously.
+    /// Whether the schedule timer is actually armed.
+    ///
+    /// Read off the timer rather than off the setting: with an impossible
+    /// time the setting says "enabled" and nothing is armed, which is
+    /// exactly the state that used to be invisible.
+    var isScheduleArmedForTesting: Bool {
+        queue.sync { scheduleTimer != nil }
+    }
+
     func runIfDueForTesting() {
         queue.sync { self.runIfDue() }
     }
@@ -2094,11 +2745,38 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         let appeared = watchScanner.poll(directory: root).filter(VideoFileTypes.isVideo)
         guard !appeared.isEmpty else { return }
 
-        scanSourceFolder()
+        // One piece of work, so the scan's own bookkeeping does not clear a
+        // stop before the lines below can see it.
+        beginScan()
+        defer { endScan() }
+        // What appeared, added — not a rescan that replaces the plan.
+        //
+        // `scanSourceFolder` assigns `_items = plan` wholesale, so a poll
+        // every fifteen seconds threw away everything the user had dropped
+        // in from elsewhere and was working through. `addFiles` promises the
+        // opposite in its own comment — "a drop that cleared the list would
+        // lose the twenty proposals already being worked through" — and a
+        // watch poll did clear it. It also re-made every item with a fresh
+        // UUID, which is what made the window rebuild its rows.
+        addFiles(appeared)
+        // Not over the top of the cancellation the scan has just reported:
+        // "5 new files are waiting for you" would bury it, and this is the
+        // path on which nobody is watching the window anyway.
+        guard !stopRequested else { return }
         let count = appeared.count
         update {
-            $0.lastResult = "\(count) new file\(count == 1 ? "" : "s") appeared in the import "
-                + "folder and \($0.totalItems == 1 ? "is" : "are") waiting for you to confirm."
+            // Through Text.s like everything else. This one sentence was
+            // written in English only, in a program whose first language is
+            // German, and it is the sentence the watch path shows most.
+            $0.lastResult = count == 1
+                ? Text.s("Eine neue Datei im Importordner wartet auf deine "
+                             + "Bestätigung.",
+                         "One new file appeared in the import folder and is "
+                             + "waiting for you to confirm.")
+                : Text.s("\(count) neue Dateien im Importordner warten auf deine "
+                             + "Bestätigung.",
+                         "\(count) new files appeared in the import folder and are "
+                             + "waiting for you to confirm.")
         }
     }
 
@@ -2111,7 +2789,19 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
 
     /// The provider chain implied by the settings. Returns nil when titles are
     /// only parsed from the file name, so no lookup happens at all.
+    /// Overrides the provider the settings would choose. Only for tests:
+    /// "the model server has stopped answering" needs a server that answers
+    /// nothing, and standing one up is a slower and less exact way of saying
+    /// the same thing.
+    func setEnrichmentProviderForTesting(_ provider: MetadataProvider?) {
+        lock.lock(); _providerOverride = provider; lock.unlock()
+    }
+
     func enrichmentProvider(_ settings: WebSettings) -> MetadataProvider? {
+        lock.lock()
+        let override = _providerOverride
+        lock.unlock()
+        if let override { return override }
         switch settings.identification {
         case .offline:
             return nil
@@ -2151,8 +2841,10 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         let hasJellyfin = !settings.jellyfinBaseURL.isEmpty
             && secretStore.value(for: .jellyfinToken) != nil
         let done = log.entries.filter { $0.status == .success }.count
+        let undoable = journal.transactionCount
         update {
             $0.totalItems = count
+            $0.undoableBatches = undoable
             // The ones that would actually be acted on, which is not the
             // same as the number proposed — it used to be set to `count`,
             // so the window printed the same number twice.
@@ -2165,8 +2857,6 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
             // every lamp and the status row said "active".
             //   $0.watchActive = settings.watchSourceFolder
             $0.jellyfinConfigured = hasJellyfin
-            $0.remoteConfigured = settings.remote.isEnabled
-                && settings.remote.problems().isEmpty
         }
     }
 
@@ -2183,6 +2873,26 @@ public final class AppCoordinator: WebCommandSink, @unchecked Sendable {
         semaphore.wait()
     }
 
+    /// Runs async work from the serial queue and waits for it.
+    ///
+    /// Sync-over-async, which is the shape Swift's cooperative pool does not
+    /// like: a `Task` that cannot get a thread while the waiter holds one is
+    /// a deadlock. It is stable here for one reason, and the reason is worth
+    /// knowing before anyone adds a caller — **every piece of work passed in
+    /// runs on URLSession's own threads, not on the cooperative pool.** The
+    /// pool is only used for the continuation.
+    ///
+    /// So: do not pass work that is itself CPU-bound `async` code, and do
+    /// not nest one of these inside another. If the coordinator ever needs
+    /// that, the answer is to make command execution async rather than to
+    /// make this cleverer. The CI step named "Strict concurrency, as a
+    /// report" is what will say when that day has come.
+    ///
+    /// Left as it is deliberately. Making the whole serial-queue
+    /// architecture async today would be a large change against a risk
+    /// nothing in this program can currently trigger — and the practical
+    /// harm that did exist (hours of uninterruptible timeouts holding the
+    /// queue) is gone, through a cancel flag and a give-up rule instead.
     private func runAndWaitReturning<T: Sendable>(
         _ work: @escaping @Sendable () async -> T
     ) -> T? {

@@ -15,28 +15,48 @@ final class PlannerLibraryTests: XCTestCase {
                   parsed: ParsedRelease(originalFileName: "x", title: "Interstellar", year: 2014, kind: .movie))
     }
 
-    func testMovieMovesToLibrary() {
-        let plan = planner.makePlan(for: [movie()], libraryRoot: library)
+    func testAMovieGoesToTheRootItIsGiven() {
+        let plan = planner.makePlan(for: [movie()], outputRoot: library)
         XCTAssertTrue(plan[0].primaryDestination.path.hasPrefix("/Library/"))
-        XCTAssertEqual(plan[0].proposedRelativePath, "Interstellar (2014)/Interstellar (2014).mkv")
+        XCTAssertEqual(plan[0].proposedRelativePath,
+                       "Interstellar (2014)/Interstellar (2014).mkv")
     }
 
-    func testCompleteSeasonMovesToLibrary() {
-        let plan = planner.makePlan(for: [ep("Show", 1, 1), ep("Show", 1, 2)], libraryRoot: library)
-        for item in plan {
-            XCTAssertEqual(item.outputRoot, library, "complete-season episodes go to the library")
+    /// Every episode, not only the ones whose season is complete.
+    ///
+    /// There was a rule here: an episode moved into the library only once
+    /// its season was contiguous from episode 1 with at least two present,
+    /// and a partial season was renamed where it lay. It was documented, it
+    /// had its own analyser, and seven tests covered the analyser while
+    /// `testIncompleteSeasonStaysInPlace` covered the planner — and none of
+    /// it ran in the program, which passed `libraryRoot: nil` and chose the
+    /// roots itself. Asked about it, the answer was to take the rule out
+    /// rather than switch it on: for a series that arrives weekly it would
+    /// hold every episode in the import folder until the season ended.
+    func testEveryEpisodeGoesToTheRootIncludingALoneOne() {
+        let lone = planner.makePlan(for: [ep("Solo", 1, 1)], outputRoot: library)
+        XCTAssertEqual(lone[0].outputRoot, library,
+                       "a single episode was held back")
+        XCTAssertTrue(lone[0].primaryDestination.path.hasPrefix("/Library/"))
+
+        let whole = planner.makePlan(for: [ep("Show", 1, 1), ep("Show", 1, 2)],
+                                     outputRoot: library)
+        for item in whole {
+            XCTAssertEqual(item.outputRoot, library)
         }
+        XCTAssertEqual(whole.count, 2)
     }
 
-    func testIncompleteSeasonStaysInPlace() {
-        // Episode 1 only -> not a complete season -> renamed in place.
-        let file = ep("Solo", 1, 1)
-        let plan = planner.makePlan(for: [file], libraryRoot: library)
-        XCTAssertEqual(plan[0].outputRoot, file.url.deletingLastPathComponent())
-        XCTAssertFalse(plan[0].primaryDestination.path.hasPrefix("/Library/"))
+    /// And a gap in the middle changes nothing either, which is the case the
+    /// removed rule cared about most.
+    func testAGapInTheSeasonChangesNothing() {
+        let plan = planner.makePlan(for: [ep("Show", 1, 1), ep("Show", 1, 5)],
+                                    outputRoot: library)
+        XCTAssertEqual(plan.count, 2)
+        for item in plan { XCTAssertEqual(item.outputRoot, library) }
     }
 
-    func testNoLibraryKeepsInPlace() {
+    func testNoRootKeepsThingsInPlace() {
         let file = movie()
         let plan = planner.makePlan(for: [file])
         XCTAssertEqual(plan[0].outputRoot, file.url.deletingLastPathComponent())

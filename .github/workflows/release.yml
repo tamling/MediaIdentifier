@@ -7,118 +7,6 @@ permissions:
   contents: write
 
 jobs:
-  release:
-    name: Build & publish .app
-    runs-on: macos-15
-    timeout-minutes: 60
-    # Serialised against the Linux job only so the two do not both try to
-    # create the release tag. Linux goes first: its artefacts are the ones
-    # people are usually waiting for, and the Mac build is the slower half.
-    needs: linux
-    steps:
-      - uses: actions/checkout@v4
-      - uses: maxim-lobanov/setup-xcode@v1
-        with:
-          xcode-version: latest-stable
-      - name: Install XcodeGen
-        run: brew install xcodegen
-      - name: Generate Xcode project
-        run: xcodegen generate
-      - name: Build (Release, unsigned)
-        run: |
-          set -o pipefail
-          xcodebuild \
-            -project Mediafin.xcodeproj \
-            -scheme Mediafin \
-            -configuration Release \
-            -derivedDataPath build \
-            -destination 'generic/platform=macOS' \
-            ARCHS="arm64 x86_64" ONLY_ACTIVE_ARCH=NO \
-            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
-            build
-      - name: Package & sign .app
-        env:
-          # Set these as repository secrets to get a Developer ID-signed,
-          # notarised build. If DEVELOPER_ID_P12_BASE64 is empty, the workflow
-          # falls back to an ad-hoc signature (works locally after removing the
-          # quarantine flag). See docs/SIGNING.md.
-          DEVELOPER_ID_P12_BASE64: ${{ secrets.DEVELOPER_ID_P12_BASE64 }}
-          DEVELOPER_ID_P12_PASSWORD: ${{ secrets.DEVELOPER_ID_P12_PASSWORD }}
-          DEVELOPER_ID_NAME: ${{ secrets.DEVELOPER_ID_NAME }}
-          NOTARY_APPLE_ID: ${{ secrets.NOTARY_APPLE_ID }}
-          NOTARY_TEAM_ID: ${{ secrets.NOTARY_TEAM_ID }}
-          NOTARY_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
-        run: |
-          set -euo pipefail
-          APP=$(find build/Build/Products/Release -maxdepth 1 -name '*.app' | head -1)
-          echo "Built: $APP"
-          ARCHS_OUT=$(lipo -archs "$APP/Contents/MacOS/Mediafin")
-          echo "Architectures: $ARCHS_OUT"
-          # Fail loudly rather than ship a single-arch build by accident.
-          case "$ARCHS_OUT" in
-            *arm64*x86_64*|*x86_64*arm64*) echo "Universal binary OK." ;;
-            *) echo "::error::Expected a universal binary but got: $ARCHS_OUT"; exit 1 ;;
-          esac
-
-          if [ -z "${DEVELOPER_ID_P12_BASE64}" ]; then
-            echo "No signing secrets set → ad-hoc signature."
-            codesign --force --deep --sign - "$APP"
-            ditto -c -k --keepParent "$APP" Mediafin.app.zip
-            exit 0
-          fi
-
-          echo "Signing secrets present → Developer ID signing + notarisation."
-          # Import the certificate into a temporary keychain.
-          KEYCHAIN="$RUNNER_TEMP/signing.keychain-db"
-          KEYCHAIN_PW=$(uuidgen)
-          security create-keychain -p "$KEYCHAIN_PW" "$KEYCHAIN"
-          security set-keychain-settings -lut 21600 "$KEYCHAIN"
-          security unlock-keychain -p "$KEYCHAIN_PW" "$KEYCHAIN"
-          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
-          echo "$DEVELOPER_ID_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
-          security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN" -P "$DEVELOPER_ID_P12_PASSWORD" \
-            -T /usr/bin/codesign
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PW" "$KEYCHAIN" >/dev/null
-
-          # Sign with Hardened Runtime + secure timestamp (required for notarisation).
-          codesign --force --deep --options runtime --timestamp \
-            --sign "$DEVELOPER_ID_NAME" "$APP"
-          codesign --verify --deep --strict --verbose=2 "$APP"
-
-          # Notarise the zipped app, then staple the ticket so it works offline.
-          ditto -c -k --keepParent "$APP" Mediafin.app.zip
-          xcrun notarytool submit Mediafin.app.zip \
-            --apple-id "$NOTARY_APPLE_ID" --team-id "$NOTARY_TEAM_ID" \
-            --password "$NOTARY_PASSWORD" --wait
-          xcrun stapler staple "$APP"
-          # Re-zip so the published archive contains the stapled ticket.
-          ditto -c -k --keepParent "$APP" Mediafin.app.zip
-          security delete-keychain "$KEYCHAIN" || true
-      - name: Remove stale release assets
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          # Drop any previously published asset that isn't the current build,
-          # so only Mediafin.app.zip remains on the "latest" release.
-          gh release view latest --repo "$GITHUB_REPOSITORY" --json assets \
-            --jq '.assets[].name' 2>/dev/null | while read -r name; do
-              case "$name" in
-                Mediafin.app.zip|mediafin-linux-x86_64.tar.gz) continue ;;
-                mediafin-linux-x86_64.deb) continue ;;
-              esac
-              echo "Deleting stale asset: $name"
-              gh release delete-asset latest "$name" --repo "$GITHUB_REPOSITORY" -y || true
-            done
-      - name: Publish to "latest" release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: latest
-          name: Latest build (macOS universal + Linux x86_64)
-          prerelease: true
-          files: Mediafin.app.zip
-
-  # The Linux binary is what makes Mediafin usable without a Swift toolchain
-  # on the target machine.
   linux:
     name: Build & publish the Linux binary
     runs-on: ubuntu-latest
@@ -126,6 +14,8 @@ jobs:
     container: swift:6.0-jammy
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
       - name: Build (Release, static stdlib)
         shell: bash
         run: |
@@ -152,7 +42,7 @@ jobs:
       # build directory: a rebuild with different flags can replace the
       # static binary with a dynamic one, and the release would then need a
       # Swift installation it promises not to need.
-      - name: Set the server binary aside
+      - name: Set the headless runner aside
         shell: bash
         run: |
           set -euo pipefail
@@ -250,9 +140,34 @@ jobs:
           # machine with "error while loading shared libraries". It shipped
           # exactly once that way. ldd does not care what is installed.
           check "window needs no Swift runtime"  '! ldd /usr/bin/mediafin-gtk | grep -qi swift'
-          check "server needs no Swift runtime"  '! ldd /usr/bin/mediafin | grep -qi swift'
+          check "runner needs no Swift runtime"  '! ldd /usr/bin/mediafin | grep -qi swift'
           check "desktop entry installed"      'test -f /usr/share/applications/mediafin.desktop'
           check "desktop entry points at it"   'grep -q "^Exec=mediafin-gtk$" /usr/share/applications/mediafin.desktop'
+          # The icon, at every size an icon theme looks for.
+          #
+          # The name is READ from the entry rather than written here a second
+          # time, because the way this breaks is a rename on one side only.
+          # What the user then sees is a blank tile in the application menu,
+          # which looks exactly like a theme that has not refreshed yet --
+          # and before this the entry named `multimedia-video-player`, a
+          # stock name borrowed from whatever theme happened to be
+          # installed, so there was nothing to rename and nothing to check.
+          #
+          # Asserted against the package rather than the filesystem, for the
+          # same reason as the man page: this base image carries dpkg
+          # path-exclude rules, and what matters is what a real installation
+          # would get.
+          icon="$(sed -n 's/^Icon=//p' /usr/share/applications/mediafin.desktop | tr -d '\r')"
+          echo "the desktop entry asks for icon: ${icon:-nothing}"
+          check "desktop entry names an icon"  'test -n "$icon"'
+          contents="$(dpkg-deb --contents mediafin-linux-x86_64.deb)"
+          missing=""
+          for size in 512 256 128 64 48 32; do
+            printf '%s\n' "$contents" \
+              | grep -q "usr/share/icons/hicolor/${size}x${size}/apps/${icon}.png" \
+              || missing="$missing ${size}"
+          done
+          check "icon ships at every size"     'test -z "$missing"'
           # The package must pull GTK in, or the menu entry starts nothing.
           check "GTK is a declared dependency" 'dpkg-deb --field mediafin-linux-x86_64.deb Depends | grep -q libgtk-3-0'
           # Both report the same version, which is the reason it is read from
@@ -283,27 +198,21 @@ jobs:
           check "not zstd-compressed"          '! file mediafin-linux-x86_64.deb | grep -q zst'
           check "xz-compressed"                'file mediafin-linux-x86_64.deb | grep -q "data compression xz"'
 
-          echo "=== serves HTTPS after a plain apt install ==="
+          # There is no server to curl any more. What the installed package
+          # has to prove is that the headless runner works from a plain apt
+          # install: --once has to finish, because the systemd unit and any
+          # cron line the user writes both depend on it returning.
+          echo "=== the headless runner works after a plain apt install ==="
           export MEDIAFIN_CONFIG_DIR="$PWD/.deb-smoke"
-          mediafin --port 8741 --bind local > deb.log 2>&1 &
-          PID=$!
-          ready=0
-          for _ in $(seq 1 60); do
-            if curl -sk --max-time 2 https://127.0.0.1:8741/healthz >/dev/null 2>&1; then
-              ready=1; break
-            fi
-            kill -0 $PID 2>/dev/null || break
-            sleep 0.5
-          done
-          if [ "$ready" = 1 ]; then
-            body="$(curl -sk --max-time 5 https://127.0.0.1:8741/healthz)"
-            check "healthz answers ok"         '[ "'"$body"'" = ok ]'
+          if timeout 90 mediafin --once > deb.log 2>&1; then
+            check "--once finished"            'true'
           else
-            echo "FAIL  : server did not come up"
+            echo "FAIL  : mediafin --once did not finish"
             cat deb.log
             failed=1
           fi
-          kill $PID 2>/dev/null || true
+          check "unit starts the runner" \
+            'grep -q "^ExecStart=/usr/bin/mediafin --watch$" /usr/lib/systemd/system/mediafin.service'
 
           echo "=== purge leaves nothing behind ==="
           apt-get purge -y -qq mediafin
@@ -311,11 +220,175 @@ jobs:
           check "state dir removed"            '! test -e /var/lib/mediafin'
 
           exit $failed
-      - name: Publish to "latest" release
-        uses: softprops/action-gh-release@v2
+      # softprops/action-gh-release creates the "latest" tag only when it is
+      # missing and leaves an existing one where it is. So the tag had sat on
+      # the commit that first added this workflow while the assets beside it
+      # were rebuilt on every release: the binaries were right and the release
+      # page's own "Source code" links pointed somewhere else entirely.
+      # Moves the rolling tag to the commit this release was built from.
+      # softprops/action-gh-release creates "latest" when it is missing and
+      # leaves an existing one where it is, so without this the tag sat on the
+      # commit that first added this workflow while the assets beside it were
+      # rebuilt every time: the release page's "Source code" links pointed
+      # somewhere else entirely.
+      #
+      # With git rather than the API. The API route took a PATCH to
+      # /git/refs/tags%2Flatest -- Octokit encodes the slash -- and it answered
+      # 403 on one run having answered 200 on the one before, same code, same
+      # token. git uses the credentials checkout already configured and asks a
+      # simpler question.
+      #
+      # NOT fatal. The tag is a label; the binaries are the delivery, and they
+      # carry whatever bug fix somebody is waiting for. A release that refuses
+      # to publish them because a label would not move is the wrong trade. It
+      # warns instead, which shows up on the run, so a tag that stops moving
+      # cannot go unnoticed either.
+      - name: Point the "latest" tag at this commit
+        shell: bash
+        run: |
+          set -uo pipefail
+          git config --global --add safe.directory "$PWD" || true
+          if git tag -f latest "$GITHUB_SHA" \
+            && git push -f origin "refs/tags/latest"; then
+            echo "latest now points at $GITHUB_SHA"
+          else
+            echo "::warning title=The \"latest\" tag did not move::The release" \
+              "page will name an older commit than the assets were built from." \
+              "The assets themselves are current."
+          fi
+      # The macOS half used to remove assets a release no longer produces, and
+      # it is gone. Without this, Mediafin.app.zip would sit in the release for
+      # ever with a date from whenever it was last built, next to Linux files
+      # from today -- a release claiming to contain something it does not
+      # build, which is the fault I spent this morning fixing.
+      # The macOS half used to remove assets a release no longer produces, and
+      # it is gone. Without this, Mediafin.app.zip would sit in the release for
+      # ever with a date from whenever it was last built, next to Linux files
+      # from today -- a release claiming to contain something it does not
+      # build, which is the fault I spent this morning fixing.
+      #
+      # github-script and not gh: the Swift container has no gh, and the tag
+      # step above already proves this route works from in here.
+      - name: Remove assets this release no longer produces
+        uses: actions/github-script@v7
         with:
-          tag_name: latest
-          prerelease: true
-          files: |
-            mediafin-linux-x86_64.tar.gz
+          script: |
+            const gone = ['Mediafin.app.zip']
+            let release
+            try {
+              release = await github.rest.repos.getReleaseByTag(
+                { ...context.repo, tag: 'latest' })
+            } catch (error) {
+              if (error.status !== 404) throw error
+              core.info('no "latest" release yet, nothing to clean up')
+              return
+            }
+            for (const asset of release.data.assets) {
+              if (!gone.includes(asset.name)) continue
+              // Not fatal, for the same reason the tag move is not: tidying up
+              // an asset this release no longer builds must not stop it
+              // publishing the ones it does. A warning shows on the run.
+              try {
+                await github.rest.repos.deleteReleaseAsset(
+                  { ...context.repo, asset_id: asset.id })
+                core.info(`removed ${asset.name}`)
+              } catch (error) {
+                core.warning(`could not remove ${asset.name}: ${error.message}`)
+              }
+            }
+      # First, and unconditionally: a path to the binaries that nothing can
+      # refuse. The release upload below needs a permission the token has just
+      # been refused twice, and a build that produces a working .deb and then
+      # has no way to hand it over is not a release at all. Artefacts live on
+      # the run page and need no release permission.
+      - name: Keep the packages as run artefacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mediafin-linux-x86_64
+          path: |
             mediafin-linux-x86_64.deb
+            mediafin-linux-x86_64.tar.gz
+          if-no-files-found: error
+
+      # Replaces the assets on the existing "latest" release WITHOUT updating
+      # the release itself.
+      #
+      # softprops/action-gh-release used to do this, and it PATCHes the release
+      # to set its name and flags before uploading. That PATCH answered 403,
+      # "Resource not accessible by integration", on two runs having worked on
+      # the one before — so the binaries never got published although they had
+      # built and passed every check. The release's own metadata has not
+      # changed in months and does not need writing on every build; only the
+      # files do. So this deletes and re-uploads just the files, which is a
+      # different endpoint.
+      #
+      # If that is refused too, the step says so and names the setting that
+      # grants it, and the artefacts above are still there.
+      - name: Replace the packages on the "latest" release
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs')
+            // The platform sits NEXT to the package that carries it, and the
+            // release's title is built from the ones that really went up.
+            //
+            // It read "Latest build (macOS universal + Linux x86_64)" for
+            // months after the macOS app was dropped -- the step below even
+            // removes its leftover asset -- because the title was written
+            // once by hand and the uploads moved on without it. Anyone
+            // landing on the release page was told about a macOS build that
+            // was not there. Derived, it cannot say more than was uploaded.
+            const packages = [
+              { name: 'mediafin-linux-x86_64.deb', platform: 'Linux x86_64' },
+              { name: 'mediafin-linux-x86_64.tar.gz', platform: 'Linux x86_64' },
+            ]
+            const names = packages.map(p => p.name)
+            const uploaded = []
+            const release = await github.rest.repos.getReleaseByTag(
+              { ...context.repo, tag: 'latest' })
+            for (const name of names) {
+              const old = release.data.assets.find(a => a.name === name)
+              try {
+                if (old) {
+                  await github.rest.repos.deleteReleaseAsset(
+                    { ...context.repo, asset_id: old.id })
+                }
+                await github.rest.repos.uploadReleaseAsset({
+                  ...context.repo,
+                  release_id: release.data.id,
+                  name,
+                  headers: {
+                    'content-type': 'application/octet-stream',
+                    'content-length': fs.statSync(name).size,
+                  },
+                  data: fs.readFileSync(name),
+                })
+                core.info(`uploaded ${name}`)
+                uploaded.push(name)
+              } catch (error) {
+                core.setFailed(
+                  `could not put ${name} on the release: ${error.message}. ` +
+                  'If this is "Resource not accessible by integration", the ' +
+                  'repository needs Settings -> Actions -> General -> ' +
+                  'Workflow permissions set to "Read and write permissions". ' +
+                  'The package is on this run as an artefact either way.')
+              }
+            }
+
+            // Last, and only when every package landed.
+            //
+            // A partial run is already red through setFailed above, and the
+            // title is then left exactly as it was: an upload can fail
+            // AFTER its delete or BEFORE it, so this run cannot tell from
+            // here whether the old asset is still on the release. Renaming
+            // on a failed run would be guessing, and guessing at the title
+            // is how it came to claim a macOS build that was not there.
+            const platforms = [...new Set(packages.map(p => p.platform))]
+            const title = `Latest build (${platforms.join(' + ')})`
+            if (uploaded.length === packages.length
+                && release.data.name !== title) {
+              await github.rest.repos.updateRelease(
+                { ...context.repo, release_id: release.data.id, name: title })
+              core.info(`renamed the release: ${release.data.name} -> ${title}`)
+            }

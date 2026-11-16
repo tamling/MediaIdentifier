@@ -5,7 +5,17 @@ public struct RenameOutcome: Sendable {
     public var succeeded: Int
     public var failed: Int
     public var skipped: Int
+    /// Release `.nfo` files removed. Counted apart from `succeeded` because
+    /// that number is read as "files renamed", and a deletion is not one.
+    public var deleted: Int
     public var transaction: RenameTransaction?
+    /// Whether the run was stopped before it had worked through the plan.
+    ///
+    /// The files it did not reach are counted as skipped, like a conflict
+    /// the policy declined, but this is said separately: "übersprungen 300"
+    /// after pressing Stop reads as 300 name clashes rather than 300 files
+    /// nobody got to.
+    public var stoppedEarly: Bool
     /// Where each item's primary file now is, for the items whose primary
     /// move actually happened.
     ///
@@ -18,12 +28,16 @@ public struct RenameOutcome: Sendable {
     public var landed: [UUID: URL]
 
     public init(succeeded: Int = 0, failed: Int = 0, skipped: Int = 0,
+                deleted: Int = 0,
                 transaction: RenameTransaction? = nil,
+                stoppedEarly: Bool = false,
                 landed: [UUID: URL] = [:]) {
         self.succeeded = succeeded
         self.failed = failed
         self.skipped = skipped
+        self.deleted = deleted
         self.transaction = transaction
+        self.stoppedEarly = stoppedEarly
         self.landed = landed
     }
 }
@@ -54,11 +68,19 @@ public final class RenameExecutor {
     ///   - progress: overall completion fraction 0...1, updated continuously so
     ///     slow cross-volume moves show real progress (FR19).
     @discardableResult
+    /// - Parameter shouldStop: asked at each item's first file. A rename of
+    ///   400 files to a NAS mount runs for a long time and `moveItem` cannot
+    ///   be interrupted, so this is the only place a stop can take effect:
+    ///   at an item boundary, where every release is either moved whole and
+    ///   journalled, or not touched at all. The window used to light its
+    ///   Stop button for the whole of a rename and then answer that nothing
+    ///   was running.
     public func execute(
         plan: [RenameItem],
         policy: ConflictPolicy,
         askResolution: ((PlannedMove) -> ConflictPolicy)? = nil,
-        progress: ((Double) -> Void)? = nil
+        progress: ((Double) -> Void)? = nil,
+        shouldStop: (() -> Bool)? = nil
     ) -> RenameOutcome {
         // Each move carries the item it belongs to, and whether it is that
         // item's primary file, so the outcome can say where each item ended
@@ -71,19 +93,166 @@ public final class RenameExecutor {
         var completed = 0
         var outcome = RenameOutcome()
         var performed: [RenameTransaction.Move] = []
+        // The batch's identity, fixed before the first file moves, so every
+        // move can be written down as it happens. See `beginBatch`: the
+        // journal used to be written once, after the last file, which left
+        // an interrupted batch with its files in the library and nothing
+        // anywhere saying where they came from.
+        let batchID = UUID()
+        let batchDate = Date()
+        journal.beginBatch(id: batchID, date: batchDate)
+        /// One move, remembered in this run and on disk in the same breath.
+        func remember(_ move: RenameTransaction.Move) {
+            performed.append(move)
+            journal.appendToBatch(move)
+        }
+        /// What each item's primary move did, so its companions can follow.
+        ///
+        /// Each move used to be resolved on its own, and under the "rename"
+        /// policy that pulled a release apart. The film hit an existing
+        /// "Tenet (2020).mkv" and became "Tenet (2020) (1).mkv"; the subtitle
+        /// found "Tenet (2020).en.srt" free and kept that name — so it landed
+        /// beside the film that was already in the library, and the rip that
+        /// had just arrived had no subtitles at all. Under "skip" it was the
+        /// same shape: the film stayed in Downloads and its subtitle walked
+        /// into the library on its own.
+        ///
+        /// `allMoves` puts an item's primary first, so by the time a
+        /// companion is reached its primary's fate is known.
+        var fates: [UUID: PrimaryFate] = [:]
+        /// Sources already moved in this run.
+        ///
+        /// The backstop under the scanner's "longest name wins" rule: if one
+        /// file ever reaches this loop as two items' companion again, the
+        /// second attempt is refused instead of failing with "no such file"
+        /// after the first has already taken it.
+        var movedSources: Set<String> = []
         progress?(0)
 
-        for (owner, isPrimary, move) in moves {
+        // Said once, before the run, because the next replacement into the
+        // same folder would make a second one and nothing would ever
+        // mention either.
+        for stranded in strandedStagedFiles(forPlan: plan) {
+            let size = (try? fileManager.attributesOfItem(atPath: stranded.path)[.size])
+                as? NSNumber
+            log.append(RenameLogEntry(
+                oldName: stranded.lastPathComponent, newName: "—", status: .skipped,
+                errorDescription: Text.s(
+                    "Rest eines abgebrochenen Austauschs in "
+                        + "„\(stranded.deletingLastPathComponent().path)“"
+                        + (size == nil ? "" : ", \(size!.int64Value) Bytes")
+                        + ". Der Name beginnt mit einem Punkt, deshalb findet ihn "
+                        + "keine Suche. Entweder von Hand umbenennen oder löschen.",
+                    "Left over from an interrupted replacement in "
+                        + "“\(stranded.deletingLastPathComponent().path)”"
+                        + (size == nil ? "" : ", \(size!.int64Value) bytes")
+                        + ". The name starts with a dot, so no scan will find it. "
+                        + "Rename it by hand or delete it.")))
+        }
+
+        /// The library roots this plan writes into that are not there.
+        ///
+        /// `ensureParentDirectory` creates whatever is missing, roots
+        /// included, so a mistyped library path or one whose mount point is
+        /// gone was silently brought into being and filled — and the run
+        /// reported success. Creating a library root is not this program's
+        /// job; filing things inside one is.
+        ///
+        /// What this does NOT catch, and nothing can: a share that is down
+        /// while its mount point is still there. That mount point is an
+        /// ordinary empty directory, and an empty directory is also what a
+        /// new library looks like. The lamp cannot tell them apart either.
+        let missingRoots = Set(
+            plan.filter { $0.isAccepted }
+                .map(\.outputRoot)
+                .filter { root in
+                    var isDirectory: ObjCBool = false
+                    let exists = fileManager.fileExists(atPath: root.path,
+                                                        isDirectory: &isDirectory)
+                    return !(exists && isDirectory.boolValue)
+                }
+                .map(\.path))
+
+        /// Set once a stop has been honoured. Nothing after it is
+        /// attempted, so the plan's tail is reported as untouched rather
+        /// than half done.
+        var stopping = false
+        /// Not logged one by one: a stop in a batch of 5,000 would push the
+        /// whole real history out of a file that keeps 2,000 entries. One
+        /// line at the end says how many were left alone.
+        var untouched = 0
+        for (owner, isPrimary, plannedMove) in moves {
+            var move = plannedMove
             defer {
                 completed += 1
                 progress?(total == 0 ? 1 : Double(completed) / Double(total))
+            }
+
+            if missingRoots.contains(
+                plan.first(where: { $0.id == owner })?.outputRoot.path ?? "") {
+                outcome.skipped += 1
+                if isPrimary { fates[owner] = .stayed }
+                log.append(RenameLogEntry(
+                    oldName: move.source.lastPathComponent, newName: "—",
+                    status: .skipped,
+                    errorDescription: Text.s(
+                        "Der Bibliotheksordner existiert nicht, also wurde nichts "
+                            + "verschoben. Entweder ist das Laufwerk nicht "
+                            + "eingebunden, oder der Ordner muss noch angelegt "
+                            + "werden.",
+                        "The library folder does not exist, so nothing was moved. "
+                            + "Either the drive is not mounted, or the folder has "
+                            + "yet to be created.")))
+                continue
+            }
+
+            // Asked at an item's first file only: a release must not be torn
+            // in half by a stop landing between a film and its subtitle.
+            if isPrimary, !stopping, shouldStop?() == true { stopping = true }
+            if stopping {
+                outcome.skipped += 1
+                untouched += 1
+                continue
+            }
+
+            if !isPrimary {
+                guard case .landed(let actual, let planned) = fates[owner] else {
+                    // The film did not move, so nothing of it moves. A
+                    // subtitle in the library beside somebody else's film is
+                    // worse than a subtitle left in Downloads.
+                    outcome.skipped += 1
+                    log.append(RenameLogEntry(
+                        oldName: move.source.lastPathComponent,
+                        newName: "—", status: .skipped,
+                        errorDescription: Text.s(
+                            "Bleibt bei der Datei, die nicht umbenannt wurde.",
+                            "Left with the file that was not renamed.")))
+                    continue
+                }
+                move = Self.following(move, primaryPlanned: planned,
+                                      primaryActual: actual)
+                if movedSources.contains(move.source.standardizedFileURL.path) {
+                    outcome.skipped += 1
+                    log.append(RenameLogEntry(
+                        oldName: move.source.lastPathComponent,
+                        newName: "—", status: .skipped,
+                        errorDescription: Text.s(
+                            "Gehört zu mehreren Dateien und wurde schon "
+                                + "mitverschoben.",
+                            "Belongs to more than one file and has already been "
+                                + "moved with one of them.")))
+                    continue
+                }
             }
 
             // No-op: source already at destination.
             if move.source.standardizedFileURL == move.destination.standardizedFileURL {
                 // Nothing moved, but the file is at the destination, which is
                 // what `landed` is asked about.
-                if isPrimary { outcome.landed[owner] = move.destination }
+                if isPrimary {
+                    outcome.landed[owner] = move.destination
+                    fates[owner] = .landed(move.destination, planned: move.destination)
+                }
                 continue
             }
 
@@ -93,12 +262,16 @@ public final class RenameExecutor {
                 return policy
             }()
 
+            // Held outside the `do` so the catch can see where the move was
+            // going: that is the path a half-finished copy left bytes at.
+            var resolved: Resolution?
             do {
-                guard let resolution = try resolveDestination(for: move, policy: effectivePolicy) else {
+                guard let resolution = resolveDestination(for: move, policy: effectivePolicy) else {
                     // Deliberately not recorded in `landed`: a skipped file is
                     // still where it was, and a caller that goes on to send or
                     // delete it must not be told otherwise.
                     outcome.skipped += 1
+                    if isPrimary { fates[owner] = .stayed }
                     log.append(RenameLogEntry(
                         oldName: move.source.lastPathComponent,
                         newName: move.destination.lastPathComponent,
@@ -107,20 +280,37 @@ public final class RenameExecutor {
                     continue
                 }
 
-                // For "replace", the existing file was moved to the Trash; record
-                // that first so undo can restore it before the main move is undone.
-                if let backup = resolution.backup {
-                    performed.append(backup)
+                resolved = resolution
+                let createdDirs = try ensureParentDirectory(for: resolution.destination)
+                if resolution.replacesExisting {
+                    // The incoming file arrives before the library's own copy
+                    // is disturbed; `replace` is where that order lives, and
+                    // why. Nothing is appended to `performed` until it has
+                    // returned, so a throw leaves the journal describing only
+                    // what really happened.
+                    let backup = try replace(
+                        at: resolution.destination, with: move.source,
+                        base: completed, total: total, progress: progress,
+                        staged: { [journal] in journal.appendToBatch($0) })
+                    // Before the main move, so undo restores it after the main
+                    // move has been undone and the destination is free again.
+                    if let backup { remember(backup) }
+                } else {
+                    try moveWithProgress(from: move.source, to: resolution.destination,
+                                         base: completed, total: total, progress: progress)
                 }
 
-                let createdDirs = try ensureParentDirectory(for: resolution.destination)
-                try moveWithProgress(from: move.source, to: resolution.destination,
-                                     base: completed, total: total, progress: progress)
-
-                performed.append(.init(from: move.source, to: resolution.destination, createdDirectories: createdDirs))
+                remember(.init(from: move.source, to: resolution.destination,
+                               createdDirectories: createdDirs))
+                movedSources.insert(move.source.standardizedFileURL.path)
                 // The resolved destination, not the planned one: under the
-                // "rename" policy the file is now "… (1).mkv".
-                if isPrimary { outcome.landed[owner] = resolution.destination }
+                // "rename" policy the file is now "… (1).mkv" — and that is
+                // the name the companions are rebuilt from.
+                if isPrimary {
+                    outcome.landed[owner] = resolution.destination
+                    fates[owner] = .landed(resolution.destination,
+                                           planned: move.destination)
+                }
                 outcome.succeeded += 1
                 log.append(RenameLogEntry(
                     oldName: move.source.lastPathComponent,
@@ -129,48 +319,179 @@ public final class RenameExecutor {
                 ))
             } catch {
                 outcome.failed += 1
+                if isPrimary { fates[owner] = .stayed }
+                let debris = clearingDebris(of: move, after: resolved)
                 log.append(RenameLogEntry(
                     oldName: move.source.lastPathComponent,
                     newName: move.destination.lastPathComponent,
                     status: .failure,
-                    errorDescription: error.localizedDescription
+                    errorDescription: error.localizedDescription + debris
                 ))
             }
         }
 
         if !performed.isEmpty {
-            let transaction = RenameTransaction(moves: performed)
+            let transaction = RenameTransaction(id: batchID, date: batchDate,
+                                                moves: performed)
             journal.record(transaction)
             outcome.transaction = transaction
+            // In the history, not only in a field nobody reads: the files
+            // have moved and the record of how to move them back did not
+            // reach the disk.
+            if let unwritable = journal.lastWriteFailure {
+                log.append(RenameLogEntry(
+                    oldName: (unwritable as NSString).lastPathComponent,
+                    newName: "—", status: .failure,
+                    errorDescription: Text.s(
+                        "Das Rückgängig-Journal konnte nicht geschrieben werden. "
+                            + "Rückgängig funktioniert in dieser Sitzung, aber nicht "
+                            + "nach einem Neustart.",
+                        "The undo journal could not be written. Undo works in this "
+                            + "session but not after a restart.")))
+            }
+        }
+        if stopping {
+            outcome.stoppedEarly = true
+            log.append(RenameLogEntry(
+                oldName: "—", newName: "—", status: .skipped,
+                errorDescription: Text.s(
+                    "Vorzeitig gestoppt: \(untouched) Datei"
+                        + (untouched == 1 ? "" : "en") + " nicht angefasst.",
+                    "Stopped early: \(untouched) file"
+                        + (untouched == 1 ? "" : "s") + " left alone.")))
+        }
+        // The in-flight record has served its purpose now that the journal
+        // proper holds the batch — unless that write failed, in which case
+        // `endBatch` keeps the file, because it is then the only record of
+        // where these files came from.
+        journal.endBatch()
+
+        // After the moves, and only for items whose primary actually landed.
+        // A file that did not move still has its .nfo beside it, and that
+        // pair is the user's: deleting half of a release whose rename failed
+        // would leave them worse off than before they pressed anything.
+        //
+        // Not in the journal: there is nothing to move back. Undo can restore
+        // a rename; it cannot restore a deletion, and recording one as
+        // reversible would be a lie the journal then acts on.
+        for item in plan where item.isAccepted {
+            guard outcome.landed[item.id] != nil else { continue }
+            for url in item.companionDeletions {
+                outcome.deleted += deleteReleaseNote(at: url) ? 1 : 0
+            }
         }
         return outcome
+    }
+
+    /// Deletes one release `.nfo`, or declines and says why in the history.
+    ///
+    /// Every condition is checked here rather than trusted from the plan.
+    /// This is the one call in the program that destroys a file, so the
+    /// extension is verified again, a directory is refused outright, and a
+    /// file that is already gone is not an error.
+    ///
+    /// And the file is read before it is destroyed. The extension says
+    /// nothing: Jellyfin's own metadata sidecar is also `*.nfo`, is also
+    /// named after the video, and holds every correction the user ever made
+    /// by hand. The planner has already asked the same question, so a
+    /// refusal here means the file changed between the preview and the
+    /// button — rare, and exactly why the question is asked twice.
+    private func deleteReleaseNote(at url: URL) -> Bool {
+        guard url.pathExtension.lowercased() == "nfo" else { return false }
+        var isDirectory: ObjCBool = false
+        guard fileManager.fileExists(atPath: url.path, isDirectory: &isDirectory)
+        else { return false }
+        guard !isDirectory.boolValue else { return false }
+        let kind = NfoContent.kind(of: url)
+        guard kind == .releaseNote else {
+            log.append(RenameLogEntry(
+                oldName: url.lastPathComponent, newName: "—", status: .skipped,
+                errorDescription: kind == .metadataSidecar
+                    ? Text.s(
+                        "Nicht gelöscht: das ist Jellyfins eigene Metadatendatei, "
+                            + "keine Infodatei der Release-Gruppe.",
+                        "Not deleted: this is Jellyfin's own metadata file, not a "
+                            + "release group's note.")
+                    : Text.s(
+                        "Nicht gelöscht: Datei ist leer oder nicht lesbar.",
+                        "Not deleted: the file is empty or could not be read.")))
+            return false
+        }
+        do {
+            try fileManager.removeItem(at: url)
+            log.append(RenameLogEntry(
+                oldName: url.lastPathComponent, newName: "—", status: .deleted,
+                errorDescription: Text.s(
+                    "Infodatei der Release-Gruppe gelöscht — Jellyfin würde sie "
+                        + "als eigene Metadaten lesen und daran scheitern.",
+                    "Release group's note deleted — Jellyfin would read it as its "
+                        + "own metadata and fail on it.")))
+            return true
+        } catch {
+            log.append(RenameLogEntry(
+                oldName: url.lastPathComponent, newName: "—", status: .failure,
+                errorDescription: error.localizedDescription))
+            return false
+        }
     }
 
     // MARK: Undo (FR13)
 
     /// Reverses the most recent transaction. Returns the number of files restored.
+    ///
+    /// Resumable, and that is the point. The journal entry is not removed
+    /// until the work has been attempted, and what could not be moved back
+    /// stays in it, so a second press carries on where this one stopped.
     @discardableResult
     public func undoLast() -> Int {
-        guard let transaction = journal.popLast() else { return 0 }
+        guard let transaction = journal.last else { return 0 }
         var restored = 0
+        /// Moves that did not get undone, so they stay in the journal.
+        var blocked: [RenameTransaction.Move] = []
         // Reverse order so nested moves unwind cleanly.
         for move in transaction.moves.reversed() {
             do {
                 try ensureDirectoryExists(move.from.deletingLastPathComponent())
-                if fileManager.fileExists(atPath: move.from.path) { continue }
+                if fileManager.fileExists(atPath: move.from.path) {
+                    // Two very different situations wearing the same face.
+                    // If the moved file is gone from the library, the undo
+                    // already happened and this move is finished. If it is
+                    // still there, something else has taken the old name and
+                    // moving back would overwrite it — so it is refused, and
+                    // said out loud. It used to be skipped in silence, which
+                    // is how an undo reported "0 restored" and left the user
+                    // with no idea why.
+                    if fileManager.fileExists(atPath: move.to.path) {
+                        blocked.append(move)
+                        log.append(RenameLogEntry(
+                            oldName: move.to.lastPathComponent,
+                            newName: move.from.lastPathComponent,
+                            status: .skipped,
+                            errorDescription: Text.s(
+                                "Rückgängig nicht möglich: unter dem alten Namen "
+                                    + "liegt schon wieder eine Datei.",
+                                "Cannot be undone: a file is in the way under the "
+                                    + "old name.")))
+                    }
+                    continue
+                }
                 try fileManager.moveItem(at: move.to, to: move.from)
                 restored += 1
+                // Its own status, not .success. The history's word for
+                // success is "umbenannt", and the counter in the window is
+                // the number of .success entries — so undoing eight files
+                // used to make the window say sixteen were renamed.
                 log.append(RenameLogEntry(
                     oldName: move.to.lastPathComponent,
                     newName: move.from.lastPathComponent,
-                    status: .success,
-                    errorDescription: "undo"
+                    status: .undone
                 ))
                 // Clean up now-empty directories that were created for the move.
                 for dir in move.createdDirectories.reversed() {
                     removeDirectoryIfEmpty(dir)
                 }
             } catch {
+                blocked.append(move)
                 log.append(RenameLogEntry(
                     oldName: move.to.lastPathComponent,
                     newName: move.from.lastPathComponent,
@@ -179,6 +500,9 @@ public final class RenameExecutor {
                 ))
             }
         }
+        // Only now, and only what is left. Reversed back into the order the
+        // moves were applied in, because that is the order undo reverses.
+        journal.finishUndo(of: transaction.id, leaving: blocked.reversed())
         return restored
     }
 
@@ -214,36 +538,288 @@ public final class RenameExecutor {
 
     // MARK: Helpers
 
-    /// The outcome of resolving a conflict: the destination to move to, plus an
-    /// optional journal entry for a file that was moved to the Trash (so undo can
-    /// restore it).
+    /// A replacement that could not be undone cleanly, carrying where the
+    /// user's files actually are.
+    ///
+    /// The three rollback moves inside `replace` used to be `try?`, so a
+    /// rollback that failed was indistinguishable from one that worked and
+    /// the only thing logged was the original cause — "A file with the same
+    /// name already exists" — with no path in it. Meanwhile the user's film
+    /// was sitting in a library folder under `.mediafin-incoming-…`, which
+    /// every scanner here skips.
+    struct ReplaceFailure: LocalizedError {
+        /// What went wrong in the first place.
+        let cause: Error
+        /// Where the incoming file is, if the rollback could not move it back.
+        var strandedIncoming: URL?
+        /// Where the library's own copy is, if that could not be put back.
+        var strandedBackup: URL?
+
+        var errorDescription: String? {
+            var parts = [(cause as NSError).localizedDescription]
+            if let strandedIncoming {
+                parts.append(Text.s(
+                    "Die neue Datei liegt jetzt unter „\(strandedIncoming.path)“ — "
+                        + "der Name beginnt mit einem Punkt, deshalb taucht sie in "
+                        + "keiner Suche auf. Von Hand umbenennen, dann ist sie wieder "
+                        + "benutzbar.",
+                    "The incoming file is now at “\(strandedIncoming.path)” — the "
+                        + "name starts with a dot, so no scan will show it. Rename it "
+                        + "by hand and it is usable again."))
+            }
+            if let strandedBackup {
+                parts.append(Text.s(
+                    "Die bisherige Datei der Bibliothek liegt unter "
+                        + "„\(strandedBackup.path)“.",
+                    "The library's own copy is at “\(strandedBackup.path)”."))
+            }
+            return parts.joined(separator: " ")
+        }
+    }
+
+    /// The outcome of resolving a conflict: where the file should go, and
+    /// whether something is already there that the policy says to displace.
+    ///
+    /// It does **not** displace anything. This used to move the old file aside
+    /// as a side effect of being asked where the new one goes, which put the
+    /// library's own copy out of the way before the incoming file had got
+    /// anywhere — and *when* that happens is the whole point. See `apply`.
     private struct Resolution {
         let destination: URL
-        let backup: RenameTransaction.Move?
+        let replacesExisting: Bool
+    }
+
+    /// What an item's primary file did.
+    private enum PrimaryFate {
+        /// It is at `0` now. `planned` is the name it was going to have, so a
+        /// companion can tell whether the policy renamed it.
+        case landed(URL, planned: URL)
+        /// It did not move: skipped by the policy, or it failed.
+        case stayed
+    }
+
+    /// Rebuilds a companion's destination from the name its primary really
+    /// got, so a release does not come apart under the "rename" policy.
+    ///
+    /// The planner builds every companion name as the primary's stem plus
+    /// whatever followed it in the original — "Tenet (2020)" + ".en.srt" — so
+    /// swapping that prefix is enough, and the suffix (the language tag, the
+    /// "-poster") is carried through untouched. A name that does not start
+    /// with the planned stem is left alone rather than guessed at.
+    static func following(_ move: PlannedMove,
+                          primaryPlanned: URL, primaryActual: URL) -> PlannedMove {
+        let plannedStem = primaryPlanned.deletingPathExtension().lastPathComponent
+        let actualStem = primaryActual.deletingPathExtension().lastPathComponent
+        guard plannedStem != actualStem else { return move }
+        let name = move.destination.lastPathComponent
+        guard name.hasPrefix(plannedStem) else { return move }
+        var followed = move
+        followed.destination = primaryActual.deletingLastPathComponent()
+            .appendingPathComponent(actualStem + name.dropFirst(plannedStem.count))
+        return followed
     }
 
     /// Resolves the final destination honouring the conflict policy. Returns nil
-    /// when the move should be skipped.
-    private func resolveDestination(for move: PlannedMove, policy: ConflictPolicy) throws -> Resolution? {
+    /// when the move should be skipped. Touches nothing on disk.
+    private func resolveDestination(for move: PlannedMove,
+                                    policy: ConflictPolicy) -> Resolution? {
         guard fileManager.fileExists(atPath: move.destination.path) else {
-            return Resolution(destination: move.destination, backup: nil)
+            return Resolution(destination: move.destination, replacesExisting: false)
         }
         switch policy {
         case .skip, .ask:
             return nil
         case .replace:
-            // Aside rather than deleted, and journalled, so undo can put it
-            // back. On Linux "aside" is a hidden folder beside the library;
-            // see trashExisting.
-            let backup = try trashExisting(at: move.destination)
-            return Resolution(destination: move.destination, backup: backup)
+            return Resolution(destination: move.destination, replacesExisting: true)
         case .rename:
-            return Resolution(destination: uniqueURL(for: move.destination), backup: nil)
+            // nil means a thousand names were taken. Skipping says so and
+            // leaves the file where it is, which beats spinning.
+            guard let free = uniqueURL(for: move.destination) else { return nil }
+            return Resolution(destination: free, replacesExisting: false)
+        }
+    }
+
+    /// Replaces the file at `destination` with `source`, in an order that
+    /// cannot leave the library with a gap.
+    ///
+    /// The old order moved the library's copy aside first and then moved the
+    /// new file in. The second step is the one that can fail — a full disk, a
+    /// read-only mount, a copy across filesystems that dies halfway — and when
+    /// it did, the library was left with nothing where the film had been. It
+    /// was recoverable: the move aside is journalled, so undo put it back. But
+    /// it was recoverable by someone who knew to press undo, and the failure
+    /// line said only what the error was.
+    ///
+    /// So now the expensive step goes first. The incoming file is brought into
+    /// the destination's own directory under a hidden name — every scanner here
+    /// passes `.skipsHiddenFiles`, so nothing picks it up — and only once it
+    /// has arrived is the old file moved aside and the new one renamed into
+    /// place. Those last two are renames within one directory on one
+    /// filesystem, which is as close to "cannot fail" as a file system offers.
+    /// If one does anyway, both are undone and the library keeps its own copy.
+    /// - Parameter staged: called the moment the transfer has finished and
+    ///   before anything of the user's is touched, with the move that has
+    ///   just happened. Nothing used to be recorded until `replace` returned,
+    ///   so a failure — or a process death — anywhere in steps two and three
+    ///   left the user's file moved and no record of it anywhere.
+    private func replace(
+        at destination: URL, with source: URL,
+        base: Int, total: Int, progress: ((Double) -> Void)?,
+        staged stagedHandler: ((RenameTransaction.Move) -> Void)? = nil
+    ) throws -> RenameTransaction.Move? {
+        // The extension is kept and the name is not: a staged file left behind
+        // by a crash is then identifiable as a video rather than as a nameless
+        // blob, without risking the 255-byte limit that a library file's own
+        // name can already be close to.
+        let suffix = destination.pathExtension.isEmpty
+            ? "" : "." + destination.pathExtension
+        let staged = destination.deletingLastPathComponent()
+            .appendingPathComponent(
+                "\(Self.stagingPrefix)\(UUID().uuidString.prefix(8))\(suffix)")
+
+        // Step one: the whole transfer, before anything of the user's moves.
+        try moveWithProgress(from: source, to: staged,
+                             base: base, total: total, progress: progress)
+        // Recorded here, not when this function returns. From this line
+        // until step three completes, that hidden file is the only copy of
+        // the user's film, and this is what lets undo reach it after a
+        // crash.
+        stagedHandler?(RenameTransaction.Move(from: source, to: staged))
+
+        // Step two: the library's copy out of the way, journalled so undo can
+        // put it back.
+        let backup: RenameTransaction.Move?
+        do {
+            backup = try trashExisting(at: destination)
+        } catch {
+            // Put the incoming file back where it came from. A staged file
+            // left behind is invisible litter, and the source has to still be
+            // there for a second attempt to have anything to move.
+            throw ReplaceFailure(cause: error,
+                                 strandedIncoming: returning(staged, to: source))
+        }
+
+        // Step three: into place.
+        do {
+            try fileManager.moveItem(at: staged, to: destination)
+        } catch {
+            var failure = ReplaceFailure(cause: error)
+            if let backup {
+                do {
+                    try fileManager.moveItem(at: backup.to, to: backup.from)
+                } catch {
+                    failure.strandedBackup = backup.to
+                }
+            }
+            failure.strandedIncoming = returning(staged, to: source)
+            throw failure
+        }
+        return backup
+    }
+
+    /// Removes what a half-finished move left at the destination.
+    ///
+    /// Downloads on one disk and the library on another is the normal
+    /// arrangement here, and across filesystems `moveItem` copies — a copy
+    /// that dies part way leaves the bytes it managed at the destination.
+    /// The failure path recorded one history line and did nothing else:
+    /// `createdDirectories` was dropped on the floor, nothing swept the
+    /// path, and the next run read the partial file as "already filed" under
+    /// the right name. The download path stages into a hidden folder and
+    /// sweeps it; the rename path wrote straight into the library and owned
+    /// none of its own wreckage.
+    ///
+    /// Only when the source is still there. If the source is gone, whatever
+    /// is at the destination is the only copy left of the user's file and
+    /// must not be touched, however incomplete it looks.
+    ///
+    /// - Returns: a sentence for the history, or "" when there was nothing
+    ///   to clear.
+    private func clearingDebris(of move: PlannedMove,
+                                after resolution: Resolution?) -> String {
+        guard let resolution else { return "" }
+        // Never on the replace path. There, `replace` owns the rollback and
+        // has just put the LIBRARY's own copy back at this very path — so
+        // the first version of this deleted it, and the two tests from the
+        // replace work said so immediately: "the library lost its own copy".
+        guard !resolution.replacesExisting else { return "" }
+        let destination = resolution.destination
+        guard fileManager.fileExists(atPath: move.source.path),
+              fileManager.fileExists(atPath: destination.path)
+        else { return "" }
+        // Never a directory: that is somebody's folder, not our leftovers.
+        var isDirectory: ObjCBool = false
+        _ = fileManager.fileExists(atPath: destination.path, isDirectory: &isDirectory)
+        guard !isDirectory.boolValue else { return "" }
+        guard (try? fileManager.removeItem(at: destination)) != nil else {
+            return " " + Text.s(
+                "Am Ziel liegt eine unvollständige Kopie, die nicht entfernt "
+                    + "werden konnte: \(destination.path)",
+                "An incomplete copy is at the destination and could not be "
+                    + "removed: \(destination.path)")
+        }
+        // And the folders this move created for it, if they are now empty.
+        removeDirectoryIfEmpty(destination.deletingLastPathComponent())
+        return " " + Text.s(
+            "Die unvollständige Kopie am Ziel wurde entfernt; die Datei liegt "
+                + "unverändert im Importordner.",
+            "The incomplete copy at the destination was removed; the file is "
+                + "untouched in the import folder.")
+    }
+
+    /// Moves a staged file back to where it came from, taking the next free
+    /// name if that one has been retaken. Returns where it was left if even
+    /// that failed, else nil.
+    ///
+    /// `moveItem` refuses to overwrite, so a torrent client recreating the
+    /// source name between step one and step two was enough to make the
+    /// rollback fail — silently, because it was a `try?`. The file then sat
+    /// in a library folder under a dotted name that nothing lists.
+    private func returning(_ staged: URL, to source: URL) -> URL? {
+        do {
+            try fileManager.moveItem(at: staged, to: source)
+            return nil
+        } catch {
+            if let free = uniqueURL(for: source),
+               (try? fileManager.moveItem(at: staged, to: free)) != nil {
+                // Back in the import folder under "… (1)", which a scan
+                // finds, rather than hidden in the library.
+                return free
+            }
+            return staged
         }
     }
 
     /// Where a replaced file waits on a system with no desktop Trash.
     public static let trashFolderName = ".mediafin-trash"
+
+    /// The prefix a replacement's staged file carries.
+    public static let stagingPrefix = ".mediafin-incoming-"
+
+    /// Names any staged file left behind in the directories this plan writes
+    /// to, so an interrupted replacement is said out loud once.
+    ///
+    /// Nothing looked for this prefix anywhere outside the download staging
+    /// folder. A crash during step one's cross-device copy leaves a partial
+    /// dotfile holding gigabytes — the source survives, because `moveItem`
+    /// unlinks it only after the copy completes — and a crash between steps
+    /// two and three leaves the only copy of the user's film under that
+    /// name. Either way nothing lists it, because every scanner here skips
+    /// hidden files, so it sat there until somebody ran `ls -a`.
+    func strandedStagedFiles(forPlan plan: [RenameItem]) -> [URL] {
+        var directories: Set<String> = []
+        for item in plan where item.isAccepted {
+            directories.insert(item.primaryDestination.deletingLastPathComponent().path)
+        }
+        var found: [URL] = []
+        for path in directories.sorted() {
+            let names = (try? fileManager.contentsOfDirectory(atPath: path)) ?? []
+            for name in names.sorted() where name.hasPrefix(Self.stagingPrefix) {
+                found.append(URL(fileURLWithPath: path).appendingPathComponent(name))
+            }
+        }
+        return found
+    }
 
     /// Puts `url` out of the way and returns a journal move, so undo can put
     /// it back.
@@ -280,19 +856,29 @@ public final class RenameExecutor {
         #endif
     }
 
-    private func uniqueURL(for url: URL) -> URL {
+    /// How far " (1)", " (2)", … is tried before the move is refused.
+    ///
+    /// A thousand copies of one film is not a library, it is a fault
+    /// somewhere else. The loop used to be `while true`, which is fine while
+    /// the filesystem is answering truthfully and is an endless spin when
+    /// another process is creating names as fast as they are tested.
+    static let renameAttemptLimit = 1_000
+
+    /// A free name beside `url`, or nil when there is none worth having.
+    private func uniqueURL(for url: URL) -> URL? {
         let dir = url.deletingLastPathComponent()
         let stem = url.deletingPathExtension().lastPathComponent
         let ext = url.pathExtension
-        var counter = 1
-        while true {
-            let candidateName = ext.isEmpty ? "\(stem) (\(counter))" : "\(stem) (\(counter)).\(ext)"
+        for counter in 1...Self.renameAttemptLimit {
+            let candidateName = ext.isEmpty
+                ? "\(stem) (\(counter))"
+                : "\(stem) (\(counter)).\(ext)"
             let candidate = dir.appendingPathComponent(candidateName)
             if !fileManager.fileExists(atPath: candidate.path) {
                 return candidate
             }
-            counter += 1
         }
+        return nil
     }
 
     /// Creates the parent directory chain for `url`, returning the directories it
@@ -321,9 +907,16 @@ public final class RenameExecutor {
         }
     }
 
+    /// Removes `url` only if it is empty, as one step.
+    ///
+    /// `rmdir(2)` and not "list it, then `removeItem`". The old pair was
+    /// check-then-act over a gap another process can use: `removeItem`
+    /// deletes a directory recursively, so a file created in that gap went
+    /// with it. rmdir refuses a non-empty directory by definition, which is
+    /// the same guarantee with no gap to lose.
     private func removeDirectoryIfEmpty(_ url: URL) {
-        guard let contents = try? fileManager.contentsOfDirectory(atPath: url.path),
-              contents.isEmpty else { return }
-        try? fileManager.removeItem(at: url)
+        _ = url.withUnsafeFileSystemRepresentation { path in
+            path.map { rmdir($0) } ?? -1
+        }
     }
 }

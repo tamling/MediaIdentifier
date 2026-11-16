@@ -38,11 +38,59 @@ public struct RenameItem: Identifiable, Equatable, Sendable {
     public var mediaFile: MediaFile
     /// The destination root the relative path is resolved against.
     public var outputRoot: URL
-    /// Editable Jellyfin relative path for the primary file (FR9 manual adjust).
-    public var proposedRelativePath: String
+    /// Editable Jellyfin relative path for the primary file (FR9 manual
+    /// adjust), sanitised on the way in.
+    ///
+    /// The invariant — "this cannot climb out of `outputRoot`, and every
+    /// component is a legal file name" — is enforced here, at the one place
+    /// the value enters, rather than left to the discipline of whoever
+    /// assigns it.
+    ///
+    /// `JellyfinNamer.sanitizeRelativePath` had three passing tests for
+    /// `../../etc/passwd` and no call site in `Sources` at all: it was
+    /// called by the form of a web interface that no longer exists. The
+    /// traversal defence was green in CI and absent from the program —
+    /// this project's recurring failure, where a check that cannot run looks
+    /// exactly like a check that passes. Nothing was broken, because every
+    /// producer happened to sanitise its own output; the next producer would
+    /// not have inherited that and would not have broken a test either.
+    ///
+    /// Sanitising on the way in rather than inside `primaryDestination`
+    /// matters: the two must never disagree. `settled(_:)` and the
+    /// already-filed check both compare a file's own path against this
+    /// string, and `MusicNamer` leaves through characters that `sanitize`
+    /// removes — so cleaning only at the destination would have the row
+    /// showing one path while the file went to another.
+    public var proposedRelativePath: String {
+        get { storedRelativePath }
+        set { storedRelativePath = JellyfinNamer.sanitizeRelativePath(newValue) }
+    }
+    private var storedRelativePath: String
     /// Companion moves keyed implicitly by order; recomputed from the primary
     /// path so renaming the primary keeps companions in sync.
     public var companionMoves: [PlannedMove]
+    /// Companions that are deleted rather than moved: the release `.nfo`.
+    ///
+    /// Jellyfin reads `*.nfo` beside a film or episode as its own metadata
+    /// sidecar, in its own XML. A release `.nfo` is ASCII art and a group's
+    /// notes, so carrying one into the library does not merely clutter it:
+    /// Jellyfin finds a local sidecar it cannot parse where it expected its
+    /// own, and the item can end up with no metadata rather than the wrong
+    /// metadata.
+    ///
+    /// Named here rather than handled quietly at execution time so the
+    /// preview can say it before anybody presses Umbenennen. A program that
+    /// deletes a file it never mentioned is the program that gets accused of
+    /// sending files into the void, and rightly.
+    public var companionDeletions: [URL]
+    /// The `.nfo` files beside this video that are deliberately left alone.
+    ///
+    /// The same extension carries two unrelated things, and only the content
+    /// says which (see `NfoContent`). Named rather than silently skipped, for
+    /// the same reason the deletions are named: somebody who has just read
+    /// that release notes get deleted wants to see that their own metadata
+    /// is not among them.
+    public var companionKeptNotes: [URL]
     /// Whether the user has accepted this change (FR9). Defaults to true.
     public var isAccepted: Bool
     /// Conflict detected for the primary destination, if any.
@@ -54,21 +102,39 @@ public struct RenameItem: Identifiable, Equatable, Sendable {
         outputRoot: URL,
         proposedRelativePath: String,
         companionMoves: [PlannedMove] = [],
+        companionDeletions: [URL] = [],
+        companionKeptNotes: [URL] = [],
         isAccepted: Bool = true,
         conflict: ConflictKind? = nil
     ) {
         self.id = id
         self.mediaFile = mediaFile
         self.outputRoot = outputRoot
-        self.proposedRelativePath = proposedRelativePath
+        self.storedRelativePath =
+            JellyfinNamer.sanitizeRelativePath(proposedRelativePath)
         self.companionMoves = companionMoves
+        self.companionDeletions = companionDeletions
+        self.companionKeptNotes = companionKeptNotes
         self.isAccepted = isAccepted
         self.conflict = conflict
     }
 
     /// Absolute destination URL for the primary file.
+    ///
+    /// Sanitised here, at the one point where a string becomes a path, and
+    /// not left to the discipline of whoever set `proposedRelativePath`.
+    ///
+    /// `JellyfinNamer.sanitizeRelativePath` had three passing tests for
+    /// `../../etc/passwd` and no call site in `Sources` at all: it was
+    /// called by the form of a web interface that no longer exists. So the
+    /// traversal defence was green in CI and absent from the program, which
+    /// is this project's recurring failure — a check that cannot run looks
+    /// exactly like a check that passes. Every producer happened to sanitise
+    /// its own output, so nothing was broken; the next producer would not
+    /// have inherited that and would not have broken a test either.
     public var primaryDestination: URL {
-        outputRoot.appendingPathComponent(proposedRelativePath)
+        // Already clean: see `proposedRelativePath`.
+        outputRoot.appendingPathComponent(storedRelativePath)
     }
 
     /// The primary move plus all companion moves.
@@ -76,16 +142,14 @@ public struct RenameItem: Identifiable, Equatable, Sendable {
         [PlannedMove(source: mediaFile.url, destination: primaryDestination)] + companionMoves
     }
 
-    // Convenience accessors for the preview UI (FR8).
+    /// What the file is called now, which is the left half of a row.
+    ///
+    /// The only one of these left. `detectedTitle`,
+    /// `seasonEpisodeDescription` and `newFileName` were beside it, built
+    /// for a web page that no longer exists, and none of them was ever read
+    /// by the window: the title reaches the screen through the destination
+    /// path, which `JellyfinNamer` builds with the sanitising this did not
+    /// do, and the row shows that whole path rather than a bare file name.
+    /// Their strings were English-only for the same reason.
     public var originalFileName: String { mediaFile.url.lastPathComponent }
-    public var detectedTitle: String { mediaFile.parsed.title }
-    public var seasonEpisodeDescription: String {
-        guard mediaFile.parsed.kind == .episode else {
-            return mediaFile.parsed.year.map { "Movie (\($0))" } ?? "Movie"
-        }
-        let s = mediaFile.parsed.season.map { String(format: "S%02d", $0) } ?? "S?"
-        let e = mediaFile.parsed.episode.map { String(format: "E%02d", $0) } ?? "E?"
-        return s + e
-    }
-    public var newFileName: String { (proposedRelativePath as NSString).lastPathComponent }
 }

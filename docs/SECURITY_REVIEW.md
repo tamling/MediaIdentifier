@@ -7,6 +7,19 @@
 > nur experimentell — daher manueller, code-gestützter Review.
 > Stand: 2026-06-21.
 
+> **Nicht mehr aktuell (Stand 2026-11-12).** Dieser Bericht beschreibt eine
+> Version mit macOS-App, Status-Webserver, Terminal-Oberfläche und
+> rsync/SFTP-Versand. Alle vier sind seitdem entfernt; übrig sind ein
+> GTK3-Fenster und ein Scheduler ohne offene Netzwerk-Schnittstelle. Damit
+> entfallen die Befunde zum Webserver (1–6, 8, 9 hier) ersatzlos, und die
+> Mitigation „ATS blockiert Remote-HTTP" existiert nicht mehr: ATS ist eine
+> macOS-Einrichtung, und unter Linux gibt es sie nicht. An ihrer Stelle steht
+> die Lampe **Verschlüsselung** im Statusfenster, die Klartext-HTTP zu einem
+> öffentlichen Host benennt — eine Warnung, keine Sperre. Der Bericht bleibt
+> als Protokoll dessen stehen, was damals geprüft wurde; er wird nicht
+> umgeschrieben, weil er dann behaupten würde, etwas geprüft zu haben, was es
+> noch nicht gab.
+
 ## Gesamtbewertung: **gut**
 Solide Grundlagen: Secrets im Keychain (nie in UserDefaults/Logs/URLs), Subprozesse
 ohne Shell (Argument-Arrays → keine Command-Injection), wirksamer Pfad-Traversal-Schutz,

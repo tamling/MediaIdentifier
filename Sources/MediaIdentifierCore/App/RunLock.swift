@@ -24,6 +24,33 @@ import Darwin
 /// for a month.
 public enum RunLock {
 
+    /// Runs `work` while holding an exclusive lock on `url`, waiting for it
+    /// if another process has it.
+    ///
+    /// Blocking, unlike `withLock`. The difference is what the answer "it is
+    /// taken" means: for a nightly run it means somebody else is doing the
+    /// run and this process should stop, while for a journal write it means
+    /// another process is a few microseconds into writing the same file and
+    /// this one must wait rather than skip. `flock` is released by the
+    /// kernel when the holder dies, so waiting cannot be permanent.
+    public static func waiting(at url: URL, _ work: () -> Void) {
+        let descriptor = open(url.path, O_CREAT | O_RDWR | O_CLOEXEC, 0o600)
+        guard descriptor >= 0 else {
+            // A read-only configuration directory. Doing the work unlocked
+            // is the lesser evil: the alternative is a program that cannot
+            // write its own records at all.
+            work()
+            return
+        }
+        defer { close(descriptor) }
+        guard flock(descriptor, LOCK_EX) == 0 else {
+            work()
+            return
+        }
+        defer { flock(descriptor, LOCK_UN) }
+        work()
+    }
+
     /// Runs `work` while holding an exclusive lock on `url`.
     ///
     /// - Returns: false when another process holds the lock, in which case

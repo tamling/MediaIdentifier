@@ -91,7 +91,7 @@ public enum MusicNamer {
         // 200 bytes leaves room for everything this gets wrapped in — the
         // track number, " (1998)" on an album folder, the extension — and
         // keeps every component under Linux's 255-byte limit.
-        text = truncating(text, toBytes: 200)
+        text = truncating(text, toBytes: JellyfinNamer.componentByteLimit)
         // After the cut, not before: a component may not end in a dot or a
         // space, and cutting can leave either. Harmless on Linux, but the
         // library may well be served to a Windows client.
@@ -100,26 +100,11 @@ public enum MusicNamer {
         return text.isEmpty ? nil : text
     }
 
-    /// Cuts `text` to at most `limit` bytes, never through the middle of a
-    /// character.
-    ///
-    /// Counted in bytes rather than in `String.prefix`, which counts
-    /// characters: the limit a filesystem enforces is a byte count, and a
-    /// Japanese title is three bytes a character — so 120 characters is 360
-    /// bytes and the rename fails with ENAMETOOLONG. Stepping by `Character`
-    /// rather than by UTF-8 index also keeps a flag or a family emoji whole
-    /// instead of leaving half a grapheme cluster behind.
+    /// Kept as a name here, so the tests that were written against it still
+    /// read as they did; the implementation is `JellyfinNamer`'s, because
+    /// two copies of a rule is how the two namers drifted apart in the first
+    /// place.
     static func truncating(_ text: String, toBytes limit: Int) -> String {
-        guard limit > 0 else { return "" }
-        guard text.utf8.count > limit else { return text }
-        var kept = ""
-        var used = 0
-        for character in text {
-            let size = String(character).utf8.count
-            if used + size > limit { break }
-            kept.append(character)
-            used += size
-        }
-        return kept
+        JellyfinNamer.truncating(text, toBytes: limit)
     }
 }

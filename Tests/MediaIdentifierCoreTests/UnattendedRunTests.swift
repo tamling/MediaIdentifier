@@ -264,22 +264,6 @@ final class UnattendedRunTests: XCTestCase {
                       "a stale plan was applied after the scan had failed")
     }
 
-    /// "Also send" used to sit behind `guard alsoRename`, so ticking send on
-    /// its own did nothing at all while the summary promised it would.
-    func testSendingWithoutRenamingIsAttemptedAndSaysWhyItCannot() throws {
-        _ = try makeFile("Send.Only.2014.mkv")
-        let coordinator = AppCoordinator(configDirectory: config)
-        coordinator.executeForTesting(.saveSettings(
-            settings(Schedule(isEnabled: true, alsoRename: false, alsoSend: true))))
-        coordinator.setLastScheduledRunForTesting(daysAgo)
-
-        coordinator.runIfDueForTesting()
-        let result = coordinator.snapshot.lastResult ?? ""
-        XCTAssertTrue(result.contains("server"), result)
-        XCTAssertTrue(coordinator.snapshot.hasError,
-                      "a planned send that could not happen was reported as fine")
-    }
-
     // MARK: What the interface is told
 
     func testTheNextRunIsPublishedSoTheInterfaceCanShowIt() {

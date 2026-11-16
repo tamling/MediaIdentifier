@@ -66,11 +66,22 @@ public struct ConversionCandidate: Identifiable, Sendable, Equatable {
     public var fileName: String { source.lastPathComponent }
 
     /// Human-readable size, e.g. "4.3 GB".
+    ///
+    /// Kilobytes are in the list of units because a megabyte floor prints
+    /// "0 MB" for anything smaller, and a row that says a file is 0 bytes
+    /// when it is not reads as a broken row. Media files are rarely that
+    /// small; test fixtures and clips are.
     public var readableSize: String {
+        Self.readableSize(ofBytes: byteSize)
+    }
+
+    /// The same formatting for a total, so the list and the line above it
+    /// cannot disagree about what a size looks like.
+    public static func readableSize(ofBytes bytes: Int64) -> String {
         let formatter = ByteCountFormatter()
-        formatter.allowedUnits = [.useGB, .useMB]
+        formatter.allowedUnits = [.useGB, .useMB, .useKB]
         formatter.countStyle = .file
-        return formatter.string(fromByteCount: byteSize)
+        return formatter.string(fromByteCount: bytes)
     }
 }
 
@@ -154,9 +165,22 @@ public struct WebConversionSettings: Codable, Sendable, Equatable {
                           stripSubtitles: stripSubtitles)
     }
 
-    /// Roughly how large the output will be, as a percentage of the input.
-    public var estimatedSizePercent: Int {
-        Int((ConversionEstimator.sizeFraction(options: options) * 100).rounded())
+    /// Roughly how large the output will be, as a percentage of the input,
+    /// for a source of the given height.
+    ///
+    /// The height has to be given: the saving from a downscale is the
+    /// difference between the source and the target, and the estimator's
+    /// own default of 1080 silently made four of the five resolutions the
+    /// window offers come out identical. See `sizeFraction`.
+    public func estimatedSizePercent(forSourceHeight height: Int) -> Int {
+        Int((ConversionEstimator.sizeFraction(options: options,
+                                              assumedSourceHeight: height)
+                * 100).rounded())
+    }
+
+    /// What the chosen quality number looks like, in words.
+    public var qualityDescription: String {
+        ConversionEstimator.quality(options: options).label
     }
 
     // MARK: Form decoding
@@ -205,29 +229,47 @@ public struct WebConversionSettings: Codable, Sendable, Equatable {
 
     public func problems() -> [WebSettings.Problem] {
         var found: [WebSettings.Problem] = []
+        // The memberwise initialiser clamps this, so a value out of range
+        // can only come from a window that set the field directly — which
+        // the settings window does, deliberately, to keep "that was not a
+        // number" tellable from "the user typed 0". Without this rule the
+        // impossible value was simply clamped on the way to FFmpeg and the
+        // user got a quality they never asked for.
+        if !(0...51).contains(quality) {
+            found.append(.init(field: "quality",
+                               message: Text.s("Die Qualität muss eine Zahl "
+                                                   + "zwischen 0 und 51 sein.",
+                                               "The quality must be a number "
+                                                   + "between 0 and 51.")))
+        }
         if targetHeightWasUnreadable {
             found.append(.init(field: "targetHeight",
-                               message: "The height must be a number, or empty to keep the "
-                                   + "source resolution."))
+                               message: Text.s("Die Höhe muss eine Zahl sein, oder leer, "
+                                                   + "um die Auflösung der Quelle zu behalten.",
+                                               "The height must be a number, or empty to keep "
+                                                   + "the source resolution.")))
         }
         if let height = targetHeight, height < 120 || height > 8192 {
             found.append(.init(field: "targetHeight",
-                               message: "The height must be between 120 and 8192."))
+                               message: Text.s("Die Höhe muss zwischen 120 und 8192 liegen.",
+                                               "The height must be between 120 and 8192.")))
         }
         if !ffmpegPath.isEmpty, !ffmpegPath.hasPrefix("/") {
             found.append(.init(field: "ffmpegPath",
-                               message: "The FFmpeg path must be absolute."))
+                               message: Text.s("Der Pfad zu FFmpeg muss mit / beginnen.",
+                                               "The FFmpeg path must be absolute.")))
         }
         return found
     }
 
-    /// Heights offered in the form. `nil` keeps the source resolution.
+    /// Heights offered in the interface. `nil` keeps the source resolution.
     public static let offeredHeights: [Int?] = [nil, 2160, 1440, 1080, 720]
 
     public static func heightLabel(_ height: Int?) -> String {
         switch height {
-        case nil: return "Keep the source resolution"
-        case 2160?: return "2160p (4K)"
+        case nil: return Text.s("Auflösung der Quelle behalten",
+                                "Keep the source resolution")
+        case 2160?: return Text.s("2160p (4K)", "2160p (4K)")
         case let value?: return "\(value)p"
         }
     }
