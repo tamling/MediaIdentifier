@@ -900,6 +900,13 @@ case .pressApply:
                 gtk_main_quit()
                 return Gtk.sourceRemove
             }
+            // A credential and the address it belongs beside, in the same
+            // refused press. The key used to be stored above the refusal,
+            // so the new key stayed paired with the OLD address -- and
+            // "Verbindung testen" sent it as a Bearer token to the server
+            // the user was leaving. Two stores, paired only when a request
+            // is made.
+            mainWindow.typeModelServer(url: "http://127.0.0.1:9", key: "k-new")
             mainWindow.typeQuality("24p")
             mainWindow.refresh()
             print("estimate with a typo: \(mainWindow.estimateText)")
@@ -910,6 +917,13 @@ case .pressApply:
                 -> gboolean = { _ in
                 print("engine after the refusal: "
                           + "\(describeConversion(coordinator.settings.conversion))")
+                // Names, never values: CI logs are kept.
+                print("secrets after the refusal: "
+                          + "\(coordinator.configuredSecrets.map(\.rawValue).sorted())")
+                print("model server after the refusal: "
+                          + "\(coordinator.settings.localLLMBaseURL)")
+                print("key field kept after the refusal: "
+                          + "\(mainWindow.apiKeyFieldIsFilled)")
                 // Correct only the quality. The codec must survive.
                 mainWindow.typeQuality("24")
                 mainWindow.pressApply()
@@ -921,6 +935,10 @@ case .pressApply:
                     print("corrected apply settles as: \(mainWindow.appliedText)")
                     print("engine after the retry: "
                               + "\(describeConversion(coordinator.settings.conversion))")
+                    print("secrets after the retry: "
+                              + "\(coordinator.configuredSecrets.map(\.rawValue).sorted())")
+                    print("model server after the retry: "
+                              + "\(coordinator.settings.localLLMBaseURL)")
 
                     // The other half of the same fault: a write the engine
                     // ACCEPTS and then cannot perform.

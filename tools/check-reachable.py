@@ -39,6 +39,23 @@ goes straight to the engine, and `start(.name)` is the window's wrapper,
 which submits and then shuts the buttons the work gates. A THIRD wrapper
 added later and not listed here makes this check FAIL rather than pass,
 which is the direction a mistake has to fall in.
+
+The second rule is about WHICH of those two the window uses.
+
+The gates live in `refresh()`, which a 500 ms timer calls -- so a handler
+that only submits leaves every gated button live for up to half a second
+after the press that started the work, which is where the Rückgängig
+double-click landed and reversed a batch nobody asked about. `start()`
+closes them at press time, and that is the only reason it exists.
+
+The smoke check that watches this presses Alles prüfen and reads the two
+gates with no refresh in between. It proves that `start()` still refreshes
+-- but it presses ONE of the ten call sites, so unwiring `refresh()` from
+`undoLast()` alone (by going back to a bare `submit`) leaves it green;
+measured. So: from the window, every command that sets work in motion must
+be sent through `start(`. The handful that legitimately go straight to
+`submit` are listed below with their reason, and anything else fails --
+which is the direction a mistake has to fall in.
 """
 import pathlib
 import re
@@ -49,6 +66,38 @@ COMMANDS = ROOT / "Sources/MediaIdentifierCore/Web/WebCommands.swift"
 # Every front end. A command reachable from either one counts: the headless
 # runner legitimately sends some the window does not.
 FRONT_ENDS = ["Sources/MediaIdentifierGtk", "Sources/mediafin"]
+
+
+# Commands the window may hand straight to `submit`, with the reason. The
+# gates are the point: anything that sets work in motion has to close them
+# at press time, which is what `start(` does.
+MAY_SUBMIT_DIRECTLY = {
+    # Not work -- and deliberately NOT gated: Stopp has to be pressable
+    # exactly while something is running. `submit` also runs these three
+    # synchronously on the caller's thread so a Stopp cannot queue behind
+    # the thing it is meant to stop.
+    "cancelConversions",
+    "cancelDownload",
+    "cancelScan",
+    # Finishes before the press returns, and Übernehmen is not one of the
+    # gated buttons. `saveFolders` refreshes itself afterwards, because the
+    # answer to a write is what the label waits for.
+    "saveSettings",
+    # The API key, which lives in its own store beside the settings write.
+    "setSecret",
+    # Per-row ticks in the proposal list. No work, and gating the list the
+    # user is ticking would be its own fault.
+    "setAccepted",
+    "setAllAccepted",
+    # Not work either, so the `isWorking` gate cannot close for it however
+    # it is sent: `isWork` returns false and `queuedWork` never rises. It
+    # is behind a confirmation dialog, and a second Leeren asks again and
+    # then reports "nothing to undo" -- there is nothing a press can land
+    # on twice. Kept as a direct send rather than dressed up as `start(`,
+    # which would add a refresh that changes nothing and imply a gate that
+    # is not there.
+    "clearHistory",
+}
 
 
 def strip_comments(text: str) -> str:
@@ -136,8 +185,42 @@ def main() -> int:
         print("        recognises a send it knows the shape of.")
         return 1
 
+    # Second rule: in the WINDOW, work goes through `start(`.
+    #
+    # AppWindow.swift only, because the gates are its. main.swift sends the
+    # demo library's scan straight to the engine on purpose, before gtk_init
+    # has run and before any window exists -- there is nothing to gate
+    # there, and letting the whole target off would also let a bare
+    # `submit(.scanSourceFolder)` back into the window, which is the fault.
+    window = ROOT / "Sources/MediaIdentifierGtk/AppWindow.swift"
+    if not window.exists():
+        print(f"FAIL  : {window} is missing")
+        return 1
+    window_text = strip_comments(window.read_text(encoding="utf-8"))
+    bare = sorted({
+        m.group(1)
+        for m in re.finditer(r"\bsubmit\(\s*\.([a-zA-Z][a-zA-Z0-9]*)",
+                             window_text)
+    })
+    wrong = [n for n in bare if n not in MAY_SUBMIT_DIRECTLY]
+    if wrong:
+        print("FAIL  : the window sends these straight to `submit`, which "
+              "does not close the gates:")
+        for name in wrong:
+            print(f"        {name}")
+        print()
+        print("        The gates live in `refresh()` and a 500 ms timer")
+        print("        calls it, so a bare submit leaves Umbenennen,")
+        print("        Rückgängig and Leeren live for up to half a second")
+        print("        after the press. That window is where the Rückgängig")
+        print("        double-click reversed a batch nobody asked about.")
+        print("        Send it with `start(` instead, or add it to")
+        print("        MAY_SUBMIT_DIRECTLY with the reason in writing.")
+        return 1
+
     print(f"ok    : all {len(names)} engine commands have a sender "
-          f"({', '.join(FRONT_ENDS)})")
+          f"({', '.join(FRONT_ENDS)}), and the window starts its work "
+          f"through `start(` ({len(bare)} deliberate direct sends)")
     return 0
 
 

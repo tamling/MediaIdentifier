@@ -165,7 +165,7 @@ final class AppWindow {
     /// HH:MM:SS" for a write that had not been attempted yet, and advance
     /// its merge baseline to values that were never stored. Both are
     /// decided here instead, once the engine has said what happened.
-    private var pendingSave: (typed: WebSettings, announce: Bool)?
+    private var pendingSave: (typed: WebSettings, key: String, announce: Bool)?
     private var settingsSaveGenerationAtPress = 0
     /// The "… und N weitere" label, kept so its text can follow the ticks.
     private var convertMoreNote: UnsafeMutablePointer<GtkWidget>?
@@ -939,18 +939,25 @@ final class AppWindow {
         settings = SettingsMerge.applying(typed: settings, loaded: loadedSettings,
                                           to: stored)
 
-        // The key goes in whichever way the settings go: it lives in its own
-        // store, not in settings.json, and losing a key the user just typed
-        // because a quality field has a typo in it would be its own fault.
+        // Read here, stored only once the settings write has landed.
+        //
+        // It used to be stored right here, above the refusal below, so that
+        // a typo in a quality field could not lose a key the user had just
+        // typed. But the key and the server address are two stores that are
+        // only ever paired at request time -- `localLLMProvider` builds the
+        // provider from `settings.localLLMBaseURL` and the stored secret --
+        // so a refused Apply left the NEW key paired with the OLD address.
+        // Someone moving to a different model server, who mistypes a
+        // quality value in the same press, then has "Verbindung testen"
+        // send their new credential as a Bearer token to the server they
+        // were leaving. Keeping the typed key in the field is the better
+        // answer to "do not lose it": it is still there, and the corrected
+        // press sends it.
         //
         // Only when something was typed. An empty field means "leave the
         // stored key alone", not "delete it" — otherwise saving a folder
         // would wipe a credential the user never touched.
         let key = Gtk.text(of: llmKeyEntry)
-        if !key.isEmpty {
-            coordinator.submit(.setSecret(.localLLMAPIKey, key))
-            Gtk.setText(of: llmKeyEntry, "")
-        }
 
         // Checked here, with the same call the engine uses, before anything
         // below runs.
@@ -993,7 +1000,7 @@ final class AppWindow {
         // failure every edit in the next press compared equal and was
         // dropped: the user could not even correct it.
         settingsSaveGenerationAtPress = coordinator.snapshot.settingsSave.generation
-        pendingSave = (typed: settings, announce: true)
+        pendingSave = (typed: settings, key: key, announce: true)
         coordinator.submit(.saveSettings(settings))
         Gtk.setText(savedLabel, Text.s("Wird übernommen …", "Applying …"))
         pendingLanguageChange = languageChanged
@@ -1030,6 +1037,15 @@ final class AppWindow {
         // Only now, and from what was actually stored: a second Apply must
         // not re-apply what this one wrote over somebody else's newer value.
         loadedSettings = pending.typed
+
+        // And the key, which belongs with the address it was typed beside.
+        // The two live in different stores and are paired only when a
+        // request is made, so storing it for a write that was refused
+        // pointed the new credential at the old server.
+        if !pending.key.isEmpty {
+            coordinator.submit(.setSecret(.localLLMAPIKey, pending.key))
+            Gtk.setText(of: llmKeyEntry, "")
+        }
 
         // With the time of day, and said next to the button that was
         // pressed. "Gespeichert." appearing where "Gespeichert." already
@@ -1565,6 +1581,23 @@ final class AppWindow {
     /// and neither could be checked without this.
     func typeQuality(_ text: String) {
         Gtk.setText(of: convertQualityEntry, text)
+    }
+
+    /// For the smoke modes: a credential and the address it belongs beside.
+    ///
+    /// The two live in different stores and are paired only when a request
+    /// is made, so a refused Apply used to leave the new key with the old
+    /// address -- and "Verbindung testen" then sent the credential to the
+    /// server the user was leaving.
+    func typeModelServer(url: String, key: String) {
+        Gtk.setText(of: llmURLEntry, url)
+        Gtk.setText(of: llmKeyEntry, key)
+    }
+
+    /// Whether the key field still holds something. Never its contents: a
+    /// smoke mode prints what it reads, and CI logs are kept.
+    var apiKeyFieldIsFilled: Bool {
+        !Gtk.text(of: llmKeyEntry).isEmpty
     }
 
     /// Picks a codec row, for the smoke modes. True when the row exists.

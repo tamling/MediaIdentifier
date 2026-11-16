@@ -632,7 +632,7 @@ jobs:
             "sourceFolder": "", "moviesFolder": "", "seriesFolder": "",
             "musicFolder": "", "libraryMode": "video",
             "identification": "offline",
-            "localLLMBaseURL": "", "localLLMModel": "",
+            "localLLMBaseURL": "http://127.0.0.1:1", "localLLMModel": "",
             "jellyfinBaseURL": "http://192.168.3.9:8096",
             "conflictPolicy": "skip", "watchSourceFolder": false,
             "conversion": {
@@ -678,10 +678,40 @@ jobs:
             echo "      (read: ${on_screen:-nothing})"
             exit 1
           }
-          test "$first" != "$second" || {
-            echo "FAIL: the second Apply looked exactly like the first"
+          # Two SETTLED labels, not a settled one against one in flight.
+          #
+          # "Pressing again is visibly a second press" is a claim about two
+          # timestamps. Now that the label says "Wird übernommen …" until
+          # the engine answers, comparing `applied once` against `applied
+          # twice` would differ whatever the clock did -- it would be a
+          # check that cannot fail. So the comparison is against the third
+          # press's settled reading, and both have to carry a clock.
+          settled_later="$(sed -n 's/^corrected apply settles as: //p' applied.log)"
+          case "$first" in
+            *"Übernommen um"*|*"Applied at"*) : ;;
+            *) echo "FAIL: the first Apply never settled into a clock:"
+               echo "      ${first:-nothing}"
+               exit 1 ;;
+          esac
+          case "$settled_later" in
+            *"Übernommen um"*|*"Applied at"*) : ;;
+            *) echo "FAIL: the later Apply never settled into a clock:"
+               echo "      ${settled_later:-nothing}"
+               exit 1 ;;
+          esac
+          test "$first" != "$settled_later" || {
+            echo "FAIL: two Applies seconds apart produced the identical "
+            echo "      label, so a second press is invisible: $first"
             exit 1
           }
+          # And the in-flight reading of the second press says it is on its
+          # way rather than claiming a clock it does not have yet.
+          case "$second" in
+            *"Wird übernommen"*|*"Applying"*) : ;;
+            *) echo "FAIL: the second press said nothing about being on its "
+               echo "      way: ${second:-nothing}"
+               exit 1 ;;
+          esac
 
           # The conversion card, read off the widgets themselves.
           expected="codec=av1 quality=28 preset=veryfast height=720 audio=opus subtitles=true ffmpeg=/opt/ffmpeg/bin/ffmpeg"
@@ -776,6 +806,57 @@ jobs:
                echo "      had been asked: ${instant:-nothing}"
                exit 1 ;;
           esac
+
+          # The credential and the address it was typed beside.
+          #
+          # They live in two stores and are paired only when a request is
+          # made: `localLLMProvider` builds the provider from
+          # settings.localLLMBaseURL and the stored secret. The key used to
+          # be written above the refusal, so a refused press left the NEW
+          # key paired with the OLD address -- someone moving to a different
+          # model server who mistypes a quality value in the same press then
+          # has "Verbindung testen" send their new credential, as a Bearer
+          # token, to the server they were leaving. The field was cleared
+          # too, so they could not see it had gone. Measured both ways.
+          #
+          # Names only below, never values: CI logs are kept.
+          refused_secrets="$(sed -n 's/^secrets after the refusal: //p' applied.log)"
+          echo "secrets after the refusal: ${refused_secrets:-nothing}"
+          test "$refused_secrets" = "[]" || {
+            echo "FAIL: a refused Apply stored the API key anyway, leaving "
+            echo "      it paired with the server address that was NOT "
+            echo "      saved: $refused_secrets"
+            exit 1
+          }
+          refused_server="$(sed -n 's/^model server after the refusal: //p' applied.log)"
+          test "$refused_server" = "http://127.0.0.1:1" || {
+            echo "FAIL: the refused Apply moved the model server address:"
+            echo "      ${refused_server:-nothing}"
+            exit 1
+          }
+          kept="$(sed -n 's/^key field kept after the refusal: //p' applied.log)"
+          test "$kept" = "true" || {
+            echo "FAIL: the refused Apply emptied the API key field, so the "
+            echo "      key is gone and nothing on screen says so (read: "
+            echo "      ${kept:-nothing})"
+            exit 1
+          }
+          # And the other direction, or storing the key never would pass:
+          # the corrected press has to land both, together.
+          retry_secrets="$(sed -n 's/^secrets after the retry: //p' applied.log)"
+          case "$retry_secrets" in
+            *local-llm-api-key*) : ;;
+            *) echo "FAIL: the corrected Apply never stored the key:"
+               echo "      ${retry_secrets:-nothing}"
+               exit 1 ;;
+          esac
+          retry_server="$(sed -n 's/^model server after the retry: //p' applied.log)"
+          test "$retry_server" = "http://127.0.0.1:9" || {
+            echo "FAIL: the corrected Apply stored the key but not the "
+            echo "      address it belongs with: ${retry_server:-nothing}"
+            exit 1
+          }
+          echo "ok   : key and address land together, or not at all\"
           retried="$(sed -n 's/^engine after the retry: //p' applied.log)"
           echo "engine after the retry: ${retried:-nothing}"
           case "$retried" in
