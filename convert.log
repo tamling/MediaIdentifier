@@ -1,0 +1,23 @@
+convert bar before: Keine Konvertierung
+convert list before: Noch nichts gesucht — „Suchen“ drücken.
+stop pressable while idle: false
+convertible found: 2
+convert rows: 2
+convert counts: 2 gefunden · 2 angehakt · 50 KB
+ticked: 2
+after untick, counts: 2 gefunden · 1 angehakt · 25 KB
+after untick, ticked: 1
+after second search, ticked: 1
+converting: Film B (2020).mkv
+stop pressable while converting: true
+converting subtitle: Arbeitet · 0 %
+convert status: Konvertiert 1. Die Originale sind noch da.
+convert bar after: Keine Konvertierung
+convertible left: 1
+after the first run, library holds: Film A (2020).mkv
+after the first run, library holds: Film B (2020).mkv
+after the first run, library holds: Film B (2020).x264.mkv
+after Alle, ticked: 1
+second run status: Konvertiert 1. Die Originale sind noch da.
+convertible after the second run: 0
+convert list when empty: Fertig. 1 neue Datei liegt neben den Originalen; zu konvertieren ist nichts mehr da.

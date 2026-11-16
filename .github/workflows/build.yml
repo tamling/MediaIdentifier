@@ -856,7 +856,7 @@ jobs:
             echo "      address it belongs with: ${retry_server:-nothing}"
             exit 1
           }
-          echo "ok   : key and address land together, or not at all\"
+          echo "ok   : key and address land together, or not at all"
           retried="$(sed -n 's/^engine after the retry: //p' applied.log)"
           echo "engine after the retry: ${retried:-nothing}"
           case "$retried" in

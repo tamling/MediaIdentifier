@@ -193,9 +193,18 @@ key twice and keeps the last, Actions rejects it outright, and a check that
 cannot see the fault in front of it is worse than no check because it is
 believed.
 
+And `tools/replay-ci-step.py` runs those steps here rather than reading them.
+A step whose shell parses can still be wrong — a stray `\"` at the end of an
+`echo` turned the next line into part of the string, an assignment never
+happened, and `set -u` killed the step on a push after every local check had
+passed. The step's own output was correct; only the harness around it was
+broken. `bash -n` cannot see that, so the replayer runs each `run:` block
+with the flags Actions uses, against a release build in this working copy.
+
 ```bash
-swift test                    # the engine
+swift test                            # the engine
 swift build --product mediafin-gtk
+python3 tools/replay-ci-step.py gtk   # the window's CI steps, here
 ```
 
 ## Conflict handling

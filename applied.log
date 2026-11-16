@@ -1,0 +1,23 @@
+conversion read: codec=av1 quality=28 preset=veryfast height=720 audio=opus subtitles=true ffmpeg=/opt/ffmpeg/bin/ffmpeg
+media server read: http://192.168.3.9:8096
+estimate: Schätzung: etwa 10 % bei einer 1080p-Quelle, etwa 5 % bei einer 4K-Quelle. Das Bild wird dabei: sichtbar schlechter. Bei dieser Auflösung ist 21 der übliche Qualitätswert; kleiner heißt besser und größer.
+apply button on screen: true
+applied the instant it was pressed: Wird übernommen …
+applied once: Übernommen um 01:52:54
+applied twice: Wird übernommen …
+conversion after apply: codec=av1 quality=28 preset=veryfast height=720 audio=opus subtitles=true ffmpeg=/opt/ffmpeg/bin/ffmpeg
+estimate with a typo: Die Qualität muss eine Zahl zwischen 0 und 51 sein.
+refused apply says: Nicht übernommen: Die Qualität muss eine Zahl zwischen 0 und 51 sein.
+engine after the refusal: codec=av1 quality=28 preset=veryfast height=720 ffmpeg=/opt/ffmpeg/bin/ffmpeg
+secrets after the refusal: []
+model server after the refusal: http://127.0.0.1:1
+key field kept after the refusal: true
+corrected apply says: Wird übernommen …
+corrected apply settles as: Übernommen um 01:52:57
+engine after the retry: codec=h264 quality=24 preset=veryfast height=720 ffmpeg=/opt/ffmpeg/bin/ffmpeg
+secrets after the retry: ["local-llm-api-key"]
+model server after the retry: http://127.0.0.1:9
+apply onto an unwritable file says: Nicht übernommen: Einstellungen nicht gespeichert: Could not write the settings to /tmp/tmp.UFGtnw49tp/settings.json.
+engine after the unwritable write: codec=h264 quality=24 preset=veryfast height=720 ffmpeg=/opt/ffmpeg/bin/ffmpeg
+apply once the file is writable again says: Übernommen um 01:52:58
+engine after the file came back: codec=h264 quality=26 preset=veryfast height=720 ffmpeg=/opt/ffmpeg/bin/ffmpeg

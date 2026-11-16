@@ -1,0 +1,11 @@
+idle subtitle: Bereit
+idle undo pressable: true
+idle clear-history pressable: true
+undo pressable straight after the press: false
+clear-history pressable straight after the press: false
+during busy: false
+during queued: 1
+during subtitle: Arbeitet …
+during undo pressable: false
+during clear-history pressable: false
+during scan pressable: false
