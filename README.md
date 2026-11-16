@@ -175,10 +175,21 @@ photographed. `mediafin-gtk` has modes that CI uses:
 
 | | |
 |---|---|
-| `--screenshot FILE` | render the window to a PNG and report what was in it |
+| `--screenshot FILE` | render the window, or one panel with `--panel`, to a PNG and report what was in it |
 | `--press-scan` | press **Durchsuchen** through the signal and print what the window then says, in the footer *and* in the middle |
-| `--press-apply` | open the settings, press **Übernehmen** twice, and print what it says each time |
+| `--press-apply` | press **Übernehmen** repeatedly: twice to show the clock moves, once with a typo to show the whole write is refused and the other edit survives the retry, and once onto a settings file that cannot be written |
+| `--press-convert` | look for convertible files, untick one, convert the rest, then tick everything and convert the remainder — printing the panel's sentence at each step |
+| `--press-clear-history` | press **Leeren**, cancel the question, press again and confirm, printing the history and the undo steps each time |
+| `--press-check` | press **Alles prüfen** and report, *while it still runs*, what the header says and which buttons are grey |
 | `--drop FILE…` | hand files over exactly as a drop does, skipping GTK's drag plumbing, which cannot be faked from a script |
+
+The three that move or re-encode real files — `--press-convert`,
+`--press-clear-history` and `--press-apply` — refuse to run unless
+`MEDIAFIN_CONFIG_DIR` points at a directory that is demonstrably not the one
+the program would have used anyway, or `--demo` is given. The variable being
+*set* is not enough: it is the documented way to relocate a real
+configuration, so for a while the supported way to point these at a real
+library was the very thing that satisfied the guard against it.
 
 This exists because a picture of a window proves only that it draws. Two
 releases went out green while the scan button said nothing a person could see
@@ -237,6 +248,15 @@ and no port to listen on: the program is a window and a scheduler.
   `http://` to a *public* host turns the **Verschlüsselung** lamp amber and
   names which service, because that request succeeds either way and there is
   no other way to see it.
+- **A credential and the address it belongs to travel together.** The API
+  key lives in one store and the server address in another, and they are
+  paired only when a request is made. The key used to be written before the
+  settings were validated, so a refused Apply left the *new* key with the
+  *old* address — and anyone moving to a different model server who
+  mistyped something else in the same press would have sent their new
+  credential, as a Bearer token, to the server they were leaving. Both land
+  together now, or neither does, and a refused Apply leaves the typed key in
+  the field rather than swallowing it.
 - **Nothing is deleted to make room.** A rename under the "replace" policy
   stages the incoming file under a temporary name first and only then moves
   the old one aside, so a failure half way through leaves both files where

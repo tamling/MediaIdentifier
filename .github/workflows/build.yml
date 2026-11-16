@@ -295,6 +295,17 @@ jobs:
           ffmpeg -version | head -1
       - name: Build
         run: swift build -c release --product mediafin-gtk
+      - name: The README lists the modes the window has
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The table in "How it is tested" listed four modes for a binary
+          # that had seven, and nobody noticed: an incomplete list reads
+          # exactly like a complete one. The sharper version is a table
+          # naming a mode that no longer exists, which a reader types and
+          # is told is unknown. Both fail here, against the binary's own
+          # --help, because that is what a reader reaches for next.
+          python3 tools/check-modes.py .build/release/mediafin-gtk
       # The headless runner draws nothing, so what is worth checking is that
       # it says what it offers rather than silently doing nothing, and that
       # --once finishes instead of hanging like the old server did.
